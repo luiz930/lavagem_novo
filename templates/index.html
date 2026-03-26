@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<title>Gestão Estética</title>
+
+<style>
+
+#relogio {
+    position: fixed;
+    bottom: 15px;
+    right: 15px;
+    background: #111827;
+    padding: 10px 15px;
+    border-radius: 8px;
+    border: 1px solid #facc15;
+    color: #facc15;
+    font-size: 14px;
+    box-shadow: 0 0 10px rgba(250, 204, 21, 0.2);
+    z-index: 999;
+}
+
+/* RESPONSIVO SIMPLES */
+* {
+    box-sizing: border-box;
+}
+
+input, select, button {
+    width: 100%;
+    max-width: 400px;
+    font-size: 16px;
+}
+
+.card {
+    width: 95%;
+    max-width: 400px;
+    margin: 10px auto;
+}
+
+/* FLEX ADAPTÁVEL */
+.flex {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+}
+
+/* MOBILE */
+@media (max-width: 600px) {
+    h1 {
+        font-size: 20px;
+    }
+
+    button {
+        padding: 12px;
+    }
+}
+
+body { font-family: Arial; background:#0b0b0b; color:white; text-align:center; }
+
+input, select {
+    padding:10px;
+    margin:5px;
+    border-radius:6px;
+    border:none;
+    background:#1f2937;
+    color:white;
+}
+
+button {
+    padding:10px;
+    margin:5px;
+    border-radius:6px;
+    border:none;
+    background:#facc15;
+    color:black;
+    font-weight:bold;
+    cursor:pointer;
+}
+
+/* HOVER PROFISSIONAL */
+button:hover {
+    background:#eab308;
+}
+
+/* CARDS */
+.card {
+    background:#111827;
+    padding:15px;
+    margin:10px auto;
+    border-radius:10px;
+    border:1px solid #facc15;
+    width:350px;
+    box-shadow: 0 0 10px rgba(250, 204, 21, 0.1);
+}
+
+.hidden { display:none; }
+
+</style>
+</head>
+
+<body>
+
+<img src="/static/logo.jpg" style="
+width:80px;
+height:80px;
+border-radius:50%;
+object-fit:cover;
+position:absolute;
+left:20px;
+top:20px;
+">
+
+<h1>🚗 Wagen Estética Automotiva</h1>
+
+<div style="display:flex; justify-content:center; align-items:center; gap:10px; margin-top:15px;">
+<div id="relogio" style="margin-top:10px; font-size:18px; color:#facc15;"></div>
+
+<a href="/painel">
+<button>
+📊 Painel Operacional
+</button>
+</a>
+
+<a href="/cadastrar_servico">
+<button>
+🧼 Serviços
+</button>
+</a>
+
+<a href="/pneu">
+<button>
+🛞 Produtos Pneu
+</button>
+</a>
+
+
+<!-- BUSCA -->
+<form method="POST" style="display:flex; gap:5px;">
+<input name="placa" placeholder="Digite a placa" required>
+<button>Buscar</button>
+</form>
+
+</div>
+
+<!-- ESTADO INICIAL -->
+{% if not buscou %}
+<div class="card">
+<h3>🔎 Digite uma placa para começar</h3>
+</div>
+{% endif %}
+
+<!-- CLIENTE EXISTENTE -->
+{% if dados %}
+<div class="card">
+<h3>Cliente</h3>
+<p><b>Nome:</b> {{dados[1]}}</p>
+<p><b>Telefone:</b> {{dados[2]}}</p>
+<p><b>Carro:</b> {{dados[3]}} - {{dados[4]}}</p>
+
+<button onclick="toggleEdit()">✏️ Editar</button>
+
+<form id="editForm" class="hidden" action="/cadastrar" method="POST">
+<input name="placa" value="{{dados[0]}}" readonly><br>
+<input name="nome" value="{{dados[1]}}"><br>
+<input name="telefone" value="{{dados[2]}}"><br>
+<input name="modelo" value="{{dados[3]}}"><br>
+<input name="cor" value="{{dados[4]}}"><br>
+<button>Salvar Alterações</button>
+</form>
+</div>
+{% endif %}
+
+<!-- NOVO CLIENTE -->
+{% if buscou and not dados %}
+<div class="card">
+<h3>Novo Cliente</h3>
+<form action="/cadastrar" method="POST">
+<input name="placa" placeholder="Placa" required><br>
+<input name="nome" placeholder="Nome"><br>
+<input name="telefone" placeholder="Telefone"><br>
+<input name="modelo" placeholder="Modelo"><br>
+<input name="cor" placeholder="Cor"><br>
+<button>Cadastrar</button>
+</form>
+</div>
+{% endif %}
+
+{% if dados %}
+
+<div class="card">
+<h3>Atendimento</h3>
+
+<button onclick="abrirServico()">+ Novo Atendimento</button>
+
+<form id="formServico" class="hidden" action="/servico" method="POST" enctype="multipart/form-data">
+
+    <p>📸 Fotos de entrada</p>
+<input type="file" name="foto_entrada" accept="image/*" multiple required>
+
+<p>📸 Fotos de detalhes</p>
+<input type="file" name="foto_detalhe" accept="image/*" multiple required>
+
+<input name="placa" value="{{dados[0]}}" readonly><br>
+
+<select name="tipo" id="tipoServico" onchange="preencherValor()">
+{% for serv in servicos_lista %}
+<option value="{{serv[1]}}" data-valor="{{serv[2]}}">
+{{serv[1]}} - R${{serv[2]}}
+</option>
+{% endfor %}
+</select>
+<input type="hidden" name="valor" id="valorServico">
+<input name="origem" placeholder="Origem"><br>
+<input name="guarita" placeholder="Guarita"><br>
+<input name="observacoes" placeholder="Observações"><br>
+
+<p>Pneu?</p>
+<select name="pneu">
+<option value="">Nenhum</option>
+{% for p in produtos_pneu %}
+<option value="{{p[1]}}">
+{{p[1]}}
+</option>
+{% endfor %}
+</select>
+
+<p>Cera?</p>
+<select name="cera"><option>Não</option><option>Sim</option></select>
+
+<p>Hidro lataria?</p>
+<select name="hidro_lataria"><option>Não</option><option>Sim</option></select>
+
+<p>Cristalização vidros?</p>
+<select name="hidro_vidros"><option>Não</option><option>Sim</option></select>
+
+<br>
+<button>Salvar Atendimento</button>
+
+</form>
+</div>
+
+{% endif %}
+
+<!-- HISTÓRICO -->
+{% for item in historico %}
+{% set s = item[0] %}
+{% set tempo = item[1] %}
+
+<div class="card" style="text-align:left;">
+
+<div style="display:flex; justify-content:space-between; align-items:center;">
+<span style="font-size:18px; color:#facc15;"><b>{{s[2]}}</b></span>
+
+{% if s[13] == "FINALIZADO" %}
+<span style="color:#22c55e;">✔ FINALIZADO</span>
+{% else %}
+<span style="color:#facc15;">⏳ EM ANDAMENTO</span>
+{% endif %}
+</div>
+
+<p style="color:#9ca3af;">💰 R${{s[3]}}</p>
+
+<hr style="border:1px solid #374151;">
+
+<p><b>Entrada:</b> {{s[4]}}</p>
+<p><b>Entrega:</b> {{s[5] if s[5] else "Em andamento"}}</p>
+<p><b>Tempo:</b> <span class="tempo" data-entrada="{{s[4]}}" data-status="{{s[13]}}">Calculando...</span></p>
+
+<hr style="border:1px solid #374151;">
+
+<p><b>Serviços:</b></p>
+<ul style="margin-left:15px;">
+<li>Pneu: {{s[9]}}</li>
+<li>Cera: {{s[10]}}</li>
+<li>Hidro Lataria: {{s[11]}}</li>
+<li>Hidro Vidros: {{s[12]}}</li>
+</ul>
+
+<p><b>Origem:</b> {{s[6]}}</p>
+<p><b>Guarita:</b> {{s[7]}}</p>
+
+{% if s[8] %}
+<p><b>Obs:</b> {{s[8]}}</p>
+{% endif %}
+
+{% if s[13] == "EM ANDAMENTO" %}
+<a href="/finalizar/{{s[0]}}">
+<button>Finalizar</button>
+</a>
+{% endif %}
+
+</div>
+
+{% endfor %}
+
+<script>
+function toggleEdit(){
+    let form = document.getElementById("editForm");
+    form.classList.toggle("hidden");
+}
+</script>
+
+<script>
+function abrirServico(){
+    document.getElementById("formServico").classList.toggle("hidden");
+}
+</script>
+
+<script>
+function preencherValor(){
+    let select = document.getElementById("tipoServico");
+    let valor = select.options[select.selectedIndex].getAttribute("data-valor");
+
+    document.getElementById("valorServico").value = valor;
+}
+</script>
+
+<script>
+window.onload = function(){
+    preencherValor();
+}
+</script>
+
+<script>
+function atualizarRelogio() {
+    const agora = new Date();
+
+    const data = agora.toLocaleDateString('pt-BR');
+    const hora = agora.toLocaleTimeString('pt-BR');
+
+    document.getElementById("relogio").innerHTML =
+        "📅 " + data + " ⏰ " + hora;
+}
+
+setInterval(atualizarRelogio, 1000);
+atualizarRelogio();
+</script>
+
+<script>
+function atualizarTempos() {
+    const elementos = document.querySelectorAll(".tempo");
+
+    elementos.forEach(el => {
+        const entradaStr = el.getAttribute("data-entrada");
+        const status = el.getAttribute("data-status");
+
+        if (!entradaStr || status === "FINALIZADO") return;
+
+        try {
+            const partes = entradaStr.split(" ");
+            const data = partes[0].split("/");
+            const hora = partes[1].split(":");
+
+            const entrada = new Date(
+                data[2], // ano
+                data[1] - 1, // mês
+                data[0], // dia
+                hora[0],
+                hora[1]
+            );
+
+            const agora = new Date();
+            const diff = Math.floor((agora - entrada) / 1000);
+
+            const h = Math.floor(diff / 3600);
+            const m = Math.floor((diff % 3600) / 60);
+            const s = diff % 60;
+
+            el.innerHTML = `${h}h ${m}m ${s}s`;
+
+            // 🔔 ALERTA (ex: mais de 1 hora)
+            if (diff > 3600) {
+                el.style.color = "#ef4444"; // vermelho
+                el.style.fontWeight = "bold";
+                el.innerHTML += " ⚠️ ATRASADO";
+            } else {
+                el.style.color = "#22c55e"; // verde
+            }
+
+        } catch (e) {
+            el.innerHTML = "Erro";
+        }
+    });
+}
+
+setInterval(atualizarTempos, 1000);
+atualizarTempos();
+</script>
+
+</body>
+</html>

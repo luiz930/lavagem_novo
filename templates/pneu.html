@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Produtos de Pneu</title>
+
+<style>
+body {
+    background:#0b0b0b;
+    color:white;
+    text-align:center;
+    font-family:Arial;
+}
+
+/* INPUT */
+input {
+    padding:10px;
+    margin:5px;
+    border-radius:6px;
+    border:none;
+    background:#1f2937;
+    color:white;
+}
+
+/* BOTÃO */
+button {
+    padding:10px;
+    margin:5px;
+    border-radius:6px;
+    border:none;
+    background:#facc15;
+    color:black;
+    font-weight:bold;
+    cursor:pointer;
+}
+
+button:hover {
+    background:#eab308;
+}
+
+/* CARD */
+.card {
+    background:#111827;
+    padding:10px;
+    margin:10px auto;
+    border-radius:10px;
+    border:1px solid #facc15;
+    width:250px;
+}
+
+/* TÍTULO */
+h1 {
+    color:#facc15;
+}
+</style>
+
+</head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<body>
+
+<h1>🛞 Produtos de Pneu</h1>
+
+<form method="POST">
+<input name="nome" placeholder="Ex: Selante, Darker">
+<br>
+<button>Salvar</button>
+</form>
+
+<h2 style="color:#9ca3af;">Cadastrados</h2>
+
+{% for p in produtos %}
+<div class="card">
+<p>{{p[1]}}</p>
+</div>
+{% endfor %}
+
+<a href="/">
+<button>🔙 Voltar</button>
+</a>
+
+</body>
+</html>

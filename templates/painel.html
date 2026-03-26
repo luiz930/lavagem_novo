@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<title>Painel Operacional</title>
+
+<style>
+
+/* RESPONSIVO SIMPLES */
+* {
+    box-sizing: border-box;
+}
+
+input, select, button {
+    width: 100%;
+    max-width: 400px;
+    font-size: 16px;
+}
+
+.card {
+    width: 95%;
+    max-width: 400px;
+    margin: 10px auto;
+}
+
+/* FLEX ADAPTÁVEL */
+.flex {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+}
+
+/* MOBILE */
+@media (max-width: 600px) {
+    h1 {
+        font-size: 20px;
+    }
+
+    button {
+        padding: 12px;
+    }
+}
+
+body { 
+    background:#0b0b0b; 
+    color:white; 
+    font-family:Arial; 
+    text-align:center; 
+}
+
+/* HEADER */
+.topo {
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:15px;
+    padding:15px;
+}
+
+/* LOGO */
+.logo {
+    width:60px;
+    height:60px;
+    border-radius:50%;
+    object-fit:cover;
+}
+
+/* BOTÃO VOLTAR */
+.voltar {
+    position:absolute;
+    left:20px;
+    top:20px;
+}
+
+/* CARDS */
+.card {
+    background:#111827;
+    margin:15px auto;
+    padding:20px;
+    border-radius:10px;
+    border:1px solid #facc15;
+    width:300px;
+}
+
+/* PLACA */
+.placa {
+    font-size:22px;
+    font-weight:bold;
+    color:#facc15;
+}
+
+/* STATUS */
+.status {
+    color:#facc15;
+    font-weight:bold;
+}
+
+/* BOTÕES */
+button {
+    padding:10px;
+    border:none;
+    border-radius:6px;
+    background:#facc15;
+    color:black;
+    font-weight:bold;
+    cursor:pointer;
+}
+
+button:hover {
+    background:#eab308;
+}
+</style>
+
+</head>
+
+<body>
+
+<!-- BOTÃO VOLTAR -->
+<div class="voltar">
+<a href="/">
+<button>🔙 Voltar</button>
+</a>
+</div>
+
+<!-- TOPO -->
+<div class="topo">
+<img src="/static/logo.jpg" class="logo">
+<h1 style="color:#facc15;">Painel Operacional</h1>
+</div>
+
+<!-- SERVIÇOS -->
+{% for s in servicos %}
+<div class="card">
+<p><b>Prioridade:</b> {{serv[14]}}</p>
+
+<a href="/prioridade/{{serv[0]}}/up">
+<button>🔼 Subir</button>
+</a>
+
+<a href="/prioridade/{{serv[0]}}/down">
+<button>🔽 Descer</button>
+</a>
+
+<div class="placa">{{s[1]}}</div>
+
+<p><b>{{s[2]}}</b></p>
+<p>💰 R${{s[3]}}</p>
+
+<p class="status">{{s[13]}}</p>
+
+<p>Entrada: {{s[4]}}</p>
+<p>Entrega: {{s[5]}}</p>
+
+{% if s[13] == "EM ANDAMENTO" %}
+<form action="/finalizar/{{s[0]}}" method="POST" enctype="multipart/form-data">
+    <input type="file" name="foto_saida" required>
+    <button>Finalizar</button>
+</form>
+{% endif %}
+
+</div>
+{% endfor %}
+
+<!-- AUTO ATUALIZA -->
+<script>
+setInterval(() => {
+    location.reload();
+}, 5000);
+</script>
+
+</body>
+</html>
