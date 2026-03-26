@@ -133,13 +133,13 @@ button:hover {
 <!-- SERVIÇOS -->
 {% for s in servicos %}
 <div class="card">
-<p><b>Prioridade:</b> {{serv[14]}}</p>
+<p><b>Prioridade:</b> {{ s[14] if s|length > 14 else 'N/A' }}</p>
 
-<a href="/prioridade/{{serv[0]}}/up">
+<a href="/prioridade/{{s[0]}}/up">
 <button>🔼 Subir</button>
 </a>
 
-<a href="/prioridade/{{serv[0]}}/down">
+<a href="/prioridade/{{s[0]}}/down">
 <button>🔽 Descer</button>
 </a>
 
