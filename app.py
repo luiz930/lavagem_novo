@@ -331,7 +331,7 @@ def painel():
     conn = conectar()
     c = conn.cursor()
 
-    c.execute("SELECT * FROM servicos ORDER BY prioridade ASC")
+    c.execute("SELECT * FROM servicos WHERE status='EM ANDAMENTO' ORDER BY id DESC")
     servicos = c.fetchall()
 
     conn.close()
