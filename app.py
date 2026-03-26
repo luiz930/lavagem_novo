@@ -325,6 +325,19 @@ def cadastrar_pneu():
 
     return render_template("pneu.html", produtos=lista)
 
+
+@app.route("/painel")
+def painel():
+    conn = conectar()
+    c = conn.cursor()
+
+    c.execute("SELECT * FROM servicos ORDER BY prioridade ASC")
+    servicos = c.fetchall()
+
+    conn.close()
+
+    return render_template("painel.html", servicos=servicos)
+
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 5000))
