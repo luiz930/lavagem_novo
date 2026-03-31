@@ -21,16 +21,6 @@
     z-index: 999;
 }
 
-/* 📱 CELULAR */
-@media (max-width: 600px) {
-.botoes-topo {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 10px;
-    }
-}
-    
 /* RESPONSIVO SIMPLES */
 * {
     box-sizing: border-box;
@@ -69,7 +59,7 @@ input, select, button {
 
 body { font-family: Arial; background:#0b0b0b; color:white; text-align:center; }
 
-input, select, button {
+input, select {
     padding:10px;
     margin:5px;
     border-radius:6px;
@@ -124,7 +114,7 @@ top:20px;
 
 <h1>🚗 Wagen Estética Automotiva</h1>
 
-<div class="botoes-topo">
+<div style="display:flex; justify-content:center; align-items:center; gap:10px; margin-top:15px;">
 <div id="relogio" style="margin-top:10px; font-size:18px; color:#facc15;"></div>
 
 <a href="/painel">
@@ -139,15 +129,23 @@ top:20px;
 </button>
 </a>
 
+<a href="/financeiro">
+<button>💰 Financeiro</button>
+</a>
+
 <a href="/pneu">
 <button>
 🛞 Produtos Pneu
 </button>
 </a>
 
+<a href="/clima">
+<button>🌧️ Clima</button>
+</a>
+
 
 <!-- BUSCA -->
-<form method="POST" class="flex">
+<form method="POST" style="display:flex; gap:5px;">
 <input name="placa" placeholder="Digite a placa" required>
 <button>Buscar</button>
 </form>
@@ -246,7 +244,7 @@ top:20px;
 <select name="hidro_vidros"><option>Não</option><option>Sim</option></select>
 
 <br>
-<button>Salvar Atendimento</button>
+<button type="submit">Salvar Atendimento</button>
 
 </form>
 </div>
@@ -334,6 +332,9 @@ window.onload = function(){
 </script>
 
 <script>
+let climaTexto = "🌤️ Carregando...";
+let sugestaoTexto = "";
+
 function atualizarRelogio() {
     const agora = new Date();
 
@@ -341,10 +342,34 @@ function atualizarRelogio() {
     const hora = agora.toLocaleTimeString('pt-BR');
 
     document.getElementById("relogio").innerHTML =
-        "📅 " + data + " ⏰ " + hora;
+        "📅 " + data + " ⏰ " + hora + " | " + climaTexto + " " + sugestaoTexto;
 }
 
+// 🔥 BUSCAR CLIMA REAL
+async function atualizarClima() {
+    try {
+        const res = await fetch("/api/clima");
+        const data = await res.json();
+
+        if (!data.erro) {
+            climaTexto = `${data.icone} ${data.clima} (${data.temp}°C)`;
+            sugestaoTexto = data.sugestao;
+        }
+
+    } catch (e) {
+        climaTexto = "⚠️ Sem clima";
+        sugestaoTexto = "";
+    }
+}
+
+// atualiza clima a cada 1 minuto
+setInterval(atualizarClima, 60000);
+
+// relógio em tempo real
 setInterval(atualizarRelogio, 1000);
+
+// iniciar
+atualizarClima();
 atualizarRelogio();
 </script>
 

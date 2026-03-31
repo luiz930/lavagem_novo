@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Radar do Tempo</title>
+
+<style>
+body {
+    margin:0;
+    background:#0b0b0b;
+    color:white;
+    font-family:Arial;
+    text-align:center;
+}
+
+.topo {
+    padding:10px;
+    background:#111827;
+    border-bottom:1px solid #facc15;
+}
+
+iframe {
+    width:100%;
+    height:90vh;
+    border:none;
+}
+
+button {
+    padding:8px 15px;
+    border:none;
+    border-radius:6px;
+    background:#facc15;
+    font-weight:bold;
+    cursor:pointer;
+}
+</style>
+</head>
+
+<body>
+
+<div class="topo">
+<h2>🌧️ Radar Meteorológico</h2>
+
+<a href="/">
+<button>🔙 Voltar</button>
+</a>
+</div>
+
+<!-- 🌍 WINDY RADAR -->
+<iframe src="https://embed.windy.com/embed2.html?lat=-29.68&lon=-51.13&zoom=8&level=surface&overlay=rain&menu=&message=&marker=&calendar=&pressure=&type=map&location=coordinates&detail=&detailLat=-29.68&detailLon=-51.13&metricWind=default&metricTemp=default&radarRange=-1">
+</iframe>
+
+</body>
+</html>

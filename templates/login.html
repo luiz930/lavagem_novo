@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login</title>
+
+<style>
+body {
+    background:#0b0b0b;
+    color:white;
+    font-family:Arial;
+    text-align:center;
+}
+
+input {
+    padding:12px;
+    margin:10px;
+    border-radius:6px;
+    border:none;
+    background:#1f2937;
+    color:white;
+    width:250px;
+}
+
+button {
+    padding:12px;
+    border:none;
+    border-radius:6px;
+    background:#facc15;
+    font-weight:bold;
+    cursor:pointer;
+}
+
+.erro {
+    color:#ef4444;
+}
+</style>
+</head>
+
+<body>
+
+<h1>🔐 Acesso Wagen</h1>
+
+<form method="POST">
+<input name="usuario" placeholder="Usuário"><br>
+<input name="senha" type="password" placeholder="Senha"><br>
+<button>Entrar</button>
+</form>
+
+{% if erro %}
+<p class="erro">{{erro}}</p>
+{% endif %}
+
+</body>
+</html>

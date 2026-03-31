@@ -24,6 +24,11 @@ input, select, button {
     margin: 10px auto;
 }
 
+.topo {
+    border: 2px solid #22c55e;
+    box-shadow: 0 0 20px rgba(34,197,94,0.4);
+}
+
 /* FLEX ADAPTÁVEL */
 .flex {
     display: flex;
@@ -81,7 +86,9 @@ body {
     padding:20px;
     border-radius:10px;
     border:1px solid #facc15;
-    width:300px;
+
+    width:95%;
+    max-width:520px; /* 🔥 aumenta o espaço */
 }
 
 /* PLACA */
@@ -111,6 +118,20 @@ button {
 button:hover {
     background:#eab308;
 }
+
+.status.andamento {
+    color: #facc15;
+}
+
+.status.finalizado {
+    color: #22c55e;
+}
+
+.atrasado {
+    border: 2px solid #ef4444 !important;
+    box-shadow: 0 0 15px rgba(239,68,68,0.5);
+}
+
 </style>
 
 </head>
@@ -132,8 +153,8 @@ button:hover {
 
 <!-- SERVIÇOS -->
 {% for s in servicos %}
-<div class="card">
-<p><b>Prioridade:</b> {{ s[14] if s|length > 14 else 'N/A' }}</p>
+<div class="card {% if loop.index == 1 %}topo{% endif %}">
+<p><b>Prioridade:</b> {{s[14]}}</p>
 
 <a href="/prioridade/{{s[0]}}/up">
 <button>🔼 Subir</button>
@@ -143,15 +164,33 @@ button:hover {
 <button>🔽 Descer</button>
 </a>
 
+<p style="color:#9ca3af;">Fila: {{loop.index}}</p>
 <div class="placa">{{s[1]}}</div>
 
 <p><b>{{s[2]}}</b></p>
 <p>💰 R${{s[3]}}</p>
 
-<p class="status">{{s[13]}}</p>
+<p class="status 
+{% if s[13] == 'EM ANDAMENTO' %}andamento{% endif %}
+{% if s[13] == 'FINALIZADO' %}finalizado{% endif %}
+">
+{{s[13]}}
+</p>
 
 <p>Entrada: {{s[4]}}</p>
 <p>Entrega: {{s[5]}}</p>
+
+{% if s[13] == "EM ANDAMENTO" %}
+
+<form action="/detalhe/{{s[0]}}" method="POST" enctype="multipart/form-data">
+
+    <input type="file" name="foto_detalhe" accept="image/*" multiple>
+
+    <button type="submit">📸 Salvar</button>
+
+</form>
+
+{% endif %}
 
 {% if s[13] == "EM ANDAMENTO" %}
 <form action="/finalizar/{{s[0]}}" method="POST" enctype="multipart/form-data">
@@ -163,11 +202,43 @@ button:hover {
 </div>
 {% endfor %}
 
-<!-- AUTO ATUALIZA -->
+
+
 <script>
-setInterval(() => {
-    location.reload();
-}, 5000);
+function verificarAtraso() {
+    const cards = document.querySelectorAll(".card");
+
+    cards.forEach(card => {
+        const entradaText = card.innerText.match(/Entrada: (.+)/);
+
+        if (!entradaText) return;
+
+        try {
+            const partes = entradaText[1].split(" ");
+            const data = partes[0].split("/");
+            const hora = partes[1].split(":");
+
+            const entrada = new Date(
+                data[2],
+                data[1] - 1,
+                data[0],
+                hora[0],
+                hora[1]
+            );
+
+            const agora = new Date();
+            const diff = (agora - entrada) / 1000;
+
+            if (diff > 3600) {
+                card.classList.add("atrasado");
+            }
+
+        } catch (e) {}
+    });
+}
+
+setInterval(verificarAtraso, 5000);
+verificarAtraso();
 </script>
 
 </body>

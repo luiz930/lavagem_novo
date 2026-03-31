@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Financeiro</title>
+
+<style>
+body {
+    background:#0b0b0b;
+    color:white;
+    font-family:Arial;
+    text-align:center;
+}
+
+.card {
+    background:#111827;
+    padding:20px;
+    margin:20px auto;
+    border-radius:10px;
+    border:1px solid #facc15;
+    width:300px;
+}
+
+.valor {
+    font-size:28px;
+    color:#22c55e;
+    font-weight:bold;
+}
+
+button {
+    padding:10px;
+    border:none;
+    border-radius:6px;
+    background:#facc15;
+    font-weight:bold;
+    cursor:pointer;
+}
+</style>
+</head>
+
+<body>
+
+<h1>💰 Financeiro do Dia</h1>
+
+<div class="card">
+<p>Total faturado</p>
+<div class="valor">R$ {{total}}</div>
+</div>
+
+<div class="card">
+<p>Serviços realizados</p>
+<div class="valor">{{quantidade}}</div>
+</div>
+
+<div class="card">
+<p>Ticket médio</p>
+<div class="valor">R$ {{ticket}}</div>
+</div>
+
+<a href="/">
+<button>🔙 Voltar</button>
+</a>
+
+</body>
+</html>
