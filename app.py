@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect
+from flask import Flask, render_template, request, redirect, session, request
 import sqlite3
 from zoneinfo import ZoneInfo
 import os
@@ -7,6 +7,7 @@ UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
+app.secret_key = "wagen_super_segura_123"
 
 def conectar():
     return sqlite3.connect("database.db")
@@ -64,8 +65,129 @@ def init_db():
 
 init_db()
 
+@app.route("/api/clima")
+def api_clima():
+    try:
+        import requests
+
+        url = "https://api.open-meteo.com/v1/forecast?latitude=-29.68&longitude=-51.13&current_weather=true"
+        resposta = requests.get(url, timeout=5)
+
+        if resposta.status_code != 200:
+            return {"erro": "api offline"}
+
+        dados = resposta.json()
+
+        print("CLIMA DEBUG:", dados)
+
+        cw = dados.get("current_weather")
+
+        if not cw:
+            return {"erro": "sem dados"}
+
+        temp = cw.get("temperature", 0)
+        codigo = cw.get("weathercode", 0)
+
+        # 🔥 LÓGICA
+        if codigo >= 61:
+            icone = "🌧️"
+            clima = "Chuva"
+            sugestao = "💡 Lavagem interna"
+        elif codigo <= 3:
+            icone = "☀️"
+            clima = "Tempo limpo"
+            sugestao = "💡 Lavagem completa"
+        else:
+            icone = "⛅"
+            clima = "Nublado"
+            sugestao = "💡 Lavagem simples"
+
+        return {
+            "clima": clima,
+            "temp": temp,
+            "icone": icone,
+            "sugestao": sugestao
+        }
+
+    except Exception as e:
+        print("ERRO CLIMA:", e)
+        return {"erro": str(e)}
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        usuario = request.form.get("usuario")
+        senha = request.form.get("senha")
+
+        if usuario == "wagenadmin" and senha == "wagen@2026":
+            session["logado"] = True
+            return redirect("/")
+
+        return render_template("login.html", erro="Login inválido")
+
+    return render_template("login.html")
+
+@app.route("/clima")
+def clima():
+    if not session.get("logado"):
+        return redirect("/login")
+
+    return render_template("clima.html")
+
+@app.route("/financeiro")
+def financeiro():
+    if not session.get("logado"):
+        return redirect("/login")
+
+    conn = conectar()
+    c = conn.cursor()
+
+    from datetime import datetime
+    hoje = datetime.now().strftime("%d/%m/%Y")
+
+    # 💰 TOTAL HOJE
+    c.execute("""
+    SELECT SUM(valor) FROM servicos 
+    WHERE status='FINALIZADO' AND entrega LIKE ?
+    """, (hoje + "%",))
+
+    total = c.fetchone()[0]
+    if total is None:
+        total = 0
+
+    # 📦 QUANTIDADE
+    c.execute("""
+    SELECT COUNT(*) FROM servicos 
+    WHERE status='FINALIZADO' AND entrega LIKE ?
+    """, (hoje + "%",))
+
+    quantidade = c.fetchone()[0]
+
+    # 💵 TICKET MÉDIO
+    if quantidade > 0:
+        ticket = total / quantidade
+    else:
+        ticket = 0
+
+    conn.close()
+
+    return render_template(
+        "financeiro.html",
+        total=round(total, 2),
+        quantidade=quantidade,
+        ticket=round(ticket, 2)
+    )
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
 @app.route("/", methods=["GET", "POST"])
 def index():
+    if not session.get("logado"):
+        return redirect("/login")
     dados = None
     historico = []
     buscou = False
@@ -130,6 +252,8 @@ def index():
 
 @app.route("/cadastrar", methods=["POST"])
 def cadastrar():
+    if not session.get("logado"):
+        return redirect("/login")
     data = request.form
 
     conn = conectar()
@@ -158,6 +282,8 @@ def cadastrar():
 
 @app.route("/servico", methods=["POST"])
 def servico():
+    if not session.get("logado"):
+        return redirect("/login")
     data = request.form
 
     from datetime import datetime
@@ -166,26 +292,40 @@ def servico():
     conn = conectar()
     c = conn.cursor()
 
+# 🔥 PRIORIDADE AUTOMÁTICA (COLOCA AQUI)
+    c.execute("""
+    SELECT MAX(prioridade) FROM servicos 
+    WHERE status='EM ANDAMENTO'
+    """)
+
+    resultado = c.fetchone()[0]
+
+    if resultado is None:
+        nova_prioridade = 0
+    else:
+        nova_prioridade = resultado + 1
+
     # 🔥 INSERE O SERVIÇO PRIMEIRO
     c.execute("""
-    INSERT INTO servicos 
-    (placa, tipo, valor, entrada, entrega, origem, guarita, observacoes, pneu, cera, hidro_lataria, hidro_vidros, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        data["placa"].upper(),
-        data["tipo"],
-        data["valor"],
-        agora,
-        "",
-        data["origem"],
-        data["guarita"],
-        data["observacoes"],
-        data["pneu"],
-        data["cera"],
-        data["hidro_lataria"],
-        data["hidro_vidros"],
-        "EM ANDAMENTO"
-    ))
+INSERT INTO servicos 
+(placa, tipo, valor, entrada, entrega, origem, guarita, observacoes, pneu, cera, hidro_lataria, hidro_vidros, status, prioridade)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""", (
+    data["placa"].upper(),
+    data["tipo"],
+    data["valor"],
+    agora,
+    "",
+    data["origem"],
+    data["guarita"],
+    data["observacoes"],
+    data["pneu"],
+    data["cera"],
+    data["hidro_lataria"],
+    data["hidro_vidros"],
+    "EM ANDAMENTO",
+    nova_prioridade
+))
 
     # 🔥 PEGA O ID DO SERVIÇO
     servico_id = c.lastrowid
@@ -207,6 +347,7 @@ def servico():
     # 📸 DETALHES
     for foto in fotos_detalhe:
         if foto.filename != "":
+            import time
             nome = secure_filename(foto.filename)
             caminho = os.path.join(UPLOAD_FOLDER, nome)
             foto.save(caminho)
@@ -221,6 +362,8 @@ def servico():
 
 @app.route("/finalizar/<int:id>", methods=["POST"])
 def finalizar(id):
+    if not session.get("logado"):
+        return redirect("/login")
     from datetime import datetime
     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
 
@@ -228,18 +371,21 @@ def finalizar(id):
     c = conn.cursor()
 
     # 📸 PEGAR FOTOS DE SAÍDA
-    fotos_saida = request.files.getlist("foto_saida")
+    foto = request.files.get("foto_saida")
 
-    for foto in fotos_saida:
-        if foto.filename != "":
-            nome = secure_filename(foto.filename)
-            caminho = os.path.join(UPLOAD_FOLDER, nome)
-            foto.save(caminho)
+    if foto and foto.filename != "":
+        nome = secure_filename(foto.filename)
 
-            c.execute(
-                "INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
-                (id, "saida", caminho)
-            )
+        import time
+        nome = str(int(time.time())) + "_" + nome
+
+        caminho = os.path.join(UPLOAD_FOLDER, nome)
+        foto.save(caminho)
+
+        c.execute(
+            "INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
+            (id, "saida", caminho)
+        )
 
     # 🔥 FINALIZA O SERVIÇO
     c.execute("""
@@ -250,16 +396,54 @@ def finalizar(id):
 
     conn.commit()
     conn.close()
+    print(request.files)
+
+    return redirect("/painel")
+
+@app.route("/detalhe/<int:id>", methods=["POST"])
+def detalhe(id):
+    if not session.get("logado"):
+        return redirect("/login")
+
+    conn = conectar()
+    c = conn.cursor()
+
+    fotos = request.files.getlist("foto_detalhe")
+
+    for foto in fotos:
+        if foto and foto.filename != "":
+            import time
+            nome = str(int(time.time())) + "_" + secure_filename(foto.filename)
+
+            caminho = os.path.join(UPLOAD_FOLDER, nome)
+            foto.save(caminho)
+
+            c.execute(
+                "INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
+                (id, "detalhe", caminho)
+            )
+
+    conn.commit()
+    conn.close()
 
     return redirect("/painel")
 
 @app.route("/prioridade/<int:id>/<acao>")
 def prioridade(id, acao):
+    if not session.get("logado"):
+        return redirect("/login")
     conn = conectar()
     c = conn.cursor()
 
+    # pega prioridade atual
     c.execute("SELECT prioridade FROM servicos WHERE id=?", (id,))
-    atual = c.fetchone()[0]
+    atual = c.fetchone()
+
+    if not atual:
+        conn.close()
+        return redirect("/painel")
+
+    atual = atual[0]
 
     if acao == "up":
         c.execute("""
@@ -267,25 +451,31 @@ def prioridade(id, acao):
         WHERE prioridade < ? AND status='EM ANDAMENTO'
         ORDER BY prioridade DESC LIMIT 1
         """, (atual,))
-    else:
+
+    elif acao == "down":
         c.execute("""
         SELECT id, prioridade FROM servicos
         WHERE prioridade > ? AND status='EM ANDAMENTO'
         ORDER BY prioridade ASC LIMIT 1
         """, (atual,))
 
-        outro = c.fetchone()
+    else:
+        conn.close()
+        return redirect("/painel")
 
-        if outro:
-            outro_id, outro_prio = outro
+    outro = c.fetchone()
 
-            c.execute("UPDATE servicos SET prioridade=? WHERE id=?", (outro_prio, id))
-            c.execute("UPDATE servicos SET prioridade=? WHERE id=?", (atual, outro_id))
+    # se existir outro, troca posição
+    if outro:
+        outro_id, outro_prio = outro
 
-            conn.commit()
-            conn.close()
+        c.execute("UPDATE servicos SET prioridade=? WHERE id=?", (outro_prio, id))
+        c.execute("UPDATE servicos SET prioridade=? WHERE id=?", (atual, outro_id))
 
-            return redirect("/painel")
+        conn.commit()
+
+    conn.close()
+    return redirect("/painel")
 
 
 @app.route("/cadastrar_servico", methods=["GET", "POST"])
@@ -325,13 +515,14 @@ def cadastrar_pneu():
 
     return render_template("pneu.html", produtos=lista)
 
-
 @app.route("/painel")
 def painel():
+    if not session.get("logado"):
+        return redirect("/login")
     conn = conectar()
     c = conn.cursor()
 
-    c.execute("SELECT * FROM servicos WHERE status='EM ANDAMENTO' ORDER BY id DESC")
+    c.execute("SELECT * FROM servicos WHERE status='EM ANDAMENTO' ORDER BY prioridade ASC, id DESC")
     servicos = c.fetchall()
 
     conn.close()
