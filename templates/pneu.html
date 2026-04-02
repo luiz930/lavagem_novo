@@ -4,6 +4,16 @@
 <meta charset="UTF-8">
 <title>Produtos de Pneu</title>
 
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#facc15">
+
+<script>
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/sw.js")
+    .then(() => console.log("SW registrado"));
+}
+</script>
+
 <style>
 body {
     background:#0b0b0b;

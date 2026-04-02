@@ -4,6 +4,53 @@
 <meta charset="UTF-8">
 <title>Cadastro de Serviços</title>
 
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#facc15">
+
+<script>
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/sw.js")
+    .then(() => console.log("SW registrado"));
+}
+</script>
+
+<script>
+
+function editar(id) {
+    const card = document.getElementById("servico-" + id);
+    card.querySelector(".view").style.display = "none";
+    card.querySelector(".edit").style.display = "block";
+}
+
+function salvar(id) {
+    const card = document.getElementById("servico-" + id);
+
+    const nome = card.querySelector(".input-nome").value;
+    const valor = card.querySelector(".input-valor").value;
+
+    fetch("/editar_servico_inline/" + id, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ nome, valor })
+    })
+    .then(res => res.json())
+    .then(data => {
+
+        if(data.status === "ok") {
+            card.querySelector(".nome").innerText = nome;
+            card.querySelector(".valor").innerText = valor;
+
+            card.querySelector(".view").style.display = "block";
+            card.querySelector(".edit").style.display = "none";
+        }
+
+    });
+}
+
+</script>
+
 <style>
 body { background:#0b0b0b; color:white; text-align:center; font-family:Arial; }
 
@@ -28,6 +75,29 @@ button {
     border:1px solid #facc15;
     width:300px;
 }
+
+.edit input {
+    width: 90%;
+    margin: 5px 0;
+}
+
+.view button, .edit button {
+    margin-top: 5px;
+}
+
+button {
+    margin: 3px;
+}
+
+button:hover {
+    opacity: 0.9;
+}
+
+button[onclick^="excluir"] {
+    background: #ef4444;
+    color: white;
+}
+
 </style>
 </head>
 
@@ -44,12 +114,53 @@ button {
 <h2>Serviços cadastrados</h2>
 
 {% for s in servicos %}
-<div class="card">
-<p>{{s[1]}} - R${{s[2]}}</p>
+<div class="card" id="servico-{{s[0]}}">
+    
+    <div class="view">
+        <p>
+            <span class="nome">{{s[1]}}</span> 
+            - R$<span class="valor">{{s[2]}}</span>
+        </p>
+
+        <button onclick="editar({{s[0]}})">✏️ Editar</button>
+        <button onclick="excluir({{s[0]}})">🗑️ Excluir</button>
+    </div>
+
+    <div class="edit" style="display:none;">
+        <input class="input-nome" value="{{s[1]}}">
+        <input class="input-valor" value="{{s[2]}}">
+        <button onclick="salvar({{s[0]}})">💾 Salvar</button>
+    </div>
+
 </div>
+
 {% endfor %}
 
 <a href="/"><button>🔙 Voltar</button></a>
+
+<script>
+
+function excluir(id) {
+
+    if (!confirm("Tem certeza que deseja excluir este serviço?")) {
+        return;
+    }
+
+    fetch("/excluir_servico/" + id, {
+        method: "POST"
+    })
+    .then(res => res.json())
+    .then(data => {
+
+        if (data.status === "ok") {
+            const card = document.getElementById("servico-" + id);
+            card.remove();
+        }
+
+    });
+}
+
+</script>
 
 </body>
 </html>

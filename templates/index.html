@@ -5,6 +5,16 @@
 <meta charset="UTF-8">
 <title>Gestão Estética</title>
 
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#facc15">
+
+<script>
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/sw.js")
+    .then(() => console.log("SW registrado"));
+}
+</script>
+
 <style>
 
 #relogio {
@@ -32,10 +42,32 @@ input, select, button {
     font-size: 16px;
 }
 
+.center-box {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 60vh; /* altura da tela */
+}
+
+.destaque {
+    background: linear-gradient(145deg, #111827, #1f2937);
+    border: 2px solid #facc15;
+    box-shadow: 0 0 25px rgba(250, 204, 21, 0.3);
+    text-align: center;
+}
+
 .card {
     width: 95%;
     max-width: 400px;
-    margin: 10px auto;
+}
+
+.menu-topo {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    margin-top: 15px;
+    flex-wrap: wrap; /* 🔥 ESSENCIAL */
 }
 
 /* FLEX ADAPTÁVEL */
@@ -84,17 +116,6 @@ button:hover {
     background:#eab308;
 }
 
-/* CARDS */
-.card {
-    background:#111827;
-    padding:15px;
-    margin:10px auto;
-    border-radius:10px;
-    border:1px solid #facc15;
-    width:350px;
-    box-shadow: 0 0 10px rgba(250, 204, 21, 0.1);
-}
-
 .hidden { display:none; }
 
 </style>
@@ -103,18 +124,16 @@ button:hover {
 <body>
 
 <img src="/static/logo.jpg" style="
-width:80px;
-height:80px;
-border-radius:50%;
-object-fit:cover;
-position:absolute;
-left:20px;
-top:20px;
+    width:80px;
+    height:80px;
+    border-radius:50%;
+    object-fit:cover;
+    margin-top:10px;
 ">
 
 <h1>🚗 Wagen Estética Automotiva</h1>
 
-<div style="display:flex; justify-content:center; align-items:center; gap:10px; margin-top:15px;">
+<div class="menu-topo">
 <div id="relogio" style="margin-top:10px; font-size:18px; color:#facc15;"></div>
 
 <a href="/painel">
@@ -154,8 +173,10 @@ top:20px;
 
 <!-- ESTADO INICIAL -->
 {% if not buscou %}
-<div class="card">
-<h3>🔎 Digite uma placa para começar</h3>
+<div class="center-box">
+    <div class="card destaque">
+        <h3>🔎 Digite uma placa para começar</h3>
+    </div>
 </div>
 {% endif %}
 

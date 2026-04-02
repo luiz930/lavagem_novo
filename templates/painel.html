@@ -5,6 +5,16 @@
 <meta charset="UTF-8">
 <title>Painel Operacional</title>
 
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#facc15">
+
+<script>
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/sw.js")
+    .then(() => console.log("SW registrado"));
+}
+</script>
+
 <style>
 
 /* RESPONSIVO SIMPLES */
@@ -132,6 +142,59 @@ button:hover {
     box-shadow: 0 0 15px rgba(239,68,68,0.5);
 }
 
+.acoes {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin: 10px 0;
+}
+
+.btn.small {
+    width: 60px;
+    height: 40px;
+    font-size: 18px;
+}
+
+.card p {
+    margin: 5px 0;
+}
+
+.card {
+    transition: 0.3s;
+}
+
+.card:active {
+    transform: scale(0.98);
+}
+
+/* MOBILE PROFISSIONAL */
+@media (max-width: 600px) {
+
+    .card {
+        padding: 15px;
+        border-radius: 12px;
+    }
+
+    .placa {
+        font-size: 26px;
+    }
+
+    button {
+        width: 100%;
+        font-size: 16px;
+        padding: 14px;
+    }
+
+    input[type="file"] {
+        font-size: 16px;
+        padding: 10px;
+        background: #1f2937;
+        color: white;
+        border-radius: 6px;
+    }
+
+}
+
 </style>
 
 </head>
@@ -156,19 +219,21 @@ button:hover {
 <div class="card {% if loop.index == 1 %}topo{% endif %}">
 <p><b>Prioridade:</b> {{s[14]}}</p>
 
-<a href="/prioridade/{{s[0]}}/up">
-<button>🔼 Subir</button>
-</a>
+<div class="acoes">
+    <a href="/prioridade/{{s[0]}}/up">
+        <button class="btn small">⬆️</button>
+    </a>
 
-<a href="/prioridade/{{s[0]}}/down">
-<button>🔽 Descer</button>
-</a>
+    <a href="/prioridade/{{s[0]}}/down">
+        <button class="btn small">⬇️</button>
+    </a>
+</div>
 
 <p style="color:#9ca3af;">Fila: {{loop.index}}</p>
 <div class="placa">{{s[1]}}</div>
 
-<p><b>{{s[2]}}</b></p>
-<p>💰 R${{s[3]}}</p>
+<p><b>Cliente:</b> {{s[2]}}</p>
+<p><b>Valor:</b> 💰 R${{s[3]}}</p>
 
 <p class="status 
 {% if s[13] == 'EM ANDAMENTO' %}andamento{% endif %}
@@ -194,7 +259,7 @@ button:hover {
 
 {% if s[13] == "EM ANDAMENTO" %}
 <form action="/finalizar/{{s[0]}}" method="POST" enctype="multipart/form-data">
-    <input type="file" name="foto_saida" required>
+    <input type="file" name="foto_saida" accept="image/*" capture="environment" required>
     <button>Finalizar</button>
 </form>
 {% endif %}

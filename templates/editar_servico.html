@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Editar Serviço</title>
+
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#facc15">
+
+<script>
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/sw.js")
+    .then(() => console.log("SW registrado"));
+}
+</script>
+
+<style>
+body { background:#0b0b0b; color:white; text-align:center; font-family:Arial; }
+
+input, button {
+    padding:10px;
+    margin:5px;
+    border-radius:6px;
+    border:none;
+}
+
+button {
+    background:#facc15;
+    color:black;
+    font-weight:bold;
+}
+</style>
+</head>
+
+<body>
+
+<h1>✏️ Editar Serviço</h1>
+
+<form method="POST">
+<input name="nome" value="{{servico[1]}}" required><br>
+<input name="valor" value="{{servico[2]}}" required><br>
+<button>Salvar Alterações</button>
+</form>
+
+<a href="/cadastro_servico">
+<button>🔙 Voltar</button>
+</a>
+
+</body>
+</html>
