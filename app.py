@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, session, request
+from flask import Flask, render_template, request, redirect, session, request, jsonify
 import sqlite3
 from zoneinfo import ZoneInfo
 import os
@@ -112,6 +112,56 @@ def api_clima():
     except Exception as e:
         print("ERRO CLIMA:", e)
         return {"erro": str(e)}
+
+@app.route("/editar_servico_inline/<int:id>", methods=["POST"])
+def editar_servico_inline(id):
+    data = request.get_json()
+
+    nome = data.get("nome")
+    valor = data.get("valor")
+
+    conn = conectar()
+    c = conn.cursor()
+
+    c.execute("UPDATE tipos_servico SET nome=?, valor=? WHERE id=?", (nome, valor, id))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "ok"})
+
+@app.route("/excluir_servico/<int:id>", methods=["POST"])
+def excluir_servico(id):
+    conn = conectar()
+    c = conn.cursor()
+
+    c.execute("DELETE FROM tipos_servico WHERE id=?", (id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "ok"})
+
+
+@app.route("/editar_servico/<int:id>", methods=["GET", "POST"])
+def editar_servico(id):
+    conn = conectar()
+    c = conn.cursor()
+
+    if request.method == "POST":
+        nome = request.form['nome']
+        valor = request.form['valor']
+
+        c.execute("UPDATE tipos_servico SET nome=?, valor=? WHERE id=?", (nome, valor, id))
+        conn.commit()
+        conn.close()
+
+        return redirect("/cadastro_servico")
+
+    c.execute("SELECT * FROM tipos_servico WHERE id=?", (id,))
+    servico = c.fetchone()
+
+    conn.close()
+
+    return render_template("editar_servico.html", servico=servico)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
