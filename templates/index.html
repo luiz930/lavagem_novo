@@ -5,6 +5,9 @@
 <meta charset="UTF-8">
 <title>Gestão Estética</title>
 
+<link rel="icon" href="/static/favicon.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+
 <link rel="manifest" href="/static/manifest.json">
 <meta name="theme-color" content="#facc15">
 
@@ -17,20 +20,113 @@ if ("serviceWorker" in navigator) {
 
 <style>
 
-#relogio {
+.menu-btn {
     position: fixed;
-    bottom: 15px;
-    right: 15px;
-    background: #111827;
-    padding: 10px 15px;
-    border-radius: 8px;
-    border: 1px solid #facc15;
-    color: #facc15;
-    font-size: 14px;
-    box-shadow: 0 0 10px rgba(250, 204, 21, 0.2);
-    z-index: 999;
+    top: 15px;
+    left: 15px;
+    z-index: 1100;
+
+    width: 40px !important;
+    height: 40px !important;
+    padding: 0 !important;
+
+    font-size: 20px;
+
+    background: #facc15;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
 }
 
+/* ANIMAÇÃO */
+.sidebar {
+    transition: all 0.3s ease;
+}
+
+.main {
+    transition: all 0.3s ease;
+}
+
+/* SIDEBAR FECHADA */
+.sidebar.hide {
+    left: -230px;
+}
+
+/* MAIN EXPANDIDA */
+.main.full {
+    margin-left: 0;
+}
+
+/* SIDEBAR */
+.sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 220px;
+    height: 100%;
+    background: #111827;
+    border-right: 2px solid #facc15;
+    padding: 20px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 1000;
+}
+
+.sidebar h2 {
+    color: #facc15;
+    font-size: 18px;
+    margin-bottom: 10px;
+}
+
+.sidebar a button {
+    width: 100%;
+}
+
+/* CONTEÚDO AO LADO */
+.main {
+    margin-left: 230px;
+    padding: 20px;
+}
+
+/* MOBILE */
+@media (max-width: 600px) {
+    .sidebar {
+        width: 100%;
+        height: auto;
+        position: relative;
+        flex-direction: row;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .main {
+        margin-left: 0;
+    }
+}
+
+#relogio {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+
+    min-width: 260px; /* 🔥 força tamanho */
+    text-align: center;
+
+    background: #111827;
+    padding: 15px;
+
+    border-radius: 12px;
+    border: 2px solid #facc15;
+
+    color: #facc15;
+    font-size: 18px;
+    font-weight: bold;
+
+    box-shadow: 0 0 20px rgba(250, 204, 21, 0.4);
+
+    z-index: 9999;
+}
 /* RESPONSIVO SIMPLES */
 * {
     box-sizing: border-box;
@@ -123,52 +219,41 @@ button:hover {
 
 <body>
 
+<!-- SIDEBAR -->
+<div class="sidebar hide">
+
 <img src="/static/logo.jpg" style="
     width:80px;
     height:80px;
     border-radius:50%;
     object-fit:cover;
-    margin-top:10px;
+    margin-top:50px;
+    margin-bottom:10px;
 ">
+
+<a href="/painel"><button>📊 Painel</button></a>
+<a href="/cadastrar_servico"><button>🧼 Serviços</button></a>
+<a href="/financeiro"><button>💰 Financeiro</button></a>
+<a href="/pneu"><button>🛞 Pneus</button></a>
+<a href="/clima"><button>🌧️ Clima</button></a>
+
+</div>
+
+<!-- MAIN -->
+<div class="main full">
+
+<button onclick="toggleSidebar()" class="menu-btn">
+☰
+</button>
 
 <h1>🚗 Wagen Estética Automotiva</h1>
 
-<div class="menu-topo">
-<div id="relogio" style="margin-top:10px; font-size:18px; color:#facc15;"></div>
-
-<a href="/painel">
-<button>
-📊 Painel Operacional
-</button>
-</a>
-
-<a href="/cadastrar_servico">
-<button>
-🧼 Serviços
-</button>
-</a>
-
-<a href="/financeiro">
-<button>💰 Financeiro</button>
-</a>
-
-<a href="/pneu">
-<button>
-🛞 Produtos Pneu
-</button>
-</a>
-
-<a href="/clima">
-<button>🌧️ Clima</button>
-</a>
-
-
 <!-- BUSCA -->
-<form method="POST" style="display:flex; gap:5px;">
-<input name="placa" placeholder="Digite a placa" required>
+<div style="margin-bottom:20px;">
+<form method="POST" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
+<input name="placa" placeholder="Digite a placa" required style="max-width:300px;">
 <button>Buscar</button>
 </form>
-
 </div>
 
 <!-- ESTADO INICIAL -->
@@ -180,7 +265,7 @@ button:hover {
 </div>
 {% endif %}
 
-<!-- CLIENTE EXISTENTE -->
+<!-- CLIENTE -->
 {% if dados %}
 <div class="card">
 <h3>Cliente</h3>
@@ -216,8 +301,8 @@ button:hover {
 </div>
 {% endif %}
 
+<!-- ATENDIMENTO -->
 {% if dados %}
-
 <div class="card">
 <h3>Atendimento</h3>
 
@@ -225,11 +310,11 @@ button:hover {
 
 <form id="formServico" class="hidden" action="/servico" method="POST" enctype="multipart/form-data">
 
-    <p>📸 Fotos de entrada</p>
-<input type="file" name="foto_entrada" accept="image/*" multiple required>
+<p>📸 Fotos de entrada</p>
+<input type="file" name="foto_entrada" multiple required>
 
 <p>📸 Fotos de detalhes</p>
-<input type="file" name="foto_detalhe" accept="image/*" multiple required>
+<input type="file" name="foto_detalhe" multiple required>
 
 <input name="placa" value="{{dados[0]}}" readonly><br>
 
@@ -240,115 +325,63 @@ button:hover {
 </option>
 {% endfor %}
 </select>
+
 <input type="hidden" name="valor" id="valorServico">
+
 <input name="origem" placeholder="Origem"><br>
 <input name="guarita" placeholder="Guarita"><br>
 <input name="observacoes" placeholder="Observações"><br>
 
-<p>Pneu?</p>
 <select name="pneu">
 <option value="">Nenhum</option>
 {% for p in produtos_pneu %}
-<option value="{{p[1]}}">
-{{p[1]}}
-</option>
+<option value="{{p[1]}}">{{p[1]}}</option>
 {% endfor %}
 </select>
 
-<p>Cera?</p>
 <select name="cera"><option>Não</option><option>Sim</option></select>
-
-<p>Hidro lataria?</p>
 <select name="hidro_lataria"><option>Não</option><option>Sim</option></select>
-
-<p>Cristalização vidros?</p>
 <select name="hidro_vidros"><option>Não</option><option>Sim</option></select>
 
-<br>
 <button type="submit">Salvar Atendimento</button>
 
 </form>
 </div>
-
 {% endif %}
 
 <!-- HISTÓRICO -->
 {% for item in historico %}
 {% set s = item[0] %}
-{% set tempo = item[1] %}
 
 <div class="card" style="text-align:left;">
 
-<div style="display:flex; justify-content:space-between; align-items:center;">
-<span style="font-size:18px; color:#facc15;"><b>{{s[2]}}</b></span>
+<b>{{s[2]}}</b>
 
-{% if s[13] == "FINALIZADO" %}
-<span style="color:#22c55e;">✔ FINALIZADO</span>
-{% else %}
-<span style="color:#facc15;">⏳ EM ANDAMENTO</span>
-{% endif %}
-</div>
-
-<p style="color:#9ca3af;">💰 R${{s[3]}}</p>
-
-<hr style="border:1px solid #374151;">
-
-<p><b>Entrada:</b> {{s[4]}}</p>
-<p><b>Entrega:</b> {{s[5] if s[5] else "Em andamento"}}</p>
-<p><b>Tempo:</b> <span class="tempo" data-entrada="{{s[4]}}" data-status="{{s[13]}}">Calculando...</span></p>
-
-<hr style="border:1px solid #374151;">
-
-<p><b>Serviços:</b></p>
-<ul style="margin-left:15px;">
-<li>Pneu: {{s[9]}}</li>
-<li>Cera: {{s[10]}}</li>
-<li>Hidro Lataria: {{s[11]}}</li>
-<li>Hidro Vidros: {{s[12]}}</li>
-</ul>
-
-<p><b>Origem:</b> {{s[6]}}</p>
-<p><b>Guarita:</b> {{s[7]}}</p>
-
-{% if s[8] %}
-<p><b>Obs:</b> {{s[8]}}</p>
-{% endif %}
+<p>💰 R${{s[3]}}</p>
+<p>Entrada: {{s[4]}}</p>
 
 {% if s[13] == "EM ANDAMENTO" %}
-<a href="/finalizar/{{s[0]}}">
-<button>Finalizar</button>
-</a>
+<form action="/finalizar/{{s[0]}}" method="POST" enctype="multipart/form-data">
+<input type="file" name="foto_saida">
+<button type="submit">Finalizar</button>
+</form>
 {% endif %}
 
 </div>
 
 {% endfor %}
 
-<script>
-function toggleEdit(){
-    let form = document.getElementById("editForm");
-    form.classList.toggle("hidden");
-}
-</script>
+<div id="relogio"></div>
+
+</div>
 
 <script>
-function abrirServico(){
-    document.getElementById("formServico").classList.toggle("hidden");
-}
-</script>
+function toggleSidebar() {
+    const sidebar = document.querySelector(".sidebar");
+    const main = document.querySelector(".main");
 
-<script>
-function preencherValor(){
-    let select = document.getElementById("tipoServico");
-    let valor = select.options[select.selectedIndex].getAttribute("data-valor");
-
-    document.getElementById("valorServico").value = valor;
-}
-</script>
-
-<script>
-window.onload = function(){
-    preencherValor();
+    sidebar.classList.toggle("hide");
+    main.classList.toggle("full");
 }
 </script>
 
@@ -356,17 +389,7 @@ window.onload = function(){
 let climaTexto = "🌤️ Carregando...";
 let sugestaoTexto = "";
 
-function atualizarRelogio() {
-    const agora = new Date();
-
-    const data = agora.toLocaleDateString('pt-BR');
-    const hora = agora.toLocaleTimeString('pt-BR');
-
-    document.getElementById("relogio").innerHTML =
-        "📅 " + data + " ⏰ " + hora + " | " + climaTexto + " " + sugestaoTexto;
-}
-
-// 🔥 BUSCAR CLIMA REAL
+// CLIMA
 async function atualizarClima() {
     try {
         const res = await fetch("/api/clima");
@@ -376,74 +399,32 @@ async function atualizarClima() {
             climaTexto = `${data.icone} ${data.clima} (${data.temp}°C)`;
             sugestaoTexto = data.sugestao;
         }
-
     } catch (e) {
-        climaTexto = "⚠️ Sem clima";
+        climaTexto = "⚠️";
         sugestaoTexto = "";
     }
 }
 
-// atualiza clima a cada 1 minuto
+// RELÓGIO
+function atualizarRelogio() {
+    const agora = new Date();
+    const el = document.getElementById("relogio");
+
+    if (!el) return;
+
+    el.innerHTML =
+        "📅 " + agora.toLocaleDateString('pt-BR') +
+        " ⏰ " + agora.toLocaleTimeString('pt-BR') +
+        " | " + climaTexto + " " + sugestaoTexto;
+}
+
+// LOOP
+setInterval(atualizarRelogio, 1000);
 setInterval(atualizarClima, 60000);
 
-// relógio em tempo real
-setInterval(atualizarRelogio, 1000);
-
-// iniciar
+// INICIAR
 atualizarClima();
 atualizarRelogio();
 </script>
-
-<script>
-function atualizarTempos() {
-    const elementos = document.querySelectorAll(".tempo");
-
-    elementos.forEach(el => {
-        const entradaStr = el.getAttribute("data-entrada");
-        const status = el.getAttribute("data-status");
-
-        if (!entradaStr || status === "FINALIZADO") return;
-
-        try {
-            const partes = entradaStr.split(" ");
-            const data = partes[0].split("/");
-            const hora = partes[1].split(":");
-
-            const entrada = new Date(
-                data[2], // ano
-                data[1] - 1, // mês
-                data[0], // dia
-                hora[0],
-                hora[1]
-            );
-
-            const agora = new Date();
-            const diff = Math.floor((agora - entrada) / 1000);
-
-            const h = Math.floor(diff / 3600);
-            const m = Math.floor((diff % 3600) / 60);
-            const s = diff % 60;
-
-            el.innerHTML = `${h}h ${m}m ${s}s`;
-
-            // 🔔 ALERTA (ex: mais de 1 hora)
-            if (diff > 3600) {
-                el.style.color = "#ef4444"; // vermelho
-                el.style.fontWeight = "bold";
-                el.innerHTML += " ⚠️ ATRASADO";
-            } else {
-                el.style.color = "#22c55e"; // verde
-            }
-
-        } catch (e) {
-            el.innerHTML = "Erro";
-        }
-    });
-}
-
-setInterval(atualizarTempos, 1000);
-atualizarTempos();
-</script>
-
 </body>
 </html>
