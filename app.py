@@ -287,66 +287,73 @@ def logout():
 def index():
     if not session.get("logado"):
         return redirect("/login")
+
     dados = None
     historico = []
     buscou = False
-    placa = ""
 
     conn = conectar()
     c = conn.cursor()
 
-    # 🔥 SERVIÇOS
+    # 🔥 LISTAS FIXAS
     c.execute("SELECT * FROM tipos_servico")
     servicos_lista = c.fetchall()
 
-    # 🔥 PNEU (SEMPRE FORA DO IF)
     c.execute("SELECT * FROM produtos_pneu")
     produtos_pneu = c.fetchall()
 
+    # 🔥 POST → REDIRECT
     if request.method == "POST":
         placa = request.form.get("placa", "").upper()
         return redirect(f"/?placa={placa}")
 
-        # CLIENTE
+    # 🔥 GET (AQUI ESTÁ O SEGREDO)
+    placa = request.args.get("placa", "").upper()
+
+    if placa:
+        buscou = True
+
+        # 🔥 CLIENTE
         c.execute("SELECT * FROM veiculos WHERE placa=?", (placa,))
         dados = c.fetchone()
 
-        if not dados:
-            dados = None
+        if dados:
+            # 🔥 HISTÓRICO
+            c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
+            veiculo = c.fetchone()
 
-    # 🔥 buscar o id do veículo pela placa
-    c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
-    veiculo = c.fetchone()
+            if veiculo:
+                veiculo_id = veiculo["id"]
 
-    if veiculo:
-        veiculo_id = veiculo[0]
+                c.execute("""
+                    SELECT * FROM servicos 
+                    WHERE veiculo_id=? 
+                    ORDER BY id DESC
+                """, (veiculo_id,))
 
-        c.execute("SELECT * FROM servicos WHERE veiculo_id=? ORDER BY id DESC", (veiculo_id,))
-        historico_db = c.fetchall()
-    else:
-        historico_db = []
+                historico_db = c.fetchall()
 
-        # HISTÓRICO PREMIUM
-        from datetime import datetime
-        historico_formatado = []
+                # 🔥 FORMATAR HISTÓRICO
+                from datetime import datetime
+                historico_formatado = []
 
-        for s in historico_db:
-            try:
-                entrada = datetime.strptime(s[4], "%d/%m/%Y %H:%M")
+                for s in historico_db:
+                    try:
+                        entrada = datetime.fromisoformat(s["entrada"])
 
-                if s[5]:
-                    entrega = datetime.strptime(s[5], "%d/%m/%Y %H:%M")
-                    tempo = entrega - entrada
-                    tempo_str = str(tempo)
-                else:
-                    tempo_str = "Em andamento"
+                        if s["entrega"]:
+                            entrega = datetime.fromisoformat(s["entrega"])
+                            tempo = entrega - entrada
+                            tempo_str = str(tempo)
+                        else:
+                            tempo_str = "Em andamento"
 
-            except:
-                tempo_str = "N/A"
+                    except:
+                        tempo_str = "N/A"
 
-            historico_formatado.append((s, tempo_str))
+                    historico_formatado.append((s, tempo_str))
 
-        historico = historico_formatado
+                historico = historico_formatado
 
     conn.close()
 
