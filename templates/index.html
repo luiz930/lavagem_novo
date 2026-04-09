@@ -107,26 +107,23 @@ if ("serviceWorker" in navigator) {
 
 #relogio {
     position: fixed;
-    bottom: 20px;
-    right: 20px;
-
-    min-width: 260px; /* 🔥 força tamanho */
-    text-align: center;
-
+    bottom: 5px;
+    right: 5px;
+    
     background: #111827;
-    padding: 15px;
+    border: 1px solid #facc15;
+    border-radius: 8px;
 
-    border-radius: 12px;
-    border: 2px solid #facc15;
+    padding: 12px 20px;
+    font-size: 12px;
 
-    color: #facc15;
-    font-size: 18px;
-    font-weight: bold;
+    box-shadow: 0 0 8px rgba(250, 204, 21, 0.3);
 
-    box-shadow: 0 0 20px rgba(250, 204, 21, 0.4);
+    white-space: nowrap;
 
-    z-index: 9999;
 }
+
+
 /* RESPONSIVO SIMPLES */
 * {
     box-sizing: border-box;
@@ -214,6 +211,33 @@ button:hover {
 
 .hidden { display:none; }
 
+.container-cliente {
+    display: flex;
+    justify-content: center;
+    margin-top: 30px;
+}
+
+.card-cliente {
+    background: #111827;
+    border: 1px solid #facc15;
+    border-radius: 12px;
+    padding: 20px;
+    width: 90%;
+    max-width: 400px;
+    text-align: left;
+    box-shadow: 0 0 15px rgba(250, 204, 21, 0.2);
+}
+
+.card-cliente h2 {
+    text-align: center;
+    margin-bottom: 15px;
+}
+
+.card-cliente p {
+    margin: 8px 0;
+    font-size: 16px;
+}
+
 </style>
 </head>
 
@@ -268,13 +292,35 @@ button:hover {
 
 <!-- CLIENTE -->
 {% if dados %}
-<div class="card">
-<h3>Cliente</h3>
-<p><b>Nome:</b> {{dados[1]}}</p>
-<p><b>Telefone:</b> {{dados[2]}}</p>
-<p><b>Carro:</b> {{dados[3]}} - {{dados[4]}}</p>
+<div class="container-cliente">
 
-<button onclick="toggleEdit()">✏️ Editar</button>
+<div class="card-cliente">
+
+<h2>Cliente</h2>
+<p><strong>Nome:</strong> {{dados.nome}}</p>
+<p><strong>Telefone:</strong> {{dados.telefone}}</p>
+<p><strong>Carro:</strong> {{dados.modelo}} - {{dados.cor}}</p>
+
+<button type="button" onclick="toggleEditar()">✏️ Editar</button>
+
+<div id="formEditar" style="display:none;">
+
+<form action="/editar_cliente" method="POST">
+    
+    <input type="hidden" name="placa" value="{{dados['placa']}}">
+
+    <input name="nome" value="{{dados.nome}}">
+    <input name="telefone" value="{{dados.telefone}}">
+    <input name="modelo" value="{{dados.modelo}}">
+    <input name="cor" value="{{dados.cor}}">
+
+    <button>Salvar</button>
+
+</form>
+
+</div>
+
+</div>
 
 <form id="editForm" class="hidden" action="/cadastrar" method="POST">
 <input name="placa" value="{{dados[0]}}" readonly><br>
@@ -314,8 +360,11 @@ button:hover {
 
 <!-- ATENDIMENTO -->
 {% if dados %}
-<div class="card">
-<h3>Atendimento</h3>
+<div class="container-cliente">
+
+<div class="card-cliente">
+
+<h2>Atendimento</h2>
 
 <button onclick="abrirServico()">+ Novo Atendimento</button>
 
@@ -358,6 +407,7 @@ button:hover {
 
 </form>
 </div>
+</div>
 {% endif %}
 
 <!-- HISTÓRICO -->
@@ -393,6 +443,13 @@ function toggleSidebar() {
 
     sidebar.classList.toggle("hide");
     main.classList.toggle("full");
+}
+</script>
+
+<script>
+function toggleEditar() {
+    const el = document.getElementById("formEditar");
+    el.style.display = el.style.display === "none" ? "block" : "none";
 }
 </script>
 

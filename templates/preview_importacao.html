@@ -1,0 +1,61 @@
+<h2>📊 Pré-visualização</h2>
+
+<form method="POST" action="/confirmar_importacao">
+
+<label>Placa:</label>
+<select name="placa">
+    {% for col in colunas %}
+    <option value="{{col}}">{{col}}</option>
+    {% endfor %}
+</select>
+
+<label>Nome:</label>
+<select name="nome">
+    {% for col in colunas %}
+    <option value="{{col}}">{{col}}</option>
+    {% endfor %}
+</select>
+
+<label>Telefone:</label>
+<select name="telefone">
+    {% for col in colunas %}
+    <option value="{{col}}">{{col}}</option>
+    {% endfor %}
+</select>
+
+<label>Modelo:</label>
+<select name="modelo">
+    {% for col in colunas %}
+    <option value="{{col}}">{{col}}</option>
+    {% endfor %}
+</select>
+
+<label>Cor:</label>
+<select name="cor">
+    {% for col in colunas %}
+    <option value="{{col}}">{{col}}</option>
+    {% endfor %}
+</select>
+
+<br><br>
+
+<button>💾 Importar</button>
+</form>
+
+<hr>
+
+<table border="1">
+<tr>
+    {% for col in colunas %}
+    <th>{{col}}</th>
+    {% endfor %}
+</tr>
+
+{% for linha in dados %}
+<tr>
+    {% for col in colunas %}
+    <td>{{linha[col]}}</td>
+    {% endfor %}
+</tr>
+{% endfor %}
+</table>

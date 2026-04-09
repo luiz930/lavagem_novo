@@ -12,7 +12,9 @@ app.secret_key = "wagen_super_segura_123"
 APP_VERSION = "Versão: 0.0.3-alpha"
 
 def conectar():
-    return sqlite3.connect("database_v2.db")
+    conn = sqlite3.connect("database_v2.db")
+    conn.row_factory = sqlite3.Row  # 🔥 ESSENCIAL
+    return conn
 
 def init_db():
     conn = conectar()
@@ -314,7 +316,18 @@ def index():
         buscou = True
 
         # 🔥 CLIENTE
-        c.execute("SELECT * FROM veiculos WHERE placa=?", (placa,))
+        c.execute("""
+        SELECT 
+            veiculos.placa,
+            veiculos.modelo,
+            veiculos.cor,
+            clientes.nome,
+            clientes.telefone
+        FROM veiculos
+        LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
+        WHERE veiculos.placa=?
+        """, (placa,))
+
         dados = c.fetchone()
 
         if dados:
@@ -323,7 +336,7 @@ def index():
             veiculo = c.fetchone()
 
             if veiculo:
-                veiculo_id = veiculo["id"]
+                veiculo_id = veiculo[0]
 
                 c.execute("""
                     SELECT * FROM servicos 
@@ -367,6 +380,89 @@ def index():
         servicos_lista=servicos_lista,
         produtos_pneu=produtos_pneu
     )
+
+@app.route("/importar_clientes", methods=["POST"])
+def importar_clientes():
+    if not session.get("logado"):
+        return redirect("/login")
+
+    arquivo = request.files.get("arquivo")
+
+    if not arquivo:
+        return "Nenhum arquivo enviado"
+
+    import pandas as pd
+
+    try:
+        if arquivo.filename.endswith(".csv"):
+            df = pd.read_csv(arquivo)
+        else:
+            df = pd.read_excel(arquivo)
+    except Exception as e:
+        return f"Erro ao ler arquivo: {e}"
+
+    # 🔥 normaliza colunas
+    df.columns = df.columns.str.lower()
+
+    conn = conectar()
+    c = conn.cursor()
+
+    for _, row in df.iterrows():
+        try:
+            placa = str(row.get("placa", "")).upper().strip()
+            nome = str(row.get("nome", "")).strip()
+            telefone = str(row.get("telefone", "")).strip()
+            modelo = str(row.get("modelo", "")).strip()
+            cor = str(row.get("cor", "")).strip()
+
+            if not placa or placa == "nan":
+                continue
+
+            # 🔥 1. CRIA OU ATUALIZA CLIENTE
+            cliente_id = None
+
+            if telefone:
+                c.execute("SELECT id FROM clientes WHERE telefone=?", (telefone,))
+                cliente = c.fetchone()
+
+                if cliente:
+                    cliente_id = cliente["id"]
+
+                    # atualiza nome se mudou
+                    c.execute("""
+                        UPDATE clientes SET nome=? WHERE id=?
+                    """, (nome, cliente_id))
+                else:
+                    c.execute("""
+                        INSERT INTO clientes (nome, telefone)
+                        VALUES (?, ?)
+                    """, (nome, telefone))
+
+                    cliente_id = c.lastrowid
+
+            # 🔥 2. VEÍCULO
+            c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
+            veiculo = c.fetchone()
+
+            if veiculo:
+                c.execute("""
+                    UPDATE veiculos 
+                    SET modelo=?, cor=?, cliente_id=?
+                    WHERE placa=?
+                """, (modelo, cor, cliente_id, placa))
+            else:
+                c.execute("""
+                    INSERT INTO veiculos (placa, modelo, cor, cliente_id)
+                    VALUES (?, ?, ?, ?)
+                """, (placa, modelo, cor, cliente_id))
+
+        except Exception as e:
+            print("Erro linha:", e)
+
+    conn.commit()
+    conn.close()
+
+    return redirect("/clientes?importado=1")
 
 @app.route("/cadastrar", methods=["POST"])
 def cadastrar():
@@ -669,25 +765,110 @@ def painel():
 
     return render_template("painel.html", servicos=servicos)
 
+
+@app.route("/preview_importacao", methods=["POST"])
+def preview_importacao():
+    import pandas as pd
+
+    arquivo = request.files.get("arquivo")
+
+    if not arquivo:
+        return "Nenhum arquivo enviado"
+
+    if arquivo.filename.endswith(".csv"):
+        df = pd.read_csv(arquivo)
+    else:
+        df = pd.read_excel(arquivo)
+
+    df.columns = df.columns.str.lower()
+
+    # salva temporário na sessão
+    session["preview_dados"] = df.to_dict(orient="records")
+    session["preview_colunas"] = list(df.columns)
+
+    return render_template(
+        "preview_importacao.html",
+        colunas=df.columns,
+        dados=df.head(10).to_dict(orient="records")  # só preview
+    )
+
+@app.route("/confirmar_importacao", methods=["POST"])
+def confirmar_importacao():
+    dados = session.get("preview_dados")
+
+    placa_col = request.form.get("placa")
+    nome_col = request.form.get("nome")
+    telefone_col = request.form.get("telefone")
+    modelo_col = request.form.get("modelo")
+    cor_col = request.form.get("cor")
+
+    conn = conectar()
+    c = conn.cursor()
+
+    for row in dados:
+        placa = str(row.get(placa_col, "")).upper().strip()
+
+        if not placa:
+            continue
+
+        nome = row.get(nome_col, "")
+        telefone = row.get(telefone_col, "")
+        modelo = row.get(modelo_col, "")
+        cor = row.get(cor_col, "")
+
+        # cliente
+        c.execute("INSERT INTO clientes (nome, telefone) VALUES (?, ?)", (nome, telefone))
+        cliente_id = c.lastrowid
+
+        # 🔥 verifica se veiculo existe
+        c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
+        existe = c.fetchone()
+
+        if existe:
+            c.execute("""
+                UPDATE veiculos
+                SET modelo=?, cor=?, cliente_id=?
+                WHERE placa=?
+            """, (modelo, cor, cliente_id, placa))
+        else:
+           c.execute("""
+               INSERT INTO veiculos (placa, modelo, cor, cliente_id)
+               VALUES (?, ?, ?, ?)
+           """, (placa, modelo, cor, cliente_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect("/clientes")
+
 @app.route("/clientes", methods=["GET", "POST"])
 def clientes():
     if not session.get("logado"):
         return redirect("/login")
+
+    limpar = request.args.get("limpar")
+
+    importado = request.args.get("importado")
 
     conn = conectar()
     c = conn.cursor()
 
     busca = request.form.get("busca", "")
 
-    if busca:
-        c.execute("""
-            SELECT * FROM veiculos 
-            WHERE placa LIKE ? OR modelo LIKE ?
-        """, (f"%{busca}%", f"%{busca}%"))
-    else:
-        c.execute("SELECT * FROM veiculos ORDER BY id DESC")
+    busca = request.form.get("busca", "")
 
-    clientes = c.fetchall()
+    if limpar:
+        clientes = []
+    else:
+        if busca:
+            c.execute("""
+                SELECT * FROM veiculos 
+                WHERE placa LIKE ? OR modelo LIKE ?
+            """, (f"%{busca}%", f"%{busca}%"))
+        else:
+            c.execute("SELECT * FROM veiculos ORDER BY id DESC")
+
+        clientes = c.fetchall()
 
     conn.close()
 
@@ -703,17 +884,43 @@ def editar_cliente():
     conn = conectar()
     c = conn.cursor()
 
+    placa = data["placa"].upper()
+    modelo = data["modelo"]
+    cor = data["cor"]
+    telefone = data["telefone"]
+    nome = data.get("nome", "")
+
+    # 🔥 BUSCAR VEICULO
+    c.execute("SELECT cliente_id FROM veiculos WHERE placa=?", (placa,))
+    veiculo = c.fetchone()
+
+    cliente_id = None
+
+    if veiculo:
+        cliente_id = veiculo[0]
+
+    # 🔥 SE EXISTE CLIENTE → ATUALIZA
+    if cliente_id:
+        c.execute("""
+            UPDATE clientes 
+            SET nome=?, telefone=?
+            WHERE id=?
+        """, (nome, telefone, cliente_id))
+    else:
+        # 🔥 CRIA CLIENTE NOVO
+        c.execute("""
+            INSERT INTO clientes (nome, telefone)
+            VALUES (?, ?)
+        """, (nome, telefone))
+
+        cliente_id = c.lastrowid
+
+    # 🔥 ATUALIZA VEICULO
     c.execute("""
-        UPDATE veiculos
-        SET placa=?, modelo=?, cor=?, telefone=?
-        WHERE id=?
-    """, (
-        data["placa"].upper(),
-        data["modelo"],
-        data["cor"],
-        data["telefone"],
-        data["id"]
-    ))
+        UPDATE veiculos 
+        SET modelo=?, cor=?, cliente_id=?
+        WHERE placa=?
+    """, (modelo, cor, cliente_id, placa))
 
     conn.commit()
     conn.close()
