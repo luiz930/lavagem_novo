@@ -925,7 +925,7 @@ def editar_cliente():
     conn.commit()
     conn.close()
 
-    return redirect("/clientes")
+    return redirect(f"/?placa={placa}")
 
 if __name__ == "__main__":
     import os
