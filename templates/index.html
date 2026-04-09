@@ -322,13 +322,20 @@ button:hover {
 
 </div>
 
-<form id="editForm" class="hidden" action="/cadastrar" method="POST">
-<input name="placa" value="{{dados[0]}}" readonly><br>
-<input name="nome" value="{{dados[1]}}"><br>
-<input name="telefone" value="{{dados[2]}}"><br>
-<input name="modelo" value="{{dados[3]}}"><br>
-<input name="cor" value="{{dados[4]}}"><br>
+<form id="editForm" class="hidden" action="/editar_cliente" method="POST">
+
+<input name="placa" value="{{dados.placa}}" readonly><br>
+
+<input name="nome" value="{{dados.nome}}"><br>
+
+<input name="telefone" value="{{dados.telefone}}"><br>
+
+<input name="modelo" value="{{dados.modelo}}"><br>
+
+<input name="cor" value="{{dados.cor}}"><br>
+
 <button>Salvar Alterações</button>
+
 </form>
 </div>
 {% endif %}
@@ -376,7 +383,7 @@ button:hover {
 <p>📸 Fotos de detalhes</p>
 <input type="file" name="foto_detalhe" multiple required>
 
-<input name="placa" value="{{dados[0]}}" readonly><br>
+<input name="placa" value="{{dados.placa}}" readonly><br>
 
 <select name="tipo" id="tipoServico" onchange="preencherValor()">
 {% for serv in servicos_lista %}
@@ -450,6 +457,18 @@ function toggleSidebar() {
 function toggleEditar() {
     const el = document.getElementById("formEditar");
     el.style.display = el.style.display === "none" ? "block" : "none";
+}
+</script>
+
+<script>
+function abrirServico() {
+    const form = document.getElementById("formServico");
+
+    if (form.classList.contains("hidden")) {
+        form.classList.remove("hidden");
+    } else {
+        form.classList.add("hidden");
+    }
 }
 </script>
 
