@@ -232,6 +232,7 @@ button:hover {
 ">
 
 <a href="/painel"><button>📊 Painel</button></a>
+<a href="/clientes"><button>👤 Clientes</button></a>
 <a href="/cadastrar_servico"><button>🧼 Serviços</button></a>
 <a href="/financeiro"><button>💰 Financeiro</button></a>
 <a href="/pneu"><button>🛞 Pneus</button></a>
@@ -287,18 +288,28 @@ button:hover {
 {% endif %}
 
 <!-- NOVO CLIENTE -->
-{% if buscou and not dados %}
-<div class="card">
-<h3>Novo Cliente</h3>
-<form action="/cadastrar" method="POST">
-<input name="placa" placeholder="Placa" required><br>
-<input name="nome" placeholder="Nome"><br>
-<input name="telefone" placeholder="Telefone"><br>
-<input name="modelo" placeholder="Modelo"><br>
-<input name="cor" placeholder="Cor"><br>
-<button>Cadastrar</button>
-</form>
+{% if buscou and dados is none %}
+
+<div style="display: flex; justify-content: center; margin-top: 20px;">
+    <div style="width: 350px;" class="card destaque">
+
+        <h3>Novo Cliente</h3>
+
+        <form action="/cadastrar" method="POST" style="display: flex; flex-direction: column; gap: 10px;">
+
+            <input name="placa" placeholder="Placa" required>
+            <input name="nome" placeholder="Nome">
+            <input name="telefone" placeholder="Telefone">
+            <input name="modelo" placeholder="Modelo">
+            <input name="cor" placeholder="Cor">
+
+            <button>Cadastrar</button>
+
+        </form>
+
+    </div>
 </div>
+
 {% endif %}
 
 <!-- ATENDIMENTO -->
@@ -386,6 +397,7 @@ function toggleSidebar() {
 </script>
 
 <script>
+const APP_VERSION = "{{version}}";
 let climaTexto = "🌤️ Carregando...";
 let sugestaoTexto = "";
 
@@ -405,6 +417,7 @@ async function atualizarClima() {
     }
 }
 
+
 // RELÓGIO
 function atualizarRelogio() {
     const agora = new Date();
@@ -413,9 +426,10 @@ function atualizarRelogio() {
     if (!el) return;
 
     el.innerHTML =
-        "📅 " + agora.toLocaleDateString('pt-BR') +
-        " ⏰ " + agora.toLocaleTimeString('pt-BR') +
-        " | " + climaTexto + " " + sugestaoTexto;
+    "📅 " + agora.toLocaleDateString('pt-BR') +
+    " ⏰ " + agora.toLocaleTimeString('pt-BR') +
+    " | " + climaTexto + " " + sugestaoTexto +
+    " | 🧠 " + APP_VERSION;
 }
 
 // LOOP

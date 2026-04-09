@@ -9,59 +9,108 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app = Flask(__name__)
 app.secret_key = "wagen_super_segura_123"
 
+APP_VERSION = "Versão: 0.0.3-alpha"
+
 def conectar():
-    return sqlite3.connect("database.db")
+    return sqlite3.connect("database_v2.db")
 
 def init_db():
     conn = conectar()
     c = conn.cursor()
 
-    c.execute("CREATE TABLE IF NOT EXISTS veiculos (placa TEXT PRIMARY KEY, nome TEXT, telefone TEXT, modelo TEXT, cor TEXT)")
-
+    # 🔥 CLIENTES
     c.execute("""
-    CREATE TABLE IF NOT EXISTS fotos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    servico_id INTEGER,
-    tipo TEXT,
-    caminho TEXT
+    CREATE TABLE IF NOT EXISTS clientes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        telefone TEXT
     )
     """)
 
+    # 🔥 VEÍCULOS
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS veiculos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        placa TEXT UNIQUE NOT NULL,
+        modelo TEXT,
+        cor TEXT,
+        cliente_id INTEGER,
+        FOREIGN KEY(cliente_id) REFERENCES clientes(id)
+    )
+    """)
+
+    # 🔥 TIPOS DE SERVIÇO
     c.execute("""
     CREATE TABLE IF NOT EXISTS tipos_servico (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nome TEXT,
-    valor REAL
-    )""")
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT,
+        valor REAL
+    )
+    """)
+
+    # 🔥 SERVIÇOS
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS servicos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        veiculo_id INTEGER,
+        tipo_id INTEGER,
+        valor REAL,
+        entrada TEXT,
+        entrega TEXT,
+        status TEXT,
+        prioridade INTEGER DEFAULT 0,
+        observacoes TEXT,
+        FOREIGN KEY(veiculo_id) REFERENCES veiculos(id),
+        FOREIGN KEY(tipo_id) REFERENCES tipos_servico(id)
+    )
+    """)
+
+    # 🔥 ADICIONAIS
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS adicionais (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT
+    )
+    """)
+
+    # 🔥 RELAÇÃO SERVIÇO ↔ ADICIONAIS
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS servico_adicionais (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        servico_id INTEGER,
+        adicional_id INTEGER,
+        FOREIGN KEY(servico_id) REFERENCES servicos(id),
+        FOREIGN KEY(adicional_id) REFERENCES adicionais(id)
+    )
+    """)
+
+    # 🔥 FOTOS (melhorado)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS fotos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        servico_id INTEGER,
+        tipo TEXT,
+        caminho TEXT,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(servico_id) REFERENCES servicos(id)
+    )
+    """)
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS produtos_pneu (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nome TEXT
-    )""")
-    
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS servicos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    placa TEXT,
-    tipo TEXT,
-    valor REAL,
-    entrada TEXT,
-    entrega TEXT,
-    origem TEXT,
-    guarita TEXT,
-    observacoes TEXT,
-    pneu TEXT,
-    cera TEXT,
-    hidro_lataria TEXT,
-    hidro_vidros TEXT,
-    status TEXT,
-    prioridade INTEGER DEFAULT 0
     )
     """)
 
+    # ⚡ ÍNDICES (performance)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_servico_status ON servicos(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_servico_entrada ON servicos(entrada)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_veiculo_placa ON veiculos(placa)")
+
     conn.commit()
     conn.close()
+
 
 init_db()
 
@@ -255,16 +304,27 @@ def index():
     produtos_pneu = c.fetchall()
 
     if request.method == "POST":
-        buscou = True
         placa = request.form.get("placa", "").upper()
+        return redirect(f"/?placa={placa}")
 
         # CLIENTE
         c.execute("SELECT * FROM veiculos WHERE placa=?", (placa,))
         dados = c.fetchone()
 
-        # HISTÓRICO
-        c.execute("SELECT * FROM servicos WHERE placa=? ORDER BY id DESC", (placa,))
+        if not dados:
+            dados = None
+
+    # 🔥 buscar o id do veículo pela placa
+    c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
+    veiculo = c.fetchone()
+
+    if veiculo:
+        veiculo_id = veiculo[0]
+
+        c.execute("SELECT * FROM servicos WHERE veiculo_id=? ORDER BY id DESC", (veiculo_id,))
         historico_db = c.fetchall()
+    else:
+        historico_db = []
 
         # HISTÓRICO PREMIUM
         from datetime import datetime
@@ -296,6 +356,7 @@ def index():
         historico=historico,
         buscou=buscou,
         placa=placa,
+        version=APP_VERSION,
         servicos_lista=servicos_lista,
         produtos_pneu=produtos_pneu
     )
@@ -334,18 +395,44 @@ def cadastrar():
 def servico():
     if not session.get("logado"):
         return redirect("/login")
+
     data = request.form
 
     from datetime import datetime
-    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+    agora = datetime.now().isoformat()
 
     conn = conectar()
     c = conn.cursor()
 
-# 🔥 PRIORIDADE AUTOMÁTICA (COLOCA AQUI)
+    # 🔥 BUSCAR VEÍCULO PELA PLACA
+    placa = data["placa"].upper()
+
+    c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
+    veiculo = c.fetchone()
+
+    if not veiculo:
+        conn.close()
+        return "Erro: veículo não encontrado"
+
+    veiculo_id = veiculo["id"]
+
+    # 🔥 BUSCAR TIPO DE SERVIÇO
+    tipo_nome = data["tipo"]
+
+    c.execute("SELECT id, valor FROM tipos_servico WHERE nome=?", (tipo_nome,))
+    tipo = c.fetchone()
+
+    if not tipo:
+        conn.close()
+        return "Erro: tipo não encontrado"
+
+    tipo_id = tipo["id"]
+    valor = tipo["valor"]
+
+    # 🔥 PRIORIDADE
     c.execute("""
-    SELECT MAX(prioridade) FROM servicos 
-    WHERE status='EM ANDAMENTO'
+        SELECT MAX(prioridade) FROM servicos 
+        WHERE status='EM ANDAMENTO'
     """)
 
     resultado = c.fetchone()[0]
@@ -355,55 +442,51 @@ def servico():
     else:
         nova_prioridade = resultado + 1
 
-    # 🔥 INSERE O SERVIÇO PRIMEIRO
+    # 🔥 INSERIR SERVIÇO (NOVO MODELO)
     c.execute("""
-INSERT INTO servicos 
-(placa, tipo, valor, entrada, entrega, origem, guarita, observacoes, pneu, cera, hidro_lataria, hidro_vidros, status, prioridade)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-""", (
-    data["placa"].upper(),
-    data["tipo"],
-    data["valor"],
-    agora,
-    "",
-    data["origem"],
-    data["guarita"],
-    data["observacoes"],
-    data["pneu"],
-    data["cera"],
-    data["hidro_lataria"],
-    data["hidro_vidros"],
-    "EM ANDAMENTO",
-    nova_prioridade
-))
+        INSERT INTO servicos 
+        (veiculo_id, tipo_id, valor, entrada, status, prioridade, observacoes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        veiculo_id,
+        tipo_id,
+        valor,
+        agora,
+        "EM ANDAMENTO",
+        nova_prioridade,
+        data.get("observacoes", "")
+    ))
 
-    # 🔥 PEGA O ID DO SERVIÇO
     servico_id = c.lastrowid
 
-    # 🔥 PEGA AS FOTOS
+    # 📸 FOTOS
     fotos_entrada = request.files.getlist("foto_entrada")
     fotos_detalhe = request.files.getlist("foto_detalhe")
 
-    # 📸 ENTRADA
+    import time
+    from werkzeug.utils import secure_filename
+
     for foto in fotos_entrada:
         if foto.filename != "":
-            nome = secure_filename(foto.filename)
+            nome = str(int(time.time())) + "_" + secure_filename(foto.filename)
             caminho = os.path.join(UPLOAD_FOLDER, nome)
             foto.save(caminho)
 
-            c.execute("INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
-                      (servico_id, "entrada", caminho))
+            c.execute(
+                "INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
+                (servico_id, "entrada", caminho)
+            )
 
-    # 📸 DETALHES
     for foto in fotos_detalhe:
         if foto.filename != "":
-            import time
-            nome = secure_filename(foto.filename)
+            nome = str(int(time.time())) + "_" + secure_filename(foto.filename)
             caminho = os.path.join(UPLOAD_FOLDER, nome)
             foto.save(caminho)
 
-            c.execute("INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
-                      (servico_id, "detalhe", caminho))
+            c.execute(
+                "INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
+                (servico_id, "detalhe", caminho)
+            )
 
     conn.commit()
     conn.close()
@@ -578,6 +661,57 @@ def painel():
     conn.close()
 
     return render_template("painel.html", servicos=servicos)
+
+@app.route("/clientes", methods=["GET", "POST"])
+def clientes():
+    if not session.get("logado"):
+        return redirect("/login")
+
+    conn = conectar()
+    c = conn.cursor()
+
+    busca = request.form.get("busca", "")
+
+    if busca:
+        c.execute("""
+            SELECT * FROM veiculos 
+            WHERE placa LIKE ? OR modelo LIKE ?
+        """, (f"%{busca}%", f"%{busca}%"))
+    else:
+        c.execute("SELECT * FROM veiculos ORDER BY id DESC")
+
+    clientes = c.fetchall()
+
+    conn.close()
+
+    return render_template("clientes.html", clientes=clientes)
+
+@app.route("/editar_cliente", methods=["POST"])
+def editar_cliente():
+    if not session.get("logado"):
+        return redirect("/login")
+
+    data = request.form
+
+    conn = conectar()
+    c = conn.cursor()
+
+    c.execute("""
+        UPDATE veiculos
+        SET placa=?, modelo=?, cor=?, telefone=?
+        WHERE id=?
+    """, (
+        data["placa"].upper(),
+        data["modelo"],
+        data["cor"],
+        data["telefone"],
+        data["id"]
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect("/clientes")
 
 if __name__ == "__main__":
     import os

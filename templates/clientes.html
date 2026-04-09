@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Clientes</title>
+
+<a href="/">
+    <button style="margin-bottom:15px;">⬅ Voltar</button>
+</a>
+
+<style>
+body { background:#0b0b0b; color:white; font-family:Arial; text-align:center; }
+
+.card {
+    background:#111827;
+    border:1px solid #facc15;
+    border-radius:10px;
+    padding:15px;
+    margin:10px auto;
+    width:90%;
+    max-width:500px;
+}
+
+input {
+    padding:10px;
+    margin:5px;
+    border-radius:6px;
+    border:none;
+    background:#1f2937;
+    color:white;
+    width:90%;
+}
+
+button {
+    padding:10px;
+    margin:5px;
+    border-radius:6px;
+    border:none;
+    background:#facc15;
+    color:black;
+    font-weight:bold;
+    cursor:pointer;
+}
+</style>
+</head>
+
+<body>
+
+<h1>👤 Clientes</h1>
+
+<form method="POST">
+<input name="busca" placeholder="Buscar placa ou modelo">
+<button>Buscar</button>
+</form>
+
+{% for c in clientes %}
+<div class="card">
+
+<form method="POST" action="/editar_cliente">
+
+<input type="hidden" name="id" value="{{c[0]}}">
+
+<input name="placa" value="{{c[1]}}">
+<input name="modelo" value="{{c[2]}}">
+<input name="cor" value="{{c[3]}}">
+<input name="telefone" value="{{c[4]}}">
+
+<button>Salvar</button>
+
+</form>
+
+</div>
+{% endfor %}
+
+</body>
+</html>
