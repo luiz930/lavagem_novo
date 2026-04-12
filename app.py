@@ -2,14 +2,71 @@ from flask import Flask, render_template, request, redirect, session, request, j
 import sqlite3
 from zoneinfo import ZoneInfo
 import os
+import bcrypt  # 👈 se já adicionou
 from werkzeug.utils import secure_filename
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+def agora():
+    return datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+def calcular_prioridade(entrada_iso, valor, tipo_nome):
+    prioridade = 0
+
+    try:
+        entrada = datetime.fromisoformat(entrada_iso)
+        tempo_espera = (agora() - entrada).total_seconds() / 3600  # horas
+
+        # ⏱️ tempo de espera
+        if tempo_espera > 2:
+            prioridade += 3
+        elif tempo_espera > 1:
+            prioridade += 2
+        elif tempo_espera > 0.5:
+            prioridade += 1
+
+    except:
+        pass
+
+    # 💰 valor do serviço
+    try:
+        if float(valor) >= 150:
+            prioridade += 3
+        elif float(valor) >= 80:
+            prioridade += 2
+        elif float(valor) >= 40:
+            prioridade += 1
+    except:
+        pass
+
+    # 🧽 tipo de serviço
+    if tipo_nome:
+        tipo = tipo_nome.lower()
+
+        if "completa" in tipo:
+            prioridade += 2
+        elif "simples" in tipo:
+            prioridade += 1
+
+    return prioridade
+
+# 📁 CONFIG UPLOAD
+UPLOAD_FOLDER = "static/uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# 🔐 SEGURANÇA UPLOAD
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg"}
+
+def arquivo_permitido(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
 app = Flask(__name__)
 app.secret_key = "wagen_super_segura_123"
 
-APP_VERSION = "Versão: 0.0.3-alpha"
+APP_VERSION = "Versão: 0.1.0-alpha"
 
 def conectar():
     conn = sqlite3.connect("database_v2.db")
@@ -19,6 +76,14 @@ def conectar():
 def init_db():
     conn = conectar()
     c = conn.cursor()
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS usuarios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario TEXT UNIQUE,
+    senha TEXT
+    )
+    """)
 
     # 🔥 CLIENTES
     c.execute("""
@@ -164,6 +229,68 @@ def api_clima():
         print("ERRO CLIMA:", e)
         return {"erro": str(e)}
 
+@app.route("/api/hud")
+def api_hud():
+    if not session.get("logado"):
+        return {"erro": "nao autorizado"}
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    conn = conectar()
+    c = conn.cursor()
+
+    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y")
+
+    # 💰 faturamento
+    c.execute("""
+        SELECT SUM(valor) FROM servicos 
+        WHERE status='FINALIZADO' AND entrega LIKE ?
+    """, (hoje + "%",))
+
+    total = c.fetchone()[0] or 0
+
+    # ⚙️ em andamento
+    c.execute("SELECT COUNT(*) FROM servicos WHERE status='EM ANDAMENTO'")
+    andamento = c.fetchone()[0]
+
+    # 📦 finalizados hoje
+    c.execute("""
+        SELECT COUNT(*) FROM servicos 
+        WHERE status='FINALIZADO' AND entrega LIKE ?
+    """, (hoje + "%",))
+
+    quantidade = c.fetchone()[0]
+
+    # 💵 ticket médio
+    ticket = total / quantidade if quantidade > 0 else 0
+
+    # 🚨 atrasados (>2h)
+    c.execute("SELECT entrada FROM servicos WHERE status='EM ANDAMENTO'")
+    servicos = c.fetchall()
+
+    atrasados = 0
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+    for s in servicos:
+        try:
+            entrada = datetime.fromisoformat(s["entrada"])
+            diff = (agora - entrada).total_seconds()
+
+            if diff > 7200:
+                atrasados += 1
+        except:
+            pass
+
+    conn.close()
+
+    return {
+        "total": round(total, 2),
+        "andamento": andamento,
+        "atrasados": atrasados,
+        "ticket": round(ticket, 2)
+    }
+
 @app.route("/editar_servico_inline/<int:id>", methods=["POST"])
 def editar_servico_inline(id):
     data = request.get_json()
@@ -214,13 +341,39 @@ def editar_servico(id):
 
     return render_template("editar_servico.html", servico=servico)
 
+# 🔐 CRIAR ADMIN PADRÃO
+def criar_admin():
+    conn = conectar()
+    c = conn.cursor()
+
+    senha_hash = bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
+
+    try:
+        c.execute("INSERT INTO usuarios (usuario, senha) VALUES (?, ?)", ("admin", senha_hash))
+        conn.commit()
+        print("✅ Admin criado: admin / admin123")
+    except:
+        pass
+
+    conn.close()
+
+criar_admin()
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         usuario = request.form.get("usuario")
         senha = request.form.get("senha")
 
-        if usuario == "wagenadmin" and senha == "wagen@2026":
+        conn = conectar()
+        c = conn.cursor()
+
+        c.execute("SELECT * FROM usuarios WHERE usuario=?", (usuario,))
+        user = c.fetchone()
+
+        conn.close()
+
+        if user and bcrypt.checkpw(senha.encode(), user["senha"].encode()):
             session["logado"] = True
             return redirect("/")
 
@@ -244,7 +397,7 @@ def financeiro():
     c = conn.cursor()
 
     from datetime import datetime
-    hoje = datetime.now().strftime("%d/%m/%Y")
+    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y")
 
     # 💰 TOTAL HOJE
     c.execute("""
@@ -468,31 +621,66 @@ def importar_clientes():
 def cadastrar():
     if not session.get("logado"):
         return redirect("/login")
+
     data = request.form
+
+    placa = data["placa"].upper()
+    nome = data.get("nome", "")
+    telefone = data.get("telefone", "")
+    modelo = data.get("modelo", "")
+    cor = data.get("cor", "")
 
     conn = conectar()
     c = conn.cursor()
 
-    c.execute("""
-    INSERT INTO veiculos (placa, nome, telefone, modelo, cor)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(placa) DO UPDATE SET
-    nome=excluded.nome,
-    telefone=excluded.telefone,
-    modelo=excluded.modelo,
-    cor=excluded.cor
-    """, (
-        data["placa"].upper(),
-        data["nome"],
-        data["telefone"],
-        data["modelo"],
-        data["cor"]
-    ))
+    try:
+        # 🔥 1. CLIENTE
+        cliente_id = None
 
-    conn.commit()
-    conn.close()
+        if telefone:
+            c.execute("SELECT id FROM clientes WHERE telefone=?", (telefone,))
+            cliente = c.fetchone()
 
-    return redirect("/")
+            if cliente:
+                cliente_id = cliente["id"]
+
+                c.execute("""
+                    UPDATE clientes 
+                    SET nome=? 
+                    WHERE id=?
+                """, (nome, cliente_id))
+            else:
+                c.execute("""
+                    INSERT INTO clientes (nome, telefone)
+                    VALUES (?, ?)
+                """, (nome, telefone))
+
+                cliente_id = c.lastrowid
+
+        # 🔥 2. VEÍCULO
+        c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
+        veiculo = c.fetchone()
+
+        if veiculo:
+            c.execute("""
+                UPDATE veiculos 
+                SET modelo=?, cor=?, cliente_id=? 
+                WHERE placa=?
+            """, (modelo, cor, cliente_id, placa))
+        else:
+            c.execute("""
+                INSERT INTO veiculos (placa, modelo, cor, cliente_id)
+                VALUES (?, ?, ?, ?)
+            """, (placa, modelo, cor, cliente_id))
+
+        conn.commit()
+
+    except Exception as e:
+        print("ERRO CADASTRO:", e)
+    finally:
+        conn.close()
+
+    return redirect(f"/?placa={placa}")
 
 @app.route("/servico", methods=["POST"])
 def servico():
@@ -502,7 +690,7 @@ def servico():
     data = request.form
 
     from datetime import datetime
-    agora = datetime.now().isoformat()
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo")).isoformat()
 
     conn = conectar()
     c = conn.cursor()
@@ -570,7 +758,7 @@ def servico():
     from werkzeug.utils import secure_filename
 
     for foto in fotos_entrada:
-        if foto.filename != "":
+        if foto and arquivo_permitido(foto.filename):
             nome = str(int(time.time())) + "_" + secure_filename(foto.filename)
             caminho = os.path.join(UPLOAD_FOLDER, nome)
             foto.save(caminho)
@@ -581,7 +769,7 @@ def servico():
             )
 
     for foto in fotos_detalhe:
-        if foto.filename != "":
+        if foto and arquivo_permitido(foto.filename):
             nome = str(int(time.time())) + "_" + secure_filename(foto.filename)
             caminho = os.path.join(UPLOAD_FOLDER, nome)
             foto.save(caminho)
@@ -601,7 +789,7 @@ def finalizar(id):
     if not session.get("logado"):
         return redirect("/login")
     from datetime import datetime
-    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
 
     conn = conectar()
     c = conn.cursor()
@@ -755,13 +943,55 @@ def cadastrar_pneu():
 def painel():
     if not session.get("logado"):
         return redirect("/login")
+
     conn = conectar()
     c = conn.cursor()
 
-    c.execute("SELECT * FROM servicos WHERE status='EM ANDAMENTO' ORDER BY prioridade ASC, id DESC")
-    servicos = c.fetchall()
+    c.execute("""
+        SELECT servicos.*, tipos_servico.nome as tipo_nome 
+        FROM servicos
+        LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
+        WHERE status='EM ANDAMENTO'
+        ORDER BY id DESC
+    """)
 
+    servicos_db = c.fetchall()
     conn.close()
+
+    servicos = []
+
+    for s in servicos_db:
+        s_dict = dict(s)
+
+        # 🔥 PRIORIDADE IA
+        prioridade_ia = calcular_prioridade_inteligente(s_dict)
+        s_dict["prioridade_ia"] = prioridade_ia
+
+        # 🔥 TEMPO DE ESPERA
+        try:
+            entrada = datetime.fromisoformat(s_dict["entrada"])
+            agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+            diff = agora - entrada
+            minutos = int(diff.total_seconds() / 60)
+
+            horas = minutos // 60
+            mins = minutos % 60
+
+            if horas > 0:
+                tempo_str = f"{horas}h {mins}min"
+            else:
+                tempo_str = f"{mins}min"
+
+        except:
+            tempo_str = "N/A"
+
+        s_dict["tempo_espera"] = tempo_str
+
+        servicos.append(s_dict)
+
+    # 🔥 ORDENA PELA IA
+    servicos.sort(key=lambda x: x["prioridade_ia"], reverse=True)
 
     return render_template("painel.html", servicos=servicos)
 
@@ -817,8 +1047,23 @@ def confirmar_importacao():
         cor = row.get(cor_col, "")
 
         # cliente
-        c.execute("INSERT INTO clientes (nome, telefone) VALUES (?, ?)", (nome, telefone))
-        cliente_id = c.lastrowid
+        c.execute("SELECT id FROM clientes WHERE telefone=?", (telefone,))
+        cliente = c.fetchone()
+
+        if cliente:
+            cliente_id = cliente["id"]
+
+            c.execute("""
+                UPDATE clientes 
+                SET nome=? 
+                WHERE id=?
+            """, (nome, cliente_id))
+        else:
+            c.execute("""
+                INSERT INTO clientes (nome, telefone)
+                VALUES (?, ?)
+            """, (nome, telefone))
+            cliente_id = c.lastrowid
 
         # 🔥 verifica se veiculo existe
         c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
