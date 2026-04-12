@@ -20,150 +20,115 @@ if ("serviceWorker" in navigator) {
 
 <style>
 
+/* ================= RESET ================= */
+* {
+    box-sizing: border-box;
+}
+
+/* ================= BASE ================= */
+body {
+    font-family: Arial;
+    background: #0b0b0b;
+    color: white;
+    text-align: center;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* ================= BOTÕES ================= */
+button {
+    padding: 10px;
+    margin: 5px;
+    border-radius: 6px;
+    border: none;
+    background: #facc15;
+    color: black;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+button:hover {
+    background: #eab308;
+}
+
+/* ================= INPUTS ================= */
+input, select {
+    padding: 10px;
+    margin: 5px;
+    border-radius: 6px;
+    border: none;
+    background: #1f2937;
+    color: white;
+    font-size: 16px;
+}
+
+/* ================= MENU BOTÃO ================= */
 .menu-btn {
     position: fixed;
     top: 15px;
     left: 15px;
-    z-index: 1100;
+    z-index: 3000; /* 🔥 maior que sidebar */
 
-    width: 40px !important;
-    height: 40px !important;
-    padding: 0 !important;
-
+    width: 40px;
+    height: 40px;
     font-size: 20px;
 
     background: #facc15;
-    border: none;
     border-radius: 6px;
-    cursor: pointer;
+    box-shadow: 0 0 10px rgba(250, 204, 21, 0.6);
 }
 
-/* ANIMAÇÃO */
-.sidebar {
-    transition: all 0.3s ease;
-}
-
-.main {
-    transition: all 0.3s ease;
-}
-
-/* SIDEBAR FECHADA */
-.sidebar.hide {
-    left: -230px;
-}
-
-/* MAIN EXPANDIDA */
-.main.full {
-    margin-left: 0;
-}
-
-/* SIDEBAR */
+/* ================= SIDEBAR ================= */
 .sidebar {
     position: fixed;
-    left: 0;
     top: 0;
+    left: -100%; /* 🔥 SEMPRE FECHADA */
+
     width: 220px;
     height: 100%;
+
     background: #111827;
     border-right: 2px solid #facc15;
     padding: 20px 10px;
+
     display: flex;
     flex-direction: column;
     gap: 10px;
-    z-index: 1000;
+
+    z-index: 2000;
+
+    transition: left 0.3s ease;
+}
+
+.sidebar.show {
+    left: 0;
 }
 
 .sidebar h2 {
     color: #facc15;
     font-size: 18px;
-    margin-bottom: 10px;
 }
 
-.sidebar a button {
-    width: 100%;
-}
-
-/* CONTEÚDO AO LADO */
+/* ================= MAIN ================= */
 .main {
     margin-left: 230px;
     padding: 20px;
+    transition: all 0.3s ease;
 }
 
-/* MOBILE */
-@media (max-width: 600px) {
-    .sidebar {
-        width: 100%;
-        height: auto;
-        position: relative;
-        flex-direction: row;
-        flex-wrap: wrap;
-        justify-content: center;
-    }
-
-    .main {
-        margin-left: 0;
-    }
-}
-
-#relogio {
-    position: fixed;
-    bottom: 5px;
-    right: 5px;
-    
+/* ================= CARDS ================= */
+.card, .card-cliente {
     background: #111827;
     border: 1px solid #facc15;
-    border-radius: 8px;
+    border-radius: 12px;
+    padding: 20px;
 
-    padding: 12px 20px;
-    font-size: 12px;
-
-    box-shadow: 0 0 8px rgba(250, 204, 21, 0.3);
-
-    white-space: nowrap;
-
-}
-
-
-/* RESPONSIVO SIMPLES */
-* {
-    box-sizing: border-box;
-}
-
-input, select, button {
-    width: 100%;
-    max-width: 400px;
-    font-size: 16px;
-}
-
-.center-box {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 60vh; /* altura da tela */
-}
-
-.destaque {
-    background: linear-gradient(145deg, #111827, #1f2937);
-    border: 2px solid #facc15;
-    box-shadow: 0 0 25px rgba(250, 204, 21, 0.3);
-    text-align: center;
-}
-
-.card {
     width: 95%;
     max-width: 400px;
+
+    margin: 10px auto;
 }
 
-.menu-topo {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 10px;
-    margin-top: 15px;
-    flex-wrap: wrap; /* 🔥 ESSENCIAL */
-}
-
-/* FLEX ADAPTÁVEL */
+/* ================= FLEX ================= */
 .flex {
     display: flex;
     flex-wrap: wrap;
@@ -171,71 +136,82 @@ input, select, button {
     gap: 10px;
 }
 
-/* MOBILE */
-@media (max-width: 600px) {
-    h1 {
-        font-size: 20px;
-    }
+/* ================= HUD DESKTOP ================= */
+#relogio {
+    position: fixed;
+    bottom: 10px;
+    right: 10px;
 
-    button {
-        padding: 12px;
-    }
-}
-
-body { font-family: Arial; background:#0b0b0b; color:white; text-align:center; }
-
-input, select {
-    padding:10px;
-    margin:5px;
-    border-radius:6px;
-    border:none;
-    background:#1f2937;
-    color:white;
-}
-
-button {
-    padding:10px;
-    margin:5px;
-    border-radius:6px;
-    border:none;
-    background:#facc15;
-    color:black;
-    font-weight:bold;
-    cursor:pointer;
-}
-
-/* HOVER PROFISSIONAL */
-button:hover {
-    background:#eab308;
-}
-
-.hidden { display:none; }
-
-.container-cliente {
-    display: flex;
-    justify-content: center;
-    margin-top: 30px;
-}
-
-.card-cliente {
     background: #111827;
-    border: 1px solid #facc15;
+    border: 2px solid #facc15;
     border-radius: 12px;
-    padding: 20px;
-    width: 90%;
-    max-width: 400px;
+
+    padding: 16px;
+
+    font-size: 15px;
+    line-height: 1.8;
+
+    box-shadow: 0 0 20px rgba(250, 204, 21, 0.4);
+
+    width: 380px;
+    max-width: 95%;
+
     text-align: left;
-    box-shadow: 0 0 15px rgba(250, 204, 21, 0.2);
+    z-index: 9999;
 }
 
-.card-cliente h2 {
-    text-align: center;
-    margin-bottom: 15px;
-}
+/* ================= MOBILE ================= */
+/* ================= SIDEBAR MOBILE PROFISSIONAL ================= */
+@media (max-width: 600px) {
 
-.card-cliente p {
-    margin: 8px 0;
-    font-size: 16px;
+    .sidebar {
+        position: fixed;
+        top: 0;
+        left: -100%; /* 🔥 ESCONDE COMPLETAMENTE */
+
+        width: 70%;
+        height: 100%;
+
+        background: #111827;
+        border-right: 2px solid #facc15;
+
+        flex-direction: column;
+        padding: 20px;
+        gap: 10px;
+
+        z-index: 2000;
+
+        transition: left 0.3s ease;
+    }
+
+    /* QUANDO ABRIR */
+    .sidebar.show {
+        left: 0; /* 🔥 aparece corretamente */
+    }
+
+    /* ESCURECE FUNDO */
+    .overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+
+        width: 100%;
+        height: 100%;
+
+        background: rgba(0,0,0,0.6);
+        z-index: 1500;
+
+        display: none;
+    }
+
+    .overlay.show {
+        display: block;
+    }
+
+    /* MAIN */
+    .main {
+        margin-left: 0;
+    }
 }
 
 </style>
@@ -243,8 +219,10 @@ button:hover {
 
 <body>
 
+<div id="overlay" class="overlay" onclick="toggleSidebar()"></div>
+
 <!-- SIDEBAR -->
-<div class="sidebar hide">
+<div class="sidebar">
 
 <img src="/static/logo.jpg" style="
     width:80px;
@@ -444,13 +422,22 @@ button:hover {
 </div>
 
 <script>
-function toggleSidebar() {
+window.toggleSidebar = function () {
     const sidebar = document.querySelector(".sidebar");
-    const main = document.querySelector(".main");
+    const overlay = document.getElementById("overlay");
 
-    sidebar.classList.toggle("hide");
-    main.classList.toggle("full");
-}
+    const aberto = sidebar.classList.contains("show");
+
+    if (aberto) {
+        // 🔻 FECHAR
+        sidebar.classList.remove("show");
+        if (overlay) overlay.classList.remove("show");
+    } else {
+        // 🔺 ABRIR
+        sidebar.classList.add("show");
+        if (overlay) overlay.classList.add("show");
+    }
+};
 </script>
 
 <script>
@@ -476,6 +463,29 @@ function abrirServico() {
 const APP_VERSION = "{{version}}";
 let climaTexto = "🌤️ Carregando...";
 let sugestaoTexto = "";
+
+let hudData = {
+    total: 0,
+    andamento: 0,
+    atrasados: 0,
+    ticket: 0
+};
+
+let alertaAtivo = false;
+let audioAlerta = new Audio("https://actions.google.com/sounds/v1/alarms/beep_short.ogg");
+
+async function atualizarHUD() {
+    try {
+        const res = await fetch("/api/hud");
+        const data = await res.json();
+
+        if (!data.erro) {
+            hudData = data;
+        }
+    } catch (e) {
+        console.log("Erro HUD");
+    }
+}
 
 // CLIMA
 async function atualizarClima() {
@@ -504,16 +514,62 @@ function atualizarRelogio() {
     el.innerHTML =
     "📅 " + agora.toLocaleDateString('pt-BR') +
     " ⏰ " + agora.toLocaleTimeString('pt-BR') +
-    " | " + climaTexto + " " + sugestaoTexto +
-    " | 🧠 " + APP_VERSION;
-}
+
+    "<br>" +
+
+    climaTexto + " " + sugestaoTexto +
+
+    "<br>" +
+
+    "💰 Hoje: R$ " + hudData.total +
+
+    "<br>" +
+
+    "⚙️ Em andamento: " + hudData.andamento +
+
+    "<br>" +
+
+    "🚨 Atrasados: " + hudData.atrasados +
+
+    "<br>" +
+
+    "💵 Ticket: R$ " + hudData.ticket +
+
+    "<br>" +
+
+    "🧠 " + APP_VERSION;
+
+    // 🔥 ALERTA
+    if (hudData.atrasados > 0) {
+
+        el.style.border = "2px solid red";
+        el.style.boxShadow = "0 0 20px red";
+
+        el.style.opacity = Date.now() % 1000 < 500 ? "0.6" : "1";
+
+        if (!alertaAtivo) {
+            audioAlerta.play().catch(() => {});
+            alertaAtivo = true;
+        }
+
+    } else {
+
+        el.style.border = "1px solid #facc15";
+        el.style.boxShadow = "none";
+        el.style.opacity = "1";
+
+        alertaAtivo = false;
+    }
+} // 🔥 FECHAMENTO CORRETO DA FUNÇÃO
 
 // LOOP
 setInterval(atualizarRelogio, 1000);
 setInterval(atualizarClima, 60000);
+setInterval(atualizarHUD, 5000);
 
 // INICIAR
 atualizarClima();
+atualizarHUD();
 atualizarRelogio();
 </script>
 </body>

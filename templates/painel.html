@@ -220,8 +220,15 @@ button:hover {
 <!-- SERVIÇOS -->
 {% for s in servicos %}
 <div class="card {% if loop.index == 1 %}topo{% endif %}">
-<p><b>Prioridade:</b> {{s[14]}}</p>
-
+<p><b>Prioridade IA:</b> 
+{% if s.prioridade_ia >= 4 %}
+    <span style="color:#ef4444;">🔥 ALTA</span>
+{% elif s.prioridade_ia >= 2 %}
+    <span style="color:#facc15;">⚠️ MÉDIA</span>
+{% else %}
+    <span style="color:#22c55e;">✅ BAIXA</span>
+{% endif %}
+</p>
 <div class="acoes">
     <a href="/prioridade/{{s[0]}}/up">
         <button class="btn small">⬆️</button>
@@ -246,6 +253,11 @@ button:hover {
 </p>
 
 <p>Entrada: {{s[4]}}</p>
+<p><b>Tempo de espera:</b> 
+<span class="tempo" data-entrada="{{s[4]}}">
+    ⏱ carregando...
+</span>
+</p>
 <p>Entrega: {{s[5]}}</p>
 
 {% if s[13] == "EM ANDAMENTO" %}
@@ -273,40 +285,55 @@ button:hover {
 
 
 <script>
-function verificarAtraso() {
-    const cards = document.querySelectorAll(".card");
+function atualizarTempo() {
+    const elementos = document.querySelectorAll(".tempo");
 
-    cards.forEach(card => {
-        const entradaText = card.innerText.match(/Entrada: (.+)/);
+    elementos.forEach(el => {
+        const entradaStr = el.getAttribute("data-entrada");
 
-        if (!entradaText) return;
+        if (!entradaStr) return;
 
         try {
-            const partes = entradaText[1].split(" ");
-            const data = partes[0].split("/");
-            const hora = partes[1].split(":");
-
-            const entrada = new Date(
-                data[2],
-                data[1] - 1,
-                data[0],
-                hora[0],
-                hora[1]
-            );
-
+            const entrada = new Date(entradaStr);
             const agora = new Date();
-            const diff = (agora - entrada) / 1000;
 
-            if (diff > 3600) {
-                card.classList.add("atrasado");
+            const diffMs = agora - entrada;
+            const minutos = Math.floor(diffMs / 60000);
+
+            const horas = Math.floor(minutos / 60);
+            const mins = minutos % 60;
+
+            let texto = "";
+
+            if (horas > 0) {
+                texto = `${horas}h ${mins}min`;
+            } else {
+                texto = `${mins}min`;
             }
 
-        } catch (e) {}
+            // 🔥 CORES DINÂMICAS
+            if (horas >= 2) {
+                el.innerHTML = "🔥 " + texto;
+                el.style.color = "#ef4444";
+            } else if (horas >= 1) {
+                el.innerHTML = "⚠️ " + texto;
+                el.style.color = "#facc15";
+            } else {
+                el.innerHTML = "⏱ " + texto;
+                el.style.color = "#22c55e";
+            }
+
+        } catch (e) {
+            el.innerHTML = "N/A";
+        }
     });
 }
 
-setInterval(verificarAtraso, 5000);
-verificarAtraso();
+// atualiza a cada 5 segundos
+setInterval(atualizarTempo, 5000);
+
+// roda ao abrir
+atualizarTempo();
 </script>
 
 </body>
