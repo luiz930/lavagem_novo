@@ -110,9 +110,13 @@ input, select {
 
 /* ================= MAIN ================= */
 .main {
-    margin-left: 230px;
+    margin-left: 0;
     padding: 20px;
     transition: all 0.3s ease;
+}
+
+.main.shift {
+    margin-left: 220px;
 }
 
 /* ================= CARDS ================= */
@@ -425,19 +429,21 @@ input, select {
 window.toggleSidebar = function () {
     const sidebar = document.querySelector(".sidebar");
     const overlay = document.getElementById("overlay");
+    const main = document.querySelector(".main");
 
     const aberto = sidebar.classList.contains("show");
 
     if (aberto) {
-        // 🔻 FECHAR
         sidebar.classList.remove("show");
-        if (overlay) overlay.classList.remove("show");
+        overlay.classList.remove("show");
+        main.classList.remove("shift");
     } else {
-        // 🔺 ABRIR
         sidebar.classList.add("show");
-        if (overlay) overlay.classList.add("show");
+        overlay.classList.add("show");
+        main.classList.add("shift");
     }
 };
+
 </script>
 
 <script>
