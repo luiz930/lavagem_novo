@@ -2,13 +2,15 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>Editar Serviço</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Editar Servico</title>
 
 <link rel="manifest" href="/static/manifest.json">
 <meta name="theme-color" content="#facc15">
 
-<link rel="icon" href="/static/favicon.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="icon" href="/static/favicon.jpg">
+<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="stylesheet" href="/static/responsive.css">
 
 <script>
 if ("serviceWorker" in navigator) {
@@ -18,36 +20,34 @@ if ("serviceWorker" in navigator) {
 </script>
 
 <style>
-body { background:#0b0b0b; color:white; text-align:center; font-family:Arial; }
-
-input, button {
-    padding:10px;
-    margin:5px;
-    border-radius:6px;
-    border:none;
-}
-
-button {
-    background:#facc15;
-    color:black;
-    font-weight:bold;
-}
 </style>
 </head>
 
-<body>
+<body class="responsive-page">
 
-<h1>✏️ Editar Serviço</h1>
+<div class="page-shell page-shell--narrow">
+    <div class="page-header">
+        <div class="brand-block">
+            <img src="/static/logo.jpg" class="brand-avatar">
+            <div>
+                <p class="brand-kicker">Wagen Estetica</p>
+            <h1 class="page-title">Editar Servico</h1>
+            <p class="page-subtitle">Ajuste nome e valor com conforto em qualquer tamanho de tela.</p>
+            </div>
+        </div>
+        <a href="/cadastro_servico" class="button-link">
+            <button type="button">Voltar</button>
+        </a>
+    </div>
 
-<form method="POST">
-<input name="nome" value="{{servico[1]}}" required><br>
-<input name="valor" value="{{servico[2]}}" required><br>
-<button>Salvar Alterações</button>
-</form>
-
-<a href="/cadastro_servico">
-<button>🔙 Voltar</button>
-</a>
+    <div class="page-card">
+        <form method="POST" class="stack-form">
+            <input name="nome" value="{{servico[1]}}" required>
+            <input name="valor" value="{{servico[2]}}" required>
+            <button>Salvar Alteracoes</button>
+        </form>
+    </div>
+</div>
 
 </body>
 </html>

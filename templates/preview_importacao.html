@@ -1,61 +1,142 @@
-<h2>📊 Pré-visualização</h2>
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pre-visualizacao da Importacao</title>
 
-<form method="POST" action="/confirmar_importacao">
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#facc15">
 
-<label>Placa:</label>
-<select name="placa">
-    {% for col in colunas %}
-    <option value="{{col}}">{{col}}</option>
-    {% endfor %}
-</select>
+<link rel="icon" href="/static/favicon.jpg">
+<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="stylesheet" href="/static/responsive.css">
 
-<label>Nome:</label>
-<select name="nome">
-    {% for col in colunas %}
-    <option value="{{col}}">{{col}}</option>
-    {% endfor %}
-</select>
+<script>
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/sw.js")
+    .then(() => console.log("SW registrado"));
+}
+</script>
 
-<label>Telefone:</label>
-<select name="telefone">
-    {% for col in colunas %}
-    <option value="{{col}}">{{col}}</option>
-    {% endfor %}
-</select>
+<style>
+label {
+    display: block;
+    margin-bottom: 6px;
+    text-align: left;
+    color: #facc15;
+    font-weight: bold;
+}
 
-<label>Modelo:</label>
-<select name="modelo">
-    {% for col in colunas %}
-    <option value="{{col}}">{{col}}</option>
-    {% endfor %}
-</select>
+.mapping-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
 
-<label>Cor:</label>
-<select name="cor">
-    {% for col in colunas %}
-    <option value="{{col}}">{{col}}</option>
-    {% endfor %}
-</select>
+.mapping-item {
+    display: grid;
+    gap: 8px;
+}
+</style>
+</head>
 
-<br><br>
+<body class="responsive-page">
 
-<button>💾 Importar</button>
-</form>
+<div class="page-shell page-shell--wide">
+    <div class="page-header">
+        <div class="brand-block">
+            <img src="/static/logo.jpg" class="brand-avatar">
+            <div>
+                <p class="brand-kicker">Wagen Estetica</p>
+            <h1 class="page-title">Pre-visualizacao da Importacao</h1>
+            <p class="page-subtitle">Mapeie as colunas e confira os dados com conforto em telas menores.</p>
+            </div>
+        </div>
 
-<hr>
+        <a href="/clientes" class="button-link">
+            <button type="button">Voltar</button>
+        </a>
+    </div>
 
-<table border="1">
-<tr>
-    {% for col in colunas %}
-    <th>{{col}}</th>
-    {% endfor %}
-</tr>
+    <div class="page-card">
+        <h2 class="section-title">Mapeamento das colunas</h2>
 
-{% for linha in dados %}
-<tr>
-    {% for col in colunas %}
-    <td>{{linha[col]}}</td>
-    {% endfor %}
-</tr>
-{% endfor %}
-</table>
+        <form method="POST" action="/confirmar_importacao" class="stack-form stack-form--wide">
+            <div class="mapping-grid">
+                <div class="mapping-item">
+                    <label for="placa">Placa</label>
+                    <select name="placa" id="placa">
+                        {% for col in colunas %}
+                        <option value="{{col}}">{{col}}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="mapping-item">
+                    <label for="nome">Nome</label>
+                    <select name="nome" id="nome">
+                        {% for col in colunas %}
+                        <option value="{{col}}">{{col}}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="mapping-item">
+                    <label for="telefone">Telefone</label>
+                    <select name="telefone" id="telefone">
+                        {% for col in colunas %}
+                        <option value="{{col}}">{{col}}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="mapping-item">
+                    <label for="modelo">Modelo</label>
+                    <select name="modelo" id="modelo">
+                        {% for col in colunas %}
+                        <option value="{{col}}">{{col}}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="mapping-item">
+                    <label for="cor">Cor</label>
+                    <select name="cor" id="cor">
+                        {% for col in colunas %}
+                        <option value="{{col}}">{{col}}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <button>Importar</button>
+        </form>
+    </div>
+
+    <div class="top-spacing">
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        {% for col in colunas %}
+                        <th>{{col}}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for linha in dados %}
+                    <tr>
+                        {% for col in colunas %}
+                        <td>{{linha[col]}}</td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>

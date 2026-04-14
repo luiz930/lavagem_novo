@@ -8,8 +8,9 @@
 <link rel="manifest" href="/static/manifest.json">
 <meta name="theme-color" content="#facc15">
 
-<link rel="icon" href="/static/favicon.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="icon" href="/static/favicon.jpg">
+<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="stylesheet" href="/static/responsive.css">
 
 <script>
 if ("serviceWorker" in navigator) {
@@ -19,51 +20,46 @@ if ("serviceWorker" in navigator) {
 </script>
 
 <style>
-body {
-    background:#0b0b0b;
-    color:white;
-    font-family:Arial;
-    text-align:center;
-}
-
-input {
-    padding:12px;
-    margin:10px;
-    border-radius:6px;
-    border:none;
-    background:#1f2937;
-    color:white;
-    width:250px;
-}
-
-button {
-    padding:12px;
-    border:none;
-    border-radius:6px;
-    background:#facc15;
-    font-weight:bold;
-    cursor:pointer;
+.login-card {
+    max-width: 460px;
+    margin: 8vh auto 0;
 }
 
 .erro {
-    color:#ef4444;
+    color: #fca5a5;
+    margin: 0;
 }
 </style>
 </head>
 
-<body>
+<body class="responsive-page">
 
-<h1>🔐 Acesso Wagen</h1>
+<div class="page-shell page-shell--narrow">
+    <div class="page-card login-card">
+        <div class="page-header page-header--center">
+            <div class="brand-block brand-block--center">
+                <img src="/static/logo.jpg" class="brand-avatar">
+                <div>
+                    <p class="brand-kicker">Wagen Estetica</p>
+                <h1 class="page-title">Acesso Wagen</h1>
+                <p class="page-subtitle">Entre pelo celular, tablet ou desktop com a mesma experiencia.</p>
+                </div>
+            </div>
+        </div>
 
-<form method="POST">
-<input name="usuario" placeholder="Usuário"><br>
-<input name="senha" type="password" placeholder="Senha"><br>
-<button>Entrar</button>
-</form>
+        <form method="POST" class="stack-form">
+            <input name="usuario" placeholder="Usuario" autocomplete="username">
+            <input name="senha" type="password" placeholder="Senha" autocomplete="current-password">
+            <button>Entrar</button>
+        </form>
 
-{% if erro %}
-<p class="erro">{{erro}}</p>
-{% endif %}
+        {% if erro %}
+        <div class="page-card top-spacing">
+            <p class="erro">{{erro}}</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
 
 </body>
 </html>

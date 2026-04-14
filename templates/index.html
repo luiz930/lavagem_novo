@@ -5,8 +5,8 @@
 <meta charset="UTF-8">
 <title>Gestão Estética</title>
 
-<link rel="icon" href="/static/favicon.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="icon" href="/static/favicon.jpg">
+<link rel="apple-touch-icon" href="/static/icon-192.jpg">
 
 <link rel="manifest" href="/static/manifest.json">
 <meta name="theme-color" content="#facc15">
@@ -32,6 +32,12 @@ body {
     color: white;
     text-align: center;
     -webkit-tap-highlight-color: transparent;
+    margin: 0;
+    overflow-x: hidden;
+}
+
+body.sidebar-open {
+    overflow: hidden;
 }
 
 /* ================= BOTÕES ================= */
@@ -59,6 +65,8 @@ input, select {
     background: #1f2937;
     color: white;
     font-size: 16px;
+    width: 100%;
+    max-width: 320px;
 }
 
 /* ================= MENU BOTÃO ================= */
@@ -83,16 +91,19 @@ input, select {
     top: 0;
     left: -100%; /* 🔥 SEMPRE FECHADA */
 
-    width: 220px;
+    width: 250px;
     height: 100%;
 
-    background: #111827;
+    background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
     border-right: 2px solid #facc15;
-    padding: 20px 10px;
+    box-shadow: 14px 0 30px rgba(0, 0, 0, 0.35);
+    padding: 24px 14px;
 
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    align-items: stretch;
+    gap: 14px;
+    overflow-y: auto;
 
     z-index: 2000;
 
@@ -103,20 +114,120 @@ input, select {
     left: 0;
 }
 
-.sidebar h2 {
-    color: #facc15;
-    font-size: 18px;
+.sidebar-header {
+    margin: 28px 6px 4px;
+    padding: 18px 14px 20px;
+    border: 1px solid rgba(250, 204, 21, 0.22);
+    border-radius: 18px;
+    background: linear-gradient(180deg, rgba(250, 204, 21, 0.14), rgba(250, 204, 21, 0.03));
+    text-align: center;
+}
+
+.sidebar-logo {
+    width: 92px;
+    height: 92px;
+    display: block;
+    object-fit: cover;
+    border-radius: 50%;
+    border: 3px solid rgba(250, 204, 21, 0.45);
+    box-shadow: 0 12px 25px rgba(250, 204, 21, 0.15);
+    margin: 0 auto 14px;
+}
+
+.sidebar-title {
+    margin: 0;
+    color: #ffffff;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.sidebar-subtitle {
+    margin: 6px 0 0;
+    color: rgba(250, 204, 21, 0.82);
+    font-size: 11px;
+    letter-spacing: 1.6px;
+    text-transform: uppercase;
+}
+
+.sidebar-nav {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 2px 4px 0;
+}
+
+.sidebar-nav a {
+    width: 100%;
+    text-decoration: none;
+}
+
+.sidebar-nav button {
+    width: 100%;
+    margin: 0;
+    padding: 14px 16px;
+    border-radius: 14px;
+    border: 1px solid rgba(250, 204, 21, 0.18);
+    background: linear-gradient(135deg, rgba(31, 41, 55, 0.98), rgba(17, 24, 39, 0.98));
+    color: #f9fafb;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: flex-start;
+    text-align: left;
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22);
+    transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.sidebar-nav button:hover {
+    background: linear-gradient(135deg, #facc15, #f59e0b);
+    color: #111827;
+    border-color: rgba(250, 204, 21, 0.75);
+    transform: translateX(4px);
+}
+
+.sidebar-nav button span {
+    width: 20px;
+    text-align: center;
+    font-size: 16px;
 }
 
 /* ================= MAIN ================= */
 .main {
     margin-left: 0;
-    padding: 20px;
+    padding: 84px 20px 120px;
     transition: all 0.3s ease;
 }
 
 .main.shift {
-    margin-left: 220px;
+    margin-left: 250px;
+}
+
+.main h1 {
+    margin: 0 0 24px;
+    padding: 0 48px 0 56px;
+    font-size: clamp(1.8rem, 4vw, 2.6rem);
+}
+
+.search-panel {
+    margin-bottom: 24px;
+}
+
+.busca-form {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+}
+
+.busca-form input {
+    flex: 1 1 260px;
+    max-width: 340px;
+    margin: 0;
+}
+
+.busca-form button {
+    margin: 0;
 }
 
 /* ================= CARDS ================= */
@@ -126,10 +237,117 @@ input, select {
     border-radius: 12px;
     padding: 20px;
 
-    width: 95%;
-    max-width: 400px;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    box-shadow: 0 18px 34px rgba(0, 0, 0, 0.22);
+}
 
-    margin: 10px auto;
+.card-cliente h2,
+.card h2 {
+    margin-top: 0;
+}
+
+.card p,
+.card-cliente p {
+    word-break: break-word;
+}
+
+.container-cliente {
+    width: min(100%, 980px);
+    margin: 16px auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    align-items: start;
+}
+
+.center-box {
+    display: flex;
+    justify-content: center;
+    margin-top: 20px;
+}
+
+.destaque {
+    background: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(30, 41, 59, 0.95));
+    box-shadow: 0 22px 40px rgba(0, 0, 0, 0.26);
+}
+
+.hidden {
+    display: none !important;
+}
+
+.card-cliente form,
+#editForm,
+#formEditar,
+#formServico {
+    display: grid;
+    gap: 10px;
+    width: 100%;
+    margin-top: 14px;
+}
+
+.card-cliente input,
+.card-cliente select,
+#editForm input,
+#formEditar input,
+#formServico input,
+#formServico select {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+}
+
+.card-cliente button,
+#editForm button,
+#formServico button {
+    width: 100%;
+    margin: 0;
+}
+
+input[type="file"] {
+    width: 100%;
+    max-width: none;
+    background: #1f2937;
+    color: #e5e7eb;
+    padding: 12px;
+    border-radius: 10px;
+}
+
+.novo-cliente-wrap {
+    display: flex;
+    justify-content: center;
+    margin-top: 20px;
+}
+
+.novo-cliente-card {
+    width: min(100%, 420px);
+}
+
+.novo-cliente-form {
+    display: grid;
+    gap: 10px;
+}
+
+.section-heading {
+    width: min(100%, 980px);
+    margin: 28px auto 12px;
+    text-align: left;
+    color: #facc15;
+    font-size: 1.25rem;
+}
+
+.historico-list {
+    width: min(100%, 980px);
+    margin: 20px auto 0;
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.historico-card {
+    text-align: left;
+    height: 100%;
 }
 
 /* ================= FLEX ================= */
@@ -164,36 +382,22 @@ input, select {
     z-index: 9999;
 }
 
-/* ================= MOBILE ================= */
-/* ================= SIDEBAR MOBILE PROFISSIONAL ================= */
-@media (max-width: 600px) {
+/* ================= TABLET / MOBILE ================= */
+@media (max-width: 1024px) {
 
     .sidebar {
-        position: fixed;
-        top: 0;
-        left: -100%; /* 🔥 ESCONDE COMPLETAMENTE */
-
-        width: 70%;
-        height: 100%;
-
-        background: #111827;
-        border-right: 2px solid #facc15;
-
-        flex-direction: column;
-        padding: 20px;
-        gap: 10px;
-
-        z-index: 2000;
-
-        transition: left 0.3s ease;
+        width: min(82vw, 300px);
+        padding: 22px 12px;
     }
 
-    /* QUANDO ABRIR */
-    .sidebar.show {
-        left: 0; /* 🔥 aparece corretamente */
+    .sidebar-header {
+        margin-top: 42px;
     }
 
-    /* ESCURECE FUNDO */
+    .sidebar-nav button {
+        padding: 13px 14px;
+    }
+
     .overlay {
         position: fixed;
         top: 0;
@@ -212,9 +416,54 @@ input, select {
         display: block;
     }
 
-    /* MAIN */
-    .main {
+    .main.shift {
         margin-left: 0;
+    }
+}
+
+@media (max-width: 640px) {
+    .menu-btn {
+        top: 12px;
+        left: 12px;
+        width: 44px;
+        height: 44px;
+    }
+
+    .main {
+        padding: 76px 12px 28px;
+    }
+
+    .main h1 {
+        padding: 0 16px 0 52px;
+        font-size: 1.7rem;
+    }
+
+    .busca-form {
+        flex-direction: column;
+    }
+
+    .card,
+    .card-cliente {
+        padding: 16px;
+        border-radius: 14px;
+    }
+
+    .acoes {
+        flex-direction: column;
+    }
+
+    .btn.small {
+        width: 100%;
+        height: auto;
+    }
+
+    #relogio {
+        position: static;
+        width: 100%;
+        max-width: none;
+        margin: 24px auto 0;
+        text-align: center;
+        line-height: 1.6;
     }
 }
 
@@ -228,21 +477,20 @@ input, select {
 <!-- SIDEBAR -->
 <div class="sidebar">
 
-<img src="/static/logo.jpg" style="
-    width:80px;
-    height:80px;
-    border-radius:50%;
-    object-fit:cover;
-    margin-top:50px;
-    margin-bottom:10px;
-">
+<div class="sidebar-header">
+<img src="/static/logo.jpg" class="sidebar-logo">
+<h2 class="sidebar-title">Wagen Estetica</h2>
+<p class="sidebar-subtitle">Gestao Automotiva</p>
+</div>
 
-<a href="/painel"><button>📊 Painel</button></a>
-<a href="/clientes"><button>👤 Clientes</button></a>
-<a href="/cadastrar_servico"><button>🧼 Serviços</button></a>
-<a href="/financeiro"><button>💰 Financeiro</button></a>
-<a href="/pneu"><button>🛞 Pneus</button></a>
-<a href="/clima"><button>🌧️ Clima</button></a>
+<div class="sidebar-nav">
+<a href="/painel"><button><span>&#128202;</span> Painel</button></a>
+<a href="/clientes"><button><span>&#128100;</span> Clientes</button></a>
+<a href="/cadastrar_servico"><button><span>&#129532;</span> Servicos</button></a>
+<a href="/financeiro"><button><span>&#128176;</span> Financeiro</button></a>
+<a href="/pneu"><button><span>&#128736;</span> Pneus</button></a>
+<a href="/clima"><button><span>&#9729;</span> Clima</button></a>
+</div>
 
 </div>
 
@@ -256,9 +504,9 @@ input, select {
 <h1>🚗 Wagen Estética Automotiva</h1>
 
 <!-- BUSCA -->
-<div style="margin-bottom:20px;">
-<form method="POST" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
-<input name="placa" placeholder="Digite a placa" required style="max-width:300px;">
+<div class="search-panel">
+<form method="POST" class="busca-form">
+<input name="placa" placeholder="Digite a placa" required>
 <button>Buscar</button>
 </form>
 </div>
@@ -325,12 +573,12 @@ input, select {
 <!-- NOVO CLIENTE -->
 {% if buscou and dados is none %}
 
-<div style="display: flex; justify-content: center; margin-top: 20px;">
-    <div style="width: 350px;" class="card destaque">
+<div class="novo-cliente-wrap">
+    <div class="card destaque novo-cliente-card">
 
         <h3>Novo Cliente</h3>
 
-        <form action="/cadastrar" method="POST" style="display: flex; flex-direction: column; gap: 10px;">
+        <form action="/cadastrar" method="POST" class="novo-cliente-form">
 
             <input name="placa" placeholder="Placa" required>
             <input name="nome" placeholder="Nome">
@@ -400,10 +648,13 @@ input, select {
 {% endif %}
 
 <!-- HISTÓRICO -->
+{% if historico %}
+<h2 class="section-heading">Historico</h2>
+<div class="historico-list">
 {% for item in historico %}
 {% set s = item[0] %}
 
-<div class="card" style="text-align:left;">
+<div class="card historico-card">
 
 <b>{{s[2]}}</b>
 
@@ -420,6 +671,8 @@ input, select {
 </div>
 
 {% endfor %}
+ </div>
+{% endif %}
 
 <div id="relogio"></div>
 
@@ -437,10 +690,12 @@ window.toggleSidebar = function () {
         sidebar.classList.remove("show");
         overlay.classList.remove("show");
         main.classList.remove("shift");
+        document.body.classList.remove("sidebar-open");
     } else {
         sidebar.classList.add("show");
         overlay.classList.add("show");
         main.classList.add("shift");
+        document.body.classList.add("sidebar-open");
     }
 };
 
@@ -449,7 +704,7 @@ window.toggleSidebar = function () {
 <script>
 function toggleEditar() {
     const el = document.getElementById("formEditar");
-    el.style.display = el.style.display === "none" ? "block" : "none";
+    el.style.display = el.style.display === "none" ? "grid" : "none";
 }
 </script>
 

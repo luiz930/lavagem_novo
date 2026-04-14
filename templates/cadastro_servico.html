@@ -2,13 +2,15 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>Cadastro de Serviços</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cadastro de Servicos</title>
 
 <link rel="manifest" href="/static/manifest.json">
 <meta name="theme-color" content="#facc15">
 
-<link rel="icon" href="/static/favicon.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="icon" href="/static/favicon.jpg">
+<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="stylesheet" href="/static/responsive.css">
 
 <script>
 if ("serviceWorker" in navigator) {
@@ -18,7 +20,6 @@ if ("serviceWorker" in navigator) {
 </script>
 
 <script>
-
 function editar(id) {
     const card = document.getElementById("servico-" + id);
     card.querySelector(".view").style.display = "none";
@@ -40,112 +41,126 @@ function salvar(id) {
     })
     .then(res => res.json())
     .then(data => {
-
-        if(data.status === "ok") {
+        if (data.status === "ok") {
             card.querySelector(".nome").innerText = nome;
             card.querySelector(".valor").innerText = valor;
 
             card.querySelector(".view").style.display = "block";
             card.querySelector(".edit").style.display = "none";
         }
-
     });
 }
-
 </script>
 
 <style>
-body { background:#0b0b0b; color:white; text-align:center; font-family:Arial; }
-
-input, button {
-    padding:10px;
-    margin:5px;
-    border-radius:6px;
-    border:none;
-}
-
-button {
-    background:#facc15;
-    color:black;
-    font-weight:bold;
-}
-
 .card {
-    background:#111827;
-    padding:15px;
-    margin:10px auto;
-    border-radius:10px;
-    border:1px solid #facc15;
-    width:300px;
+    width: 100%;
+}
+
+.service-line {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.service-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+}
+
+.edit {
+    margin-top: 10px;
 }
 
 .edit input {
-    width: 90%;
-    margin: 5px 0;
+    width: 100%;
+    margin: 0 0 10px;
 }
 
-.view button, .edit button {
-    margin-top: 5px;
-}
-
-button {
-    margin: 3px;
-}
-
-button:hover {
-    opacity: 0.9;
-}
-
-button[onclick^="excluir"] {
+.danger-button {
     background: #ef4444;
     color: white;
 }
 
+@media (max-width: 640px) {
+    .service-actions {
+        flex-direction: column;
+    }
+
+    .service-actions button {
+        width: 100%;
+    }
+}
 </style>
 </head>
 
-<body>
+<body class="responsive-page">
 
-<h1>🧼 Cadastro de Serviços</h1>
-
-<form method="POST">
-<input name="nome" placeholder="Nome do serviço"><br>
-<input name="valor" placeholder="Valor"><br>
-<button>Salvar</button>
-</form>
-
-<h2>Serviços cadastrados</h2>
-
-{% for s in servicos %}
-<div class="card" id="servico-{{s[0]}}">
-    
-    <div class="view">
-        <p>
-            <span class="nome">{{s[1]}}</span> 
-            - R$<span class="valor">{{s[2]}}</span>
-        </p>
-
-        <button onclick="editar({{s[0]}})">✏️ Editar</button>
-        <button onclick="excluir({{s[0]}})">🗑️ Excluir</button>
+<div class="page-shell page-shell--narrow">
+    <div class="page-header">
+        <div class="brand-block">
+            <img src="/static/logo.jpg" class="brand-avatar">
+            <div>
+                <p class="brand-kicker">Wagen Estetica</p>
+            <h1 class="page-title">Cadastro de Servicos</h1>
+            <p class="page-subtitle">Tela pronta para celular, tablet e desktop.</p>
+            </div>
+        </div>
+        <a href="/" class="button-link">
+            <button type="button">Voltar</button>
+        </a>
     </div>
 
-    <div class="edit" style="display:none;">
-        <input class="input-nome" value="{{s[1]}}">
-        <input class="input-valor" value="{{s[2]}}">
-        <button onclick="salvar({{s[0]}})">💾 Salvar</button>
+    <div class="page-card">
+        <h2 class="section-title">Novo servico</h2>
+        <form method="POST" class="stack-form">
+            <input name="nome" placeholder="Nome do servico">
+            <input name="valor" placeholder="Valor">
+            <button>Salvar</button>
+        </form>
     </div>
 
+    <div class="top-spacing">
+        <h2 class="section-title">Servicos cadastrados</h2>
+
+        <div class="list-grid">
+            {% for s in servicos %}
+            <div class="page-card card" id="servico-{{s[0]}}">
+                <div class="view">
+                    <div class="service-line">
+                        <span class="nome">{{s[1]}}</span>
+                        <span>-</span>
+                        <span>R$<span class="valor">{{s[2]}}</span></span>
+                    </div>
+
+                    <div class="service-actions">
+                        <button type="button" onclick="editar({{s[0]}})">Editar</button>
+                        <button type="button" class="danger-button" onclick="excluir({{s[0]}})">Excluir</button>
+                    </div>
+                </div>
+
+                <div class="edit" style="display:none;">
+                    <input class="input-nome" value="{{s[1]}}">
+                    <input class="input-valor" value="{{s[2]}}">
+                    <button type="button" onclick="salvar({{s[0]}})">Salvar</button>
+                </div>
+            </div>
+            {% else %}
+            <div class="page-card">
+                <p class="muted-text">Nenhum servico cadastrado ainda.</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
 </div>
 
-{% endfor %}
-
-<a href="/"><button>🔙 Voltar</button></a>
-
 <script>
-
 function excluir(id) {
-
-    if (!confirm("Tem certeza que deseja excluir este serviço?")) {
+    if (!confirm("Tem certeza que deseja excluir este servico?")) {
         return;
     }
 
@@ -154,15 +169,12 @@ function excluir(id) {
     })
     .then(res => res.json())
     .then(data => {
-
         if (data.status === "ok") {
             const card = document.getElementById("servico-" + id);
             card.remove();
         }
-
     });
 }
-
 </script>
 
 </body>

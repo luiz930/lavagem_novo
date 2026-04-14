@@ -4,11 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Radar do Tempo</title>
+
 <link rel="manifest" href="/static/manifest.json">
 <meta name="theme-color" content="#facc15">
 
-<link rel="icon" href="/static/favicon.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="icon" href="/static/favicon.jpg">
+<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="stylesheet" href="/static/responsive.css">
 
 <script>
 if ("serviceWorker" in navigator) {
@@ -18,50 +20,73 @@ if ("serviceWorker" in navigator) {
 </script>
 
 <style>
-body {
-    margin:0;
-    background:#0b0b0b;
-    color:white;
-    font-family:Arial;
-    text-align:center;
+body.responsive-page {
+    padding: 0;
+    text-align: center;
 }
 
 .topo {
-    padding:10px;
-    background:#111827;
-    border-bottom:1px solid #facc15;
+    padding: 18px 16px;
+}
+
+.mapa-wrap {
+    padding: 16px;
 }
 
 iframe {
-    width:100%;
-    height:90vh;
-    border:none;
+    width: 100%;
+    height: calc(100vh - 126px);
+    min-height: 420px;
+    border: none;
+    border-radius: 18px;
+    box-shadow: 0 24px 40px rgba(0, 0, 0, 0.28);
 }
 
-button {
-    padding:8px 15px;
-    border:none;
-    border-radius:6px;
-    background:#facc15;
-    font-weight:bold;
-    cursor:pointer;
+@media (max-width: 640px) {
+    .topo .page-shell {
+        justify-content: center;
+        text-align: center;
+    }
+
+    .mapa-wrap {
+        padding: 12px;
+    }
+
+    iframe {
+        height: calc(100vh - 174px);
+        min-height: 340px;
+        border-radius: 16px;
+    }
 }
 </style>
 </head>
 
-<body>
+<body class="responsive-page">
 
 <div class="topo">
-<h2>🌧️ Radar Meteorológico</h2>
+    <div class="page-shell page-shell--wide">
+        <div class="page-header page-header--sticky">
+            <div class="brand-block">
+                <img src="/static/logo.jpg" class="brand-avatar">
+                <div>
+                    <p class="brand-kicker">Wagen Estetica</p>
+                    <h1 class="page-title">Radar Meteorologico</h1>
+                    <p class="page-subtitle">Acompanhamento confortavel em celular, tablet e desktop.</p>
+                </div>
+            </div>
 
-<a href="/">
-<button>🔙 Voltar</button>
-</a>
+            <a href="/" class="button-link">
+                <button type="button">Voltar</button>
+            </a>
+        </div>
+    </div>
 </div>
 
-<!-- 🌍 WINDY RADAR -->
-<iframe src="https://embed.windy.com/embed2.html?lat=-29.68&lon=-51.13&zoom=8&level=surface&overlay=rain&menu=&message=&marker=&calendar=&pressure=&type=map&location=coordinates&detail=&detailLat=-29.68&detailLon=-51.13&metricWind=default&metricTemp=default&radarRange=-1">
-</iframe>
+<div class="mapa-wrap">
+    <div class="page-shell page-shell--wide">
+        <iframe src="https://embed.windy.com/embed2.html?lat=-29.68&lon=-51.13&zoom=8&level=surface&overlay=rain&menu=&message=&marker=&calendar=&pressure=&type=map&location=coordinates&detail=&detailLat=-29.68&detailLon=-51.13&metricWind=default&metricTemp=default&radarRange=-1"></iframe>
+    </div>
+</div>
 
 </body>
 </html>

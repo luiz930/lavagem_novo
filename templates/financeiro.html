@@ -8,8 +8,9 @@
 <link rel="manifest" href="/static/manifest.json">
 <meta name="theme-color" content="#facc15">
 
-<link rel="icon" href="/static/favicon.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="icon" href="/static/favicon.jpg">
+<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="stylesheet" href="/static/responsive.css">
 
 <script>
 if ("serviceWorker" in navigator) {
@@ -19,61 +20,57 @@ if ("serviceWorker" in navigator) {
 </script>
 
 <style>
-body {
-    background:#0b0b0b;
-    color:white;
-    font-family:Arial;
-    text-align:center;
+.stat-card {
+    text-align: center;
 }
 
-.card {
-    background:#111827;
-    padding:20px;
-    margin:20px auto;
-    border-radius:10px;
-    border:1px solid #facc15;
-    width:300px;
+.stat-card p {
+    margin: 0 0 10px;
+    color: #9ca3af;
 }
 
 .valor {
-    font-size:28px;
-    color:#22c55e;
-    font-weight:bold;
-}
-
-button {
-    padding:10px;
-    border:none;
-    border-radius:6px;
-    background:#facc15;
-    font-weight:bold;
-    cursor:pointer;
+    font-size: clamp(2rem, 6vw, 2.8rem);
+    color: #22c55e;
+    font-weight: bold;
 }
 </style>
 </head>
 
-<body>
+<body class="responsive-page">
 
-<h1>💰 Financeiro do Dia</h1>
+<div class="page-shell page-shell--medium">
+    <div class="page-header">
+        <div class="brand-block">
+            <img src="/static/logo.jpg" class="brand-avatar">
+            <div>
+                <p class="brand-kicker">Wagen Estetica</p>
+            <h1 class="page-title">Financeiro do Dia</h1>
+            <p class="page-subtitle">Resumo adaptado para consulta rapida em celular, tablet e desktop.</p>
+            </div>
+        </div>
+        <a href="/" class="button-link">
+            <button type="button">Voltar</button>
+        </a>
+    </div>
 
-<div class="card">
-<p>Total faturado</p>
-<div class="valor">R$ {{total}}</div>
+    <div class="page-grid">
+        <div class="page-card stat-card">
+            <p class="pill-label">Total faturado</p>
+            <div class="valor metric-value metric-value--success">R$ {{total}}</div>
+        </div>
+
+        <div class="page-card stat-card">
+            <p class="pill-label">Servicos realizados</p>
+            <div class="valor metric-value">{{quantidade}}</div>
+        </div>
+
+        <div class="page-card stat-card">
+            <p class="pill-label">Ticket medio</p>
+            <div class="valor metric-value">R$ {{ticket}}</div>
+        </div>
+    </div>
 </div>
-
-<div class="card">
-<p>Serviços realizados</p>
-<div class="valor">{{quantidade}}</div>
-</div>
-
-<div class="card">
-<p>Ticket médio</p>
-<div class="valor">R$ {{ticket}}</div>
-</div>
-
-<a href="/">
-<button>🔙 Voltar</button>
-</a>
 
 </body>
 </html>

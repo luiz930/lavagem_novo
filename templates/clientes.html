@@ -2,115 +2,142 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Clientes</title>
 
-<a href="/">
-    <button style="margin-bottom:15px;">⬅ Voltar</button>
-</a>
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#facc15">
+
+<link rel="icon" href="/static/favicon.jpg">
+<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="stylesheet" href="/static/responsive.css">
+
+<script>
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/sw.js")
+    .then(() => console.log("SW registrado"));
+}
+</script>
 
 <style>
-body { background:#0b0b0b; color:white; font-family:Arial; text-align:center; }
+input[type="file"] {
+    width: 100%;
+}
 
 .card {
-    background:#111827;
-    border:1px solid #facc15;
-    border-radius:10px;
-    padding:15px;
-    margin:10px auto;
-    width:90%;
-    max-width:500px;
+    width: 100%;
 }
 
-input {
-    padding:10px;
-    margin:5px;
-    border-radius:6px;
-    border:none;
-    background:#1f2937;
-    color:white;
-    width:90%;
+.cliente-form {
+    display: grid;
+    gap: 10px;
 }
 
-button {
-    padding:10px;
-    margin:5px;
-    border-radius:6px;
-    border:none;
-    background:#facc15;
-    color:black;
-    font-weight:bold;
-    cursor:pointer;
+.cliente-form input,
+.busca-form input,
+.import-form input,
+.cliente-form button,
+.busca-form button,
+.import-form button {
+    width: 100%;
+    margin: 0;
+}
+
+@media (min-width: 760px) {
+    .cliente-form {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .cliente-form button {
+        grid-column: 1 / -1;
+    }
 }
 </style>
 </head>
 
-<body>
+<body class="responsive-page">
 
-<h1>👤 Clientes</h1>
+<div class="page-shell page-shell--medium">
+    <div class="page-header">
+        <div class="brand-block">
+            <img src="/static/logo.jpg" class="brand-avatar">
+            <div>
+                <p class="brand-kicker">Wagen Estetica</p>
+            <h1 class="page-title">Clientes</h1>
+            <p class="page-subtitle">Busque, importe e ajuste registros com boa leitura em celular e tablet.</p>
+            </div>
+        </div>
 
-<form method="POST">
-<input name="busca" placeholder="Buscar placa ou modelo">
-<button>Buscar</button>
-</form>
+        <div class="actions-row">
+            <a href="/" class="button-link">
+                <button type="button">Voltar</button>
+            </a>
 
-{% if importado %}
-<div style="
-    background:#16a34a;
-    padding:10px;
-    border-radius:8px;
-    margin-bottom:15px;
-">
-    ✅ Clientes importados com sucesso!
+            {% if not importado %}
+            <button type="button" onclick="window.location.href='/clientes?limpar=1'">Limpar</button>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="page-card">
+        <form method="POST" class="inline-form busca-form">
+            <input name="busca" placeholder="Buscar placa ou modelo">
+            <button>Buscar</button>
+        </form>
+    </div>
+
+    {% if importado %}
+    <div class="success-banner top-spacing">
+        Clientes importados com sucesso.
+    </div>
+    {% endif %}
+
+    {% if not importado %}
+    <div class="page-card top-spacing">
+        <h2 class="section-title">Importar planilha</h2>
+        <form action="/preview_importacao" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide import-form">
+            <input type="file" name="arquivo" required>
+            <button>Importar planilha</button>
+        </form>
+    </div>
+    {% endif %}
+
+    <div class="list-grid top-spacing">
+        {% for c in clientes %}
+        <div class="page-card card">
+            <form method="POST" action="/editar_cliente" class="cliente-form">
+                <input type="hidden" name="id" value="{{c[0]}}">
+
+                <input name="placa" value="{{c[1]}}">
+                <input name="modelo" value="{{c[2]}}">
+                <input name="cor" value="{{c[3]}}">
+                <input name="telefone" value="{{c[4]}}">
+
+                <button>Salvar</button>
+            </form>
+        </div>
+        {% else %}
+        <div class="page-card">
+            <p class="muted-text">Nenhum cliente encontrado.</p>
+        </div>
+        {% endfor %}
+    </div>
 </div>
-{% endif %}
-
-{% if not importado %}
-<form action="/preview_importacao" method="POST" enctype="multipart/form-data">
-    <input type="file" name="arquivo" required>
-    <button>📂 Importar Planilha</button>
-</form>
-
-<button type="button" onclick="window.location.href='/clientes?limpar=1'">🧹 Limpar</button>
-
-{% endif %}
-
-{% for c in clientes %}
-<div class="card">
-
-<form method="POST" action="/editar_cliente">
-
-<input type="hidden" name="id" value="{{c[0]}}">
-
-<input name="placa" value="{{c[1]}}">
-<input name="modelo" value="{{c[2]}}">
-<input name="cor" value="{{c[3]}}">
-<input name="telefone" value="{{c[4]}}">
-
-<button>Salvar</button>
-
-</form>
-
-</div>
-{% endfor %}
 
 <script>
 const params = new URLSearchParams(window.location.search);
 
 if (params.get("limpar") === "1") {
-
-    // 🔥 limpa todos os inputs
     document.querySelectorAll("input").forEach(input => {
         if (input.type !== "hidden" && input.type !== "file") {
             input.value = "";
         }
     });
 
-    // 🔥 limpa arquivos (input file)
     document.querySelectorAll('input[type="file"]').forEach(input => {
         input.value = "";
     });
 
-    // 🔥 opcional: remove parâmetro da URL (fica limpo)
     window.history.replaceState({}, document.title, "/clientes");
 }
 </script>

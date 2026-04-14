@@ -8,8 +8,9 @@
 <link rel="manifest" href="/static/manifest.json">
 <meta name="theme-color" content="#facc15">
 
-<link rel="icon" href="/static/favicon.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="icon" href="/static/favicon.jpg">
+<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="stylesheet" href="/static/responsive.css">
 
 <script>
 if ("serviceWorker" in navigator) {
@@ -19,117 +20,46 @@ if ("serviceWorker" in navigator) {
 </script>
 
 <style>
-
-/* RESPONSIVO SIMPLES */
-* {
-    box-sizing: border-box;
-}
-
-input, select, button {
-    width: 100%;
-    max-width: 400px;
-    font-size: 16px;
+.painel-list {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
 }
 
 .card {
-    width: 95%;
-    max-width: 400px;
-    margin: 10px auto;
+    padding: 20px;
+    width: 100%;
+    text-align: left;
+    transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.topo {
-    border: 2px solid #22c55e;
-    box-shadow: 0 0 20px rgba(34,197,94,0.4);
+.card:hover {
+    transform: translateY(-2px);
 }
 
-/* FLEX ADAPTÁVEL */
-.flex {
+.card.topo {
+    border-color: #22c55e;
+    box-shadow: 0 0 20px rgba(34, 197, 94, 0.24);
+}
+
+.card-head {
     display: flex;
     flex-wrap: wrap;
-    justify-content: center;
+    justify-content: space-between;
     gap: 10px;
+    margin-bottom: 12px;
 }
 
-/* MOBILE */
-@media (max-width: 600px) {
-    h1 {
-        font-size: 20px;
-    }
-
-    button {
-        padding: 12px;
-    }
-}
-
-body { 
-    background:#0b0b0b; 
-    color:white; 
-    font-family:Arial; 
-    text-align:center; 
-}
-
-/* HEADER */
-.topo {
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    gap:15px;
-    padding:15px;
-}
-
-/* LOGO */
-.logo {
-    width:60px;
-    height:60px;
-    border-radius:50%;
-    object-fit:cover;
-}
-
-/* BOTÃO VOLTAR */
-.voltar {
-    position:absolute;
-    left:20px;
-    top:20px;
-}
-
-/* CARDS */
-.card {
-    background:#111827;
-    margin:15px auto;
-    padding:20px;
-    border-radius:10px;
-    border:1px solid #facc15;
-
-    width:95%;
-    max-width:520px; /* 🔥 aumenta o espaço */
-}
-
-/* PLACA */
 .placa {
-    font-size:22px;
-    font-weight:bold;
-    color:#facc15;
+    font-size: clamp(1.6rem, 4vw, 2.1rem);
+    font-weight: bold;
+    color: #facc15;
+    margin-bottom: 8px;
 }
 
-/* STATUS */
 .status {
-    color:#facc15;
-    font-weight:bold;
-}
-
-/* BOTÕES */
-button {
-    padding:10px;
-    border:none;
-    border-radius:6px;
-    background:#facc15;
-    color:black;
-    font-weight:bold;
-    cursor:pointer;
-}
-
-button:hover {
-    background:#eab308;
+    color: #facc15;
+    font-weight: bold;
 }
 
 .status.andamento {
@@ -140,149 +70,138 @@ button:hover {
     color: #22c55e;
 }
 
-.atrasado {
-    border: 2px solid #ef4444 !important;
-    box-shadow: 0 0 15px rgba(239,68,68,0.5);
-}
-
 .acoes {
     display: flex;
-    justify-content: center;
+    flex-wrap: wrap;
     gap: 10px;
-    margin: 10px 0;
+    margin: 14px 0;
+}
+
+.acoes a {
+    flex: 1 1 120px;
+    text-decoration: none;
 }
 
 .btn.small {
-    width: 60px;
-    height: 40px;
-    font-size: 18px;
+    width: 100%;
+    font-size: 15px;
 }
 
-.card p {
-    margin: 5px 0;
+form {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
 }
 
-.card {
-    transition: 0.3s;
+.muted {
+    color: #9ca3af;
 }
 
-.card:active {
-    transform: scale(0.98);
+.vazio {
+    text-align: center;
 }
 
-/* MOBILE PROFISSIONAL */
-@media (max-width: 600px) {
-
+@media (max-width: 640px) {
     .card {
-        padding: 15px;
-        border-radius: 12px;
+        padding: 16px;
+        border-radius: 16px;
     }
 
-    .placa {
-        font-size: 26px;
+    .acoes {
+        flex-direction: column;
     }
 
+    .acoes a,
     button {
         width: 100%;
-        font-size: 16px;
-        padding: 14px;
     }
-
-    input[type="file"] {
-        font-size: 16px;
-        padding: 10px;
-        background: #1f2937;
-        color: white;
-        border-radius: 6px;
-    }
-
 }
-
 </style>
-
 </head>
 
-<body>
+<body class="responsive-page">
 
-<!-- BOTÃO VOLTAR -->
-<div class="voltar">
-<a href="/">
-<button>🔙 Voltar</button>
-</a>
+<div class="page-shell page-shell--wide">
+    <div class="page-header">
+        <div class="brand-block">
+            <img src="/static/logo.jpg" class="brand-avatar">
+            <div>
+                <p class="brand-kicker">Wagen Estetica</p>
+                <h1 class="page-title">Painel Operacional</h1>
+                <p class="page-subtitle">Ordem de fila e acoes rapidas no mesmo padrao visual do sistema.</p>
+            </div>
+        </div>
+
+        <a href="/" class="button-link">
+            <button type="button">Voltar</button>
+        </a>
+    </div>
+
+    <div class="painel-list">
+        {% for s in servicos %}
+        <div class="page-card card {% if loop.index == 1 %}topo{% endif %}">
+            <div class="card-head">
+                <p><span class="pill-label">Prioridade IA</span>
+                {% if s.prioridade_ia >= 4 %}
+                    <span style="color:#ef4444;">ALTA</span>
+                {% elif s.prioridade_ia >= 2 %}
+                    <span style="color:#facc15;">MEDIA</span>
+                {% else %}
+                    <span style="color:#22c55e;">BAIXA</span>
+                {% endif %}
+                </p>
+
+                <p class="pill-label">Fila {{loop.index}}</p>
+            </div>
+
+            <div class="placa">{{s[1]}}</div>
+
+            <div class="acoes">
+                <a href="/prioridade/{{s[0]}}/up">
+                    <button type="button" class="btn small">Subir</button>
+                </a>
+
+                <a href="/prioridade/{{s[0]}}/down">
+                    <button type="button" class="btn small">Descer</button>
+                </a>
+            </div>
+
+            <p><b>Cliente:</b> {{s[2]}}</p>
+            <p><b>Valor:</b> R$ {{s[3]}}</p>
+
+            <p class="status {% if s[13] == 'EM ANDAMENTO' %}andamento{% endif %}{% if s[13] == 'FINALIZADO' %} finalizado{% endif %}">
+            {{s[13]}}
+            </p>
+
+            <p>Entrada: {{s[4]}}</p>
+            <p><b>Tempo de espera:</b>
+                <span class="tempo" data-entrada="{{s[4]}}">
+                    carregando...
+                </span>
+            </p>
+            <p>Entrega: {{s[5]}}</p>
+
+            {% if s[13] == "EM ANDAMENTO" %}
+            <form action="/detalhe/{{s[0]}}" method="POST" enctype="multipart/form-data">
+                <input type="file" name="foto_detalhe" accept="image/*" multiple>
+                <button type="submit">Salvar fotos</button>
+            </form>
+            {% endif %}
+
+            {% if s[13] == "EM ANDAMENTO" %}
+            <form action="/finalizar/{{s[0]}}" method="POST" enctype="multipart/form-data">
+                <input type="file" name="foto_saida" accept="image/*" capture="environment" required>
+                <button>Finalizar</button>
+            </form>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="page-card vazio">
+            <p class="muted">Nenhum servico no painel neste momento.</p>
+        </div>
+        {% endfor %}
+    </div>
 </div>
-
-<!-- TOPO -->
-<div class="topo">
-<img src="/static/logo.jpg" class="logo">
-<h1 style="color:#facc15;">Painel Operacional</h1>
-</div>
-
-<!-- SERVIÇOS -->
-{% for s in servicos %}
-<div class="card {% if loop.index == 1 %}topo{% endif %}">
-<p><b>Prioridade IA:</b> 
-{% if s.prioridade_ia >= 4 %}
-    <span style="color:#ef4444;">🔥 ALTA</span>
-{% elif s.prioridade_ia >= 2 %}
-    <span style="color:#facc15;">⚠️ MÉDIA</span>
-{% else %}
-    <span style="color:#22c55e;">✅ BAIXA</span>
-{% endif %}
-</p>
-<div class="acoes">
-    <a href="/prioridade/{{s[0]}}/up">
-        <button class="btn small">⬆️</button>
-    </a>
-
-    <a href="/prioridade/{{s[0]}}/down">
-        <button class="btn small">⬇️</button>
-    </a>
-</div>
-
-<p style="color:#9ca3af;">Fila: {{loop.index}}</p>
-<div class="placa">{{s[1]}}</div>
-
-<p><b>Cliente:</b> {{s[2]}}</p>
-<p><b>Valor:</b> 💰 R${{s[3]}}</p>
-
-<p class="status 
-{% if s[13] == 'EM ANDAMENTO' %}andamento{% endif %}
-{% if s[13] == 'FINALIZADO' %}finalizado{% endif %}
-">
-{{s[13]}}
-</p>
-
-<p>Entrada: {{s[4]}}</p>
-<p><b>Tempo de espera:</b> 
-<span class="tempo" data-entrada="{{s[4]}}">
-    ⏱ carregando...
-</span>
-</p>
-<p>Entrega: {{s[5]}}</p>
-
-{% if s[13] == "EM ANDAMENTO" %}
-
-<form action="/detalhe/{{s[0]}}" method="POST" enctype="multipart/form-data">
-
-    <input type="file" name="foto_detalhe" accept="image/*" multiple>
-
-    <button type="submit">📸 Salvar</button>
-
-</form>
-
-{% endif %}
-
-{% if s[13] == "EM ANDAMENTO" %}
-<form action="/finalizar/{{s[0]}}" method="POST" enctype="multipart/form-data">
-    <input type="file" name="foto_saida" accept="image/*" capture="environment" required>
-    <button>Finalizar</button>
-</form>
-{% endif %}
-
-</div>
-{% endfor %}
-
-
 
 <script>
 function atualizarTempo() {
@@ -311,15 +230,14 @@ function atualizarTempo() {
                 texto = `${mins}min`;
             }
 
-            // 🔥 CORES DINÂMICAS
             if (horas >= 2) {
-                el.innerHTML = "🔥 " + texto;
+                el.innerHTML = "ALTA " + texto;
                 el.style.color = "#ef4444";
             } else if (horas >= 1) {
-                el.innerHTML = "⚠️ " + texto;
+                el.innerHTML = "MEDIA " + texto;
                 el.style.color = "#facc15";
             } else {
-                el.innerHTML = "⏱ " + texto;
+                el.innerHTML = "OK " + texto;
                 el.style.color = "#22c55e";
             }
 
@@ -329,10 +247,7 @@ function atualizarTempo() {
     });
 }
 
-// atualiza a cada 5 segundos
 setInterval(atualizarTempo, 5000);
-
-// roda ao abrir
 atualizarTempo();
 </script>
 

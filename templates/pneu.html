@@ -2,13 +2,15 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Produtos de Pneu</title>
 
 <link rel="manifest" href="/static/manifest.json">
 <meta name="theme-color" content="#facc15">
 
-<link rel="icon" href="/static/favicon.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="icon" href="/static/favicon.jpg">
+<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="stylesheet" href="/static/responsive.css">
 
 <script>
 if ("serviceWorker" in navigator) {
@@ -18,79 +20,55 @@ if ("serviceWorker" in navigator) {
 </script>
 
 <style>
-body {
-    background:#0b0b0b;
-    color:white;
-    text-align:center;
-    font-family:Arial;
-}
-
-/* INPUT */
-input {
-    padding:10px;
-    margin:5px;
-    border-radius:6px;
-    border:none;
-    background:#1f2937;
-    color:white;
-}
-
-/* BOTÃO */
-button {
-    padding:10px;
-    margin:5px;
-    border-radius:6px;
-    border:none;
-    background:#facc15;
-    color:black;
-    font-weight:bold;
-    cursor:pointer;
-}
-
-button:hover {
-    background:#eab308;
-}
-
-/* CARD */
 .card {
-    background:#111827;
-    padding:10px;
-    margin:10px auto;
-    border-radius:10px;
-    border:1px solid #facc15;
-    width:250px;
+    width: 100%;
 }
 
-/* TÍTULO */
-h1 {
-    color:#facc15;
+.card p {
+    margin: 0;
 }
 </style>
-
 </head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<body>
+<body class="responsive-page">
 
-<h1>🛞 Produtos de Pneu</h1>
+<div class="page-shell page-shell--narrow">
+    <div class="page-header">
+        <div class="brand-block">
+            <img src="/static/logo.jpg" class="brand-avatar">
+            <div>
+                <p class="brand-kicker">Wagen Estetica</p>
+            <h1 class="page-title">Produtos de Pneu</h1>
+            <p class="page-subtitle">Cadastro simples e legivel em qualquer tamanho de tela.</p>
+            </div>
+        </div>
+        <a href="/" class="button-link">
+            <button type="button">Voltar</button>
+        </a>
+    </div>
 
-<form method="POST">
-<input name="nome" placeholder="Ex: Selante, Darker">
-<br>
-<button>Salvar</button>
-</form>
+    <div class="page-card">
+        <form method="POST" class="stack-form">
+            <input name="nome" placeholder="Ex: Selante, Darker">
+            <button>Salvar</button>
+        </form>
+    </div>
 
-<h2 style="color:#9ca3af;">Cadastrados</h2>
-
-{% for p in produtos %}
-<div class="card">
-<p>{{p[1]}}</p>
+    <div class="top-spacing">
+        <h2 class="section-title muted-text">Cadastrados</h2>
+        <div class="list-grid">
+            {% for p in produtos %}
+            <div class="page-card card">
+                <p>{{p[1]}}</p>
+            </div>
+            {% else %}
+            <div class="page-card">
+                <p class="muted-text">Nenhum produto cadastrado ainda.</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
 </div>
-{% endfor %}
-
-<a href="/">
-<button>🔙 Voltar</button>
-</a>
 
 </body>
 </html>
