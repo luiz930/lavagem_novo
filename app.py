@@ -66,7 +66,7 @@ def arquivo_permitido(filename):
 app = Flask(__name__)
 app.secret_key = "wagen_super_segura_123"
 
-APP_VERSION = "Versão: 0.1.0-alpha"
+APP_VERSION = "Versão: 0.1.7-alpha"
 
 def conectar():
     conn = sqlite3.connect("database_v2.db")
