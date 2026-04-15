@@ -1,13 +1,35 @@
-from flask import Flask, render_template, request, redirect, session, request, jsonify
+from flask import Flask, render_template, request, redirect, session, jsonify
+import csv
 import sqlite3
 from zoneinfo import ZoneInfo
 import os
+import time
+from io import BytesIO
+from threading import Lock, Thread
+import unicodedata
+from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
 import bcrypt  # 👈 se já adicionou
+import pandas as pd
+import requests
 from werkzeug.utils import secure_filename
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-from datetime import datetime
+from datetime import datetime, date, time as dt_time
+
+def sanitizar_para_json(obj):
+    if isinstance(obj, datetime):
+        return obj.strftime("%Y-%m-%d %H:%M:%S")
+    
+    if isinstance(obj, date):
+        return obj.strftime("%Y-%m-%d")
+    
+    if isinstance(obj, dt_time):  # 👈 corrigido
+        return obj.strftime("%H:%M:%S")
+    
+    return obj
+
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 def agora():
@@ -68,6 +90,39 @@ app.secret_key = "wagen_super_segura_123"
 
 APP_VERSION = "Versão: 0.1.7-alpha"
 
+CAMPOS_SINCRONIZACAO_CLIENTES = [
+    {"key": "placa", "label": "Placa", "required": True},
+    {"key": "nome", "label": "Nome", "required": False},
+    {"key": "telefone", "label": "Telefone", "required": False},
+    {"key": "modelo", "label": "Modelo", "required": False},
+    {"key": "cor", "label": "Cor", "required": False},
+]
+
+INTERVALOS_SINCRONIZACAO = [
+    {"value": 15, "label": "15 minutos"},
+    {"value": 30, "label": "30 minutos"},
+    {"value": 60, "label": "1 hora"},
+    {"value": 180, "label": "3 horas"},
+    {"value": 360, "label": "6 horas"},
+    {"value": 720, "label": "12 horas"},
+    {"value": 1440, "label": "24 horas"},
+]
+
+MAPA_LABEL_CAMPOS_SYNC = {
+    item["key"]: item["label"] for item in CAMPOS_SINCRONIZACAO_CLIENTES
+}
+
+ALIASES_CAMPOS_SYNC = {
+    "placa": ["placa"],
+    "nome": ["nome", "cliente"],
+    "telefone": ["telefone", "fone", "celular", "whatsapp", "contato"],
+    "modelo": ["modelo", "carro", "veiculo", "veículo"],
+    "cor": ["cor"],
+}
+
+sync_lock = Lock()
+sync_worker_iniciado = False
+
 def conectar():
     conn = sqlite3.connect("database_v2.db")
     conn.row_factory = sqlite3.Row  # 🔥 ESSENCIAL
@@ -103,6 +158,27 @@ def init_db():
         cor TEXT,
         cliente_id INTEGER,
         FOREIGN KEY(cliente_id) REFERENCES clientes(id)
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS sincronizacoes_clientes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT,
+        url TEXT NOT NULL,
+        intervalo_minutos INTEGER NOT NULL DEFAULT 60,
+        campo_placa TEXT NOT NULL,
+        campo_nome TEXT,
+        campo_telefone TEXT,
+        campo_modelo TEXT,
+        campo_cor TEXT,
+        ativo INTEGER NOT NULL DEFAULT 1,
+        ultimo_sync_em TEXT,
+        proximo_sync_em TEXT,
+        ultimo_status TEXT,
+        ultima_mensagem TEXT,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
 
@@ -174,12 +250,557 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_servico_status ON servicos(status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_servico_entrada ON servicos(entrada)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_veiculo_placa ON veiculos(placa)")
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_sync_clientes_proximo
+        ON sincronizacoes_clientes(ativo, proximo_sync_em)
+    """)
 
     conn.commit()
     conn.close()
 
 
 init_db()
+
+def agora_iso():
+    return agora().isoformat(timespec="seconds")
+
+def somar_minutos_iso(minutos):
+    return (agora() + timedelta(minutes=minutos)).isoformat(timespec="seconds")
+
+def formatar_datahora(valor_iso):
+    if not valor_iso:
+        return "Nunca"
+
+    try:
+        return datetime.fromisoformat(valor_iso).strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return valor_iso
+
+def definir_feedback_clientes(tipo, mensagem):
+    session["clientes_feedback"] = {"tipo": tipo, "mensagem": mensagem}
+
+def limpar_preview_sincronizacao():
+    session.pop("clientes_sync_preview", None)
+
+def normalizar_texto_comparacao(valor):
+    valor = str(valor or "").strip().lower()
+    valor = unicodedata.normalize("NFKD", valor)
+    return "".join(ch for ch in valor if not unicodedata.combining(ch))
+
+def normalizar_link_planilha(url):
+    url = (url or "").strip()
+
+    if "docs.google.com/spreadsheets" not in url or "export?format=" in url:
+        return url
+
+    if "/d/" not in url:
+        return url
+
+    sheet_id = url.split("/d/")[1].split("/")[0]
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    fragment = parse_qs(parsed.fragment)
+    gid = query.get("gid", fragment.get("gid", ["0"]))[0]
+
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+
+def adicionar_parametros_url(url, **novos_parametros):
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+
+    for chave, valor in novos_parametros.items():
+        query[chave] = [str(valor)]
+
+    return urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
+
+def gerar_urls_candidatas_planilha(url):
+    base = normalizar_link_planilha(url)
+    candidatas = [base]
+    parsed = urlparse(base)
+    host = parsed.netloc.lower()
+
+    if any(dominio in host for dominio in ["1drv.ms", "onedrive.live.com", "sharepoint.com"]):
+        candidatas.append(adicionar_parametros_url(base, download=1))
+        candidatas.append(adicionar_parametros_url(base, download=1, web=0))
+
+        if "sharepoint.com" in host:
+            candidatas.append(
+                f"{parsed.scheme}://{parsed.netloc}/_layouts/15/download.aspx?SourceUrl={quote(base, safe='')}"
+            )
+
+    urls_unicas = []
+
+    for candidata in candidatas:
+        if candidata and candidata not in urls_unicas:
+            urls_unicas.append(candidata)
+
+    return urls_unicas
+
+def normalizar_intervalo_sincronizacao(valor):
+    try:
+        valor = int(valor)
+    except Exception:
+        valor = 60
+
+    intervalos_validos = {item["value"] for item in INTERVALOS_SINCRONIZACAO}
+    return valor if valor in intervalos_validos else 60
+
+def parece_html(texto):
+    texto = (texto or "").lstrip().lower()
+    return texto.startswith("<!doctype html") or texto.startswith("<html") or "<body" in texto[:500]
+
+def ler_csv_flexivel(conteudo_bytes):
+    amostra = conteudo_bytes[:4096].decode("utf-8-sig", errors="ignore")
+
+    if parece_html(amostra):
+        raise ValueError(
+            "O link retornou uma página HTML em vez da planilha. "
+            "Verifique se a planilha do Google está acessível pelo link."
+        )
+
+    delimitadores = [";", ",", "\t", "|"]
+    contagens = {
+        delimitador: amostra.count(delimitador)
+        for delimitador in delimitadores
+    }
+    delimitadores.sort(key=lambda item: contagens[item], reverse=True)
+
+    tentativas = []
+
+    try:
+        dialect = csv.Sniffer().sniff(amostra, delimiters=";,\t|")
+        if dialect.delimiter in delimitadores:
+            delimitadores.remove(dialect.delimiter)
+        delimitadores.insert(0, dialect.delimiter)
+    except Exception:
+        pass
+
+    for delimitador in delimitadores:
+        tentativas.extend([
+            {
+                "sep": delimitador,
+                "engine": "python",
+                "encoding": "utf-8-sig",
+            },
+            {
+                "sep": delimitador,
+                "engine": "python",
+                "encoding": "utf-8-sig",
+                "quotechar": '"',
+                "doublequote": True,
+                "skipinitialspace": True,
+            },
+            {
+                "sep": delimitador,
+                "engine": "python",
+                "encoding": "utf-8-sig",
+                "quoting": csv.QUOTE_NONE,
+                "on_bad_lines": "skip",
+            },
+        ])
+
+    melhor_df = None
+    melhor_total_colunas = 0
+    ultimo_erro = None
+
+    for tentativa in tentativas:
+        try:
+            df = pd.read_csv(BytesIO(conteudo_bytes), **tentativa)
+
+            if len(df.columns) > melhor_total_colunas:
+                melhor_df = df
+                melhor_total_colunas = len(df.columns)
+
+            if len(df.columns) > 1:
+                return df
+        except Exception as e:
+            ultimo_erro = e
+
+    if melhor_df is not None:
+        return melhor_df
+
+    raise ultimo_erro or ValueError("Não foi possível interpretar o CSV.")
+
+def sugerir_mapeamento_colunas(colunas):
+    sugestao = {}
+    colunas_norm = {str(coluna): normalizar_texto_comparacao(coluna) for coluna in colunas}
+
+    for chave, aliases in ALIASES_CAMPOS_SYNC.items():
+        sugestao[chave] = ""
+
+        for coluna_original, coluna_norm in colunas_norm.items():
+            if coluna_norm == chave or coluna_norm in aliases:
+                sugestao[chave] = coluna_original
+                break
+
+        if sugestao[chave]:
+            continue
+
+        for coluna_original, coluna_norm in colunas_norm.items():
+            if any(alias in coluna_norm for alias in aliases):
+                sugestao[chave] = coluna_original
+                break
+
+    return sugestao
+
+def ler_dataframe_link_planilha(url):
+    if not url:
+        raise ValueError("Informe um link de planilha válido.")
+
+    ultimo_erro = None
+
+    for url_candidata in gerar_urls_candidatas_planilha(url):
+        try:
+            resposta = requests.get(url_candidata, timeout=20)
+            resposta.raise_for_status()
+
+            conteudo = BytesIO(resposta.content)
+            content_type = (resposta.headers.get("content-type") or "").lower()
+            url_final = resposta.url or url_candidata
+            url_lower = url_final.lower()
+            amostra_texto = resposta.content[:4096].decode("utf-8-sig", errors="ignore")
+
+            if "text/html" in content_type or parece_html(amostra_texto):
+                ultimo_erro = ValueError(
+                    "O link abriu uma página de visualização em vez do arquivo da planilha. "
+                    "No OneDrive/SharePoint, confirme que o link permite download em modo leitura."
+                )
+                continue
+
+            try:
+                if "csv" in content_type or url_lower.endswith(".csv") or "format=csv" in url_lower:
+                    df = ler_csv_flexivel(resposta.content)
+                else:
+                    df = pd.read_excel(conteudo)
+            except Exception:
+                if "csv" in content_type or url_lower.endswith(".csv") or "format=csv" in url_lower:
+                    raise
+
+                conteudo.seek(0)
+                df = ler_csv_flexivel(resposta.content)
+
+            df = df.fillna("")
+            df.columns = [str(coluna).strip().lower() for coluna in df.columns]
+
+            return df, url_final
+        except Exception as e:
+            ultimo_erro = e
+
+    raise ultimo_erro or ValueError(
+        "Não consegui acessar um arquivo de planilha válido por esse link."
+    )
+
+def limpar_valor_planilha(valor):
+    if valor is None:
+        return ""
+
+    texto = str(valor).strip()
+    return "" if texto.lower() == "nan" else texto
+
+def obter_mapeamento_sync_por_form(form):
+    return {
+        campo["key"]: (form.get(f"campo_{campo['key']}") or "").strip()
+        for campo in CAMPOS_SINCRONIZACAO_CLIENTES
+    }
+
+def descrever_campos_sincronizados(sync):
+    campos = []
+
+    for campo in CAMPOS_SINCRONIZACAO_CLIENTES:
+        coluna = sync.get(f"campo_{campo['key']}")
+
+        if coluna:
+            campos.append({
+                "label": campo["label"],
+                "coluna": coluna
+            })
+
+    return campos
+
+def importar_clientes_dataframe(df, mapeamento):
+    conn = conectar()
+    c = conn.cursor()
+
+    estatisticas = {
+        "linhas_lidas": len(df.index),
+        "linhas_processadas": 0,
+        "linhas_ignoradas": 0,
+        "clientes_novos": 0,
+        "clientes_atualizados": 0,
+        "veiculos_novos": 0,
+        "veiculos_atualizados": 0,
+    }
+
+    for _, row in df.iterrows():
+        placa = limpar_valor_planilha(row.get(mapeamento.get("placa", ""), "")).upper()
+
+        if not placa:
+            estatisticas["linhas_ignoradas"] += 1
+            continue
+
+        nome = limpar_valor_planilha(row.get(mapeamento.get("nome", ""), "")) if mapeamento.get("nome") else ""
+        telefone = limpar_valor_planilha(row.get(mapeamento.get("telefone", ""), "")) if mapeamento.get("telefone") else ""
+        modelo = limpar_valor_planilha(row.get(mapeamento.get("modelo", ""), "")) if mapeamento.get("modelo") else ""
+        cor = limpar_valor_planilha(row.get(mapeamento.get("cor", ""), "")) if mapeamento.get("cor") else ""
+
+        c.execute("""
+            SELECT id, placa, modelo, cor, cliente_id
+            FROM veiculos
+            WHERE placa=?
+        """, (placa,))
+        veiculo_existente = c.fetchone()
+
+        cliente_id = veiculo_existente["cliente_id"] if veiculo_existente and veiculo_existente["cliente_id"] else None
+        cliente_existente = None
+
+        if telefone:
+            c.execute("SELECT id, nome, telefone FROM clientes WHERE telefone=?", (telefone,))
+            cliente_existente = c.fetchone()
+
+            if cliente_existente:
+                cliente_id = cliente_existente["id"]
+        elif cliente_id:
+            c.execute("SELECT id, nome, telefone FROM clientes WHERE id=?", (cliente_id,))
+            cliente_existente = c.fetchone()
+
+        if cliente_existente:
+            novo_nome = nome or cliente_existente["nome"] or ""
+            novo_telefone = telefone or cliente_existente["telefone"] or ""
+
+            if novo_nome != (cliente_existente["nome"] or "") or novo_telefone != (cliente_existente["telefone"] or ""):
+                c.execute("""
+                    UPDATE clientes
+                    SET nome=?, telefone=?
+                    WHERE id=?
+                """, (novo_nome, novo_telefone, cliente_existente["id"]))
+                estatisticas["clientes_atualizados"] += 1
+        elif nome or telefone:
+            c.execute("""
+                INSERT INTO clientes (nome, telefone)
+                VALUES (?, ?)
+            """, (nome or "Sem nome", telefone))
+            cliente_id = c.lastrowid
+            estatisticas["clientes_novos"] += 1
+
+        if veiculo_existente:
+            novo_modelo = modelo or veiculo_existente["modelo"] or ""
+            nova_cor = cor or veiculo_existente["cor"] or ""
+            novo_cliente_id = cliente_id if cliente_id is not None else veiculo_existente["cliente_id"]
+
+            if (
+                novo_modelo != (veiculo_existente["modelo"] or "") or
+                nova_cor != (veiculo_existente["cor"] or "") or
+                novo_cliente_id != veiculo_existente["cliente_id"]
+            ):
+                c.execute("""
+                    UPDATE veiculos
+                    SET modelo=?, cor=?, cliente_id=?
+                    WHERE placa=?
+                """, (novo_modelo, nova_cor, novo_cliente_id, placa))
+                estatisticas["veiculos_atualizados"] += 1
+        else:
+            c.execute("""
+                INSERT INTO veiculos (placa, modelo, cor, cliente_id)
+                VALUES (?, ?, ?, ?)
+            """, (placa, modelo, cor, cliente_id))
+            estatisticas["veiculos_novos"] += 1
+
+        estatisticas["linhas_processadas"] += 1
+
+    conn.commit()
+    conn.close()
+
+    return estatisticas
+
+def resumir_importacao_clientes(estatisticas):
+    return (
+        f"{estatisticas['linhas_processadas']} linha(s) processada(s), "
+        f"{estatisticas['veiculos_novos']} veículo(s) novo(s), "
+        f"{estatisticas['veiculos_atualizados']} veículo(s) atualizado(s), "
+        f"{estatisticas['clientes_novos']} cliente(s) novo(s), "
+        f"{estatisticas['clientes_atualizados']} cliente(s) atualizado(s)"
+    )
+
+def buscar_sincronizacao_cliente(sync_id):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT * FROM sincronizacoes_clientes WHERE id=?", (sync_id,))
+    sync = c.fetchone()
+    conn.close()
+    return sync
+
+def executar_sincronizacao_cliente(sync_id):
+    sync = buscar_sincronizacao_cliente(sync_id)
+
+    if not sync:
+        return False, "Sincronização não encontrada."
+
+    try:
+        df, url_normalizada = ler_dataframe_link_planilha(sync["url"])
+        mapeamento = {
+            campo["key"]: sync[f"campo_{campo['key']}"] or ""
+            for campo in CAMPOS_SINCRONIZACAO_CLIENTES
+        }
+
+        estatisticas = importar_clientes_dataframe(df, mapeamento)
+        mensagem = resumir_importacao_clientes(estatisticas)
+        agora_atual = agora_iso()
+
+        conn = conectar()
+        c = conn.cursor()
+        c.execute("""
+            UPDATE sincronizacoes_clientes
+            SET url=?,
+                ultimo_sync_em=?,
+                proximo_sync_em=?,
+                ultimo_status=?,
+                ultima_mensagem=?,
+                atualizado_em=?
+            WHERE id=?
+        """, (
+            url_normalizada,
+            agora_atual,
+            somar_minutos_iso(sync["intervalo_minutos"]),
+            "OK",
+            mensagem,
+            agora_atual,
+            sync_id
+        ))
+        conn.commit()
+        conn.close()
+
+        return True, mensagem
+    except Exception as e:
+        mensagem = f"Erro ao sincronizar: {e}"
+        agora_atual = agora_iso()
+
+        conn = conectar()
+        c = conn.cursor()
+        c.execute("""
+            UPDATE sincronizacoes_clientes
+            SET ultimo_status=?,
+                ultima_mensagem=?,
+                proximo_sync_em=?,
+                atualizado_em=?
+            WHERE id=?
+        """, ("ERRO", mensagem, somar_minutos_iso(sync["intervalo_minutos"]), agora_atual, sync_id))
+        conn.commit()
+        conn.close()
+
+        return False, mensagem
+
+def sincronizar_fontes_pendentes():
+    if not sync_lock.acquire(blocking=False):
+        return
+
+    try:
+        while True:
+            conn = conectar()
+            c = conn.cursor()
+            c.execute("""
+                SELECT id
+                FROM sincronizacoes_clientes
+                WHERE ativo=1
+                  AND (proximo_sync_em IS NULL OR proximo_sync_em<=?)
+                ORDER BY id
+                LIMIT 1
+            """, (agora_iso(),))
+            pendente = c.fetchone()
+            conn.close()
+
+            if not pendente:
+                break
+
+            executar_sincronizacao_cliente(pendente["id"])
+    finally:
+        sync_lock.release()
+
+def loop_worker_sincronizacao():
+    while True:
+        try:
+            sincronizar_fontes_pendentes()
+        except Exception as e:
+            print("ERRO WORKER SYNC:", e)
+
+        time.sleep(60)
+
+def iniciar_worker_sincronizacao():
+    global sync_worker_iniciado
+
+    if sync_worker_iniciado:
+        return
+
+    sync_worker_iniciado = True
+    Thread(target=loop_worker_sincronizacao, daemon=True).start()
+
+def carregar_contexto_clientes(busca="", limpar=False):
+    conn = conectar()
+    c = conn.cursor()
+
+    if limpar:
+        clientes = []
+    else:
+        if busca:
+            c.execute("""
+                SELECT
+                    veiculos.id,
+                    veiculos.placa,
+                    veiculos.modelo,
+                    veiculos.cor,
+                    veiculos.cliente_id,
+                    clientes.nome AS cliente_nome,
+                    clientes.telefone AS cliente_telefone
+                FROM veiculos
+                LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
+                WHERE veiculos.placa LIKE ? OR veiculos.modelo LIKE ? OR clientes.nome LIKE ?
+                ORDER BY veiculos.id DESC
+            """, (f"%{busca}%", f"%{busca}%", f"%{busca}%"))
+        else:
+            c.execute("""
+                SELECT
+                    veiculos.id,
+                    veiculos.placa,
+                    veiculos.modelo,
+                    veiculos.cor,
+                    veiculos.cliente_id,
+                    clientes.nome AS cliente_nome,
+                    clientes.telefone AS cliente_telefone
+                FROM veiculos
+                LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
+                ORDER BY veiculos.id DESC
+            """)
+
+        clientes = c.fetchall()
+
+    c.execute("""
+        SELECT *
+        FROM sincronizacoes_clientes
+        ORDER BY id DESC
+    """)
+    sincronizacoes_raw = c.fetchall()
+    conn.close()
+
+    sincronizacoes = []
+
+    for sync in sincronizacoes_raw:
+        item = dict(sync)
+        item["ativo"] = bool(item["ativo"])
+        item["ultimo_sync_em_fmt"] = formatar_datahora(item["ultimo_sync_em"])
+        item["proximo_sync_em_fmt"] = formatar_datahora(item["proximo_sync_em"])
+        item["campos"] = descrever_campos_sincronizados(item)
+        sincronizacoes.append(item)
+
+    return clientes, sincronizacoes
+
+@app.before_request
+def preparar_sincronizacoes():
+    if request.endpoint == "static":
+        return
+
+    iniciar_worker_sincronizacao()
+
+    if session.get("logado"):
+        sincronizar_fontes_pendentes()
 
 @app.route("/api/clima")
 def api_clima():
@@ -534,88 +1155,202 @@ def index():
         produtos_pneu=produtos_pneu
     )
 
-@app.route("/importar_clientes", methods=["POST"])
-def importar_clientes():
+def renderizar_pagina_clientes(busca="", limpar=False):
+    clientes_lista, sincronizacoes = carregar_contexto_clientes(busca=busca, limpar=limpar)
+
+    return render_template(
+        "clientes.html",
+        clientes=clientes_lista,
+        sincronizacoes=sincronizacoes,
+        feedback=session.pop("clientes_feedback", None),
+        preview_sync=session.get("clientes_sync_preview"),
+        campos_sync=CAMPOS_SINCRONIZACAO_CLIENTES,
+        intervalos_sync=INTERVALOS_SINCRONIZACAO,
+        busca=busca,
+    )
+
+@app.route("/clientes/sincronizacao/preview", methods=["POST"])
+def preview_sincronizacao_clientes():
     if not session.get("logado"):
         return redirect("/login")
 
-    arquivo = request.files.get("arquivo")
+    nome = (request.form.get("nome") or "").strip()
+    url = (request.form.get("url") or "").strip()
+    intervalo_minutos = normalizar_intervalo_sincronizacao(request.form.get("intervalo_minutos"))
 
-    if not arquivo:
-        return "Nenhum arquivo enviado"
-
-    import pandas as pd
+    if not url:
+        definir_feedback_clientes("erro", "Informe um link de planilha para continuar.")
+        return redirect("/clientes")
 
     try:
-        if arquivo.filename.endswith(".csv"):
-            df = pd.read_csv(arquivo)
-        else:
-            df = pd.read_excel(arquivo)
-    except Exception as e:
-        return f"Erro ao ler arquivo: {e}"
+        df, url_normalizada = ler_dataframe_link_planilha(url)
+        colunas = list(df.columns)
+        mapeamento_sugerido = sugerir_mapeamento_colunas(colunas)
 
-    # 🔥 normaliza colunas
-    df.columns = df.columns.str.lower()
+        if not colunas:
+            raise ValueError("Não encontrei colunas válidas nessa planilha.")
+
+        # 🔥 CORREÇÃO CRÍTICA AQUI
+        amostra_tratada = [
+            {k: sanitizar_para_json(v) for k, v in linha.items()}
+            for linha in df.head(8).to_dict(orient="records")
+        ]
+
+        session["clientes_sync_preview"] = {
+            "nome": nome,
+            "url": url_normalizada,
+            "intervalo_minutos": intervalo_minutos,
+            "colunas": colunas,
+            "mapeamento_sugerido": mapeamento_sugerido,
+            "amostra": amostra_tratada,  # ✅ agora seguro
+            "total_linhas": len(df.index),
+        }
+
+        definir_feedback_clientes(
+            "sucesso",
+            f"Planilha carregada. {len(df.index)} linha(s) encontrada(s) para configurar a sincronização."
+        )
+
+    except Exception as e:
+        limpar_preview_sincronizacao()
+        definir_feedback_clientes("erro", f"Não consegui ler a planilha: {e}")
+
+    return redirect("/clientes")
+
+@app.route("/clientes/sincronizacao/cancelar_preview", methods=["POST"])
+def cancelar_preview_sincronizacao_clientes():
+    if not session.get("logado"):
+        return redirect("/login")
+
+    limpar_preview_sincronizacao()
+    definir_feedback_clientes("sucesso", "Pré-visualização cancelada.")
+    return redirect("/clientes")
+
+@app.route("/clientes/sincronizacao/adicionar", methods=["POST"])
+def adicionar_sincronizacao_clientes():
+    if not session.get("logado"):
+        return redirect("/login")
+
+    nome = (request.form.get("nome") or "").strip()
+    url = (request.form.get("url") or "").strip()
+    intervalo_minutos = normalizar_intervalo_sincronizacao(request.form.get("intervalo_minutos"))
+
+    if not url:
+        definir_feedback_clientes("erro", "Informe um link de planilha.")
+        return redirect("/clientes")
+
+    try:
+        # 🔥 1. LER PLANILHA
+        df, url_normalizada = ler_dataframe_link_planilha(url)
+
+        # 🔥 2. MAPEAR COLUNAS AUTOMATICAMENTE
+        colunas = list(df.columns)
+        mapeamento = sugerir_mapeamento_colunas(colunas)
+
+        if not mapeamento.get("placa"):
+            raise Exception("Não consegui identificar a coluna de PLACA automaticamente.")
+
+        # 🔥 3. IMPORTAR DIRETO PRO BANCO
+        estatisticas = importar_clientes_dataframe(df, mapeamento)
+
+        # 🔥 4. SALVAR CONFIG DE SINCRONIZAÇÃO
+        conn = conectar()
+        c = conn.cursor()
+
+        agora_atual = agora_iso()
+
+        c.execute("""
+        INSERT INTO sincronizacoes_clientes (
+            nome, url, intervalo_minutos,
+            campo_placa, campo_nome, campo_telefone, campo_modelo, campo_cor,
+            ativo, ultimo_status, proximo_sync_em, criado_em, atualizado_em
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            nome or "Planilha automática",
+            url_normalizada,
+            intervalo_minutos,
+            mapeamento.get("placa"),
+            mapeamento.get("nome"),
+            mapeamento.get("telefone"),
+            mapeamento.get("modelo"),
+            mapeamento.get("cor"),
+            1,
+            "OK",
+            somar_minutos_iso(intervalo_minutos),
+            agora_atual,
+            agora_atual,
+        ))
+
+        conn.commit()
+        conn.close()
+
+        definir_feedback_clientes(
+            "sucesso",
+            f"Importação concluída: {resumir_importacao_clientes(estatisticas)}"
+        )
+
+    except Exception as e:
+        definir_feedback_clientes("erro", f"Erro ao importar: {e}")
+
+    return redirect("/clientes")
+
+@app.route("/clientes/sincronizacao/<int:sync_id>/executar", methods=["POST"])
+def executar_sync_clientes(sync_id):
+    if not session.get("logado"):
+        return redirect("/login")
+
+    sucesso, mensagem = executar_sincronizacao_cliente(sync_id)
+    definir_feedback_clientes("sucesso" if sucesso else "erro", mensagem)
+    return redirect("/clientes")
+
+@app.route("/clientes/sincronizacao/<int:sync_id>/alternar", methods=["POST"])
+def alternar_sync_clientes(sync_id):
+    if not session.get("logado"):
+        return redirect("/login")
 
     conn = conectar()
     c = conn.cursor()
+    c.execute("SELECT id, ativo, intervalo_minutos FROM sincronizacoes_clientes WHERE id=?", (sync_id,))
+    sync = c.fetchone()
 
-    for _, row in df.iterrows():
-        try:
-            placa = str(row.get("placa", "")).upper().strip()
-            nome = str(row.get("nome", "")).strip()
-            telefone = str(row.get("telefone", "")).strip()
-            modelo = str(row.get("modelo", "")).strip()
-            cor = str(row.get("cor", "")).strip()
+    if not sync:
+        conn.close()
+        definir_feedback_clientes("erro", "Sincronização não encontrada.")
+        return redirect("/clientes")
 
-            if not placa or placa == "nan":
-                continue
+    novo_ativo = 0 if sync["ativo"] else 1
+    novo_status = "AGENDADO" if novo_ativo else "PAUSADO"
+    proximo_sync = agora_iso() if novo_ativo else None
+    atualizado_em = agora_iso()
 
-            # 🔥 1. CRIA OU ATUALIZA CLIENTE
-            cliente_id = None
-
-            if telefone:
-                c.execute("SELECT id FROM clientes WHERE telefone=?", (telefone,))
-                cliente = c.fetchone()
-
-                if cliente:
-                    cliente_id = cliente["id"]
-
-                    # atualiza nome se mudou
-                    c.execute("""
-                        UPDATE clientes SET nome=? WHERE id=?
-                    """, (nome, cliente_id))
-                else:
-                    c.execute("""
-                        INSERT INTO clientes (nome, telefone)
-                        VALUES (?, ?)
-                    """, (nome, telefone))
-
-                    cliente_id = c.lastrowid
-
-            # 🔥 2. VEÍCULO
-            c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
-            veiculo = c.fetchone()
-
-            if veiculo:
-                c.execute("""
-                    UPDATE veiculos 
-                    SET modelo=?, cor=?, cliente_id=?
-                    WHERE placa=?
-                """, (modelo, cor, cliente_id, placa))
-            else:
-                c.execute("""
-                    INSERT INTO veiculos (placa, modelo, cor, cliente_id)
-                    VALUES (?, ?, ?, ?)
-                """, (placa, modelo, cor, cliente_id))
-
-        except Exception as e:
-            print("Erro linha:", e)
-
+    c.execute("""
+        UPDATE sincronizacoes_clientes
+        SET ativo=?, ultimo_status=?, proximo_sync_em=?, atualizado_em=?
+        WHERE id=?
+    """, (novo_ativo, novo_status, proximo_sync, atualizado_em, sync_id))
     conn.commit()
     conn.close()
 
-    return redirect("/clientes?importado=1")
+    definir_feedback_clientes(
+        "sucesso",
+        "Sincronização ativada." if novo_ativo else "Sincronização pausada."
+    )
+    return redirect("/clientes")
+
+@app.route("/clientes/sincronizacao/<int:sync_id>/excluir", methods=["POST"])
+def excluir_sync_clientes(sync_id):
+    if not session.get("logado"):
+        return redirect("/login")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("DELETE FROM sincronizacoes_clientes WHERE id=?", (sync_id,))
+    conn.commit()
+    conn.close()
+
+    definir_feedback_clientes("sucesso", "Sincronização removida.")
+    return redirect("/clientes")
 
 @app.route("/cadastrar", methods=["POST"])
 def cadastrar():
@@ -996,128 +1731,15 @@ def painel():
     return render_template("painel.html", servicos=servicos)
 
 
-@app.route("/preview_importacao", methods=["POST"])
-def preview_importacao():
-    import pandas as pd
-
-    arquivo = request.files.get("arquivo")
-
-    if not arquivo:
-        return "Nenhum arquivo enviado"
-
-    if arquivo.filename.endswith(".csv"):
-        df = pd.read_csv(arquivo)
-    else:
-        df = pd.read_excel(arquivo)
-
-    df.columns = df.columns.str.lower()
-
-    # salva temporário na sessão
-    session["preview_dados"] = df.to_dict(orient="records")
-    session["preview_colunas"] = list(df.columns)
-
-    return render_template(
-        "preview_importacao.html",
-        colunas=df.columns,
-        dados=df.head(10).to_dict(orient="records")  # só preview
-    )
-
-@app.route("/confirmar_importacao", methods=["POST"])
-def confirmar_importacao():
-    dados = session.get("preview_dados")
-
-    placa_col = request.form.get("placa")
-    nome_col = request.form.get("nome")
-    telefone_col = request.form.get("telefone")
-    modelo_col = request.form.get("modelo")
-    cor_col = request.form.get("cor")
-
-    conn = conectar()
-    c = conn.cursor()
-
-    for row in dados:
-        placa = str(row.get(placa_col, "")).upper().strip()
-
-        if not placa:
-            continue
-
-        nome = row.get(nome_col, "")
-        telefone = row.get(telefone_col, "")
-        modelo = row.get(modelo_col, "")
-        cor = row.get(cor_col, "")
-
-        # cliente
-        c.execute("SELECT id FROM clientes WHERE telefone=?", (telefone,))
-        cliente = c.fetchone()
-
-        if cliente:
-            cliente_id = cliente["id"]
-
-            c.execute("""
-                UPDATE clientes 
-                SET nome=? 
-                WHERE id=?
-            """, (nome, cliente_id))
-        else:
-            c.execute("""
-                INSERT INTO clientes (nome, telefone)
-                VALUES (?, ?)
-            """, (nome, telefone))
-            cliente_id = c.lastrowid
-
-        # 🔥 verifica se veiculo existe
-        c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
-        existe = c.fetchone()
-
-        if existe:
-            c.execute("""
-                UPDATE veiculos
-                SET modelo=?, cor=?, cliente_id=?
-                WHERE placa=?
-            """, (modelo, cor, cliente_id, placa))
-        else:
-           c.execute("""
-               INSERT INTO veiculos (placa, modelo, cor, cliente_id)
-               VALUES (?, ?, ?, ?)
-           """, (placa, modelo, cor, cliente_id))
-
-    conn.commit()
-    conn.close()
-
-    return redirect("/clientes")
-
 @app.route("/clientes", methods=["GET", "POST"])
 def clientes():
     if not session.get("logado"):
         return redirect("/login")
 
-    limpar = request.args.get("limpar")
+    limpar = bool(request.args.get("limpar"))
+    busca = (request.form.get("busca") or request.args.get("busca") or "").strip()
 
-    importado = request.args.get("importado")
-
-    conn = conectar()
-    c = conn.cursor()
-
-    busca = request.form.get("busca", "")
-
-    busca = request.form.get("busca", "")
-
-    if limpar:
-        clientes = []
-    else:
-        if busca:
-            c.execute("""
-                SELECT * FROM veiculos 
-                WHERE placa LIKE ? OR modelo LIKE ?
-            """, (f"%{busca}%", f"%{busca}%"))
-        else:
-            c.execute("SELECT * FROM veiculos ORDER BY id DESC")
-
-        clientes = c.fetchall()
-
-    conn.close()
-
-    return render_template("clientes.html", clientes=clientes)
+    return renderizar_pagina_clientes(busca=busca, limpar=limpar)
 
 @app.route("/editar_cliente", methods=["POST"])
 def editar_cliente():
@@ -1125,6 +1747,7 @@ def editar_cliente():
         return redirect("/login")
 
     data = request.form
+    origem = data.get("origem")
 
     conn = conectar()
     c = conn.cursor()
@@ -1169,6 +1792,9 @@ def editar_cliente():
 
     conn.commit()
     conn.close()
+
+    if origem == "clientes":
+        return redirect("/clientes")
 
     return redirect(f"/?placa={placa}")
 
