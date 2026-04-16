@@ -212,7 +212,7 @@ if ("serviceWorker" in navigator) {
             <div>
                 <p class="brand-kicker">Wagen Estetica</p>
                 <h1 class="page-title">Clientes</h1>
-                <p class="page-subtitle">Sincronize planilhas por link, escolha intervalo de atualização e defina quais colunas entram no banco.</p>
+                <p class="page-subtitle">Sincronize planilhas por link, ou localmente(Melhor Escolha), escolha intervalo de atualização.</p>
             </div>
         </div>
 
@@ -232,6 +232,11 @@ if ("serviceWorker" in navigator) {
             <button>Buscar</button>
         </form>
     </div>
+<div style="text-align: center; margin-top: 20px;">
+    <a href="/clientes/importar-local">
+        <button>Importar Planilha Local</button>
+    </a>
+</div>
 
     {% if feedback %}
     <div class="feedback-banner feedback-banner--{{feedback.tipo}} top-spacing">
