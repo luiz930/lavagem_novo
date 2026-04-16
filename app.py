@@ -4,6 +4,8 @@ import sqlite3
 from zoneinfo import ZoneInfo
 import os
 import time
+import hashlib
+from threading import Thread
 from io import BytesIO
 from threading import Lock, Thread
 import unicodedata
@@ -128,39 +130,65 @@ def conectar():
     conn.row_factory = sqlite3.Row  # 🔥 ESSENCIAL
     return conn
 
-def init_db():
+def salvar_notificacao(mensagem, tipo="info"):
+    try:
+        conn = conectar()
+        c = conn.cursor()
+
+        c.execute("""
+            INSERT INTO notificacoes (mensagem, tipo, criada_em)
+            VALUES (?, ?, ?)
+        """, (mensagem, tipo, agora_iso()))
+
+        conn.commit()
+
+    except Exception as e:
+        print("ERRO AO SALVAR NOTIFICACAO:", e)
+
+    finally:
+        try:
+            conn.close()
+        except:
+            pass
+
+def atualizar_banco():
     conn = conectar()
     c = conn.cursor()
 
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS usuarios (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    usuario TEXT UNIQUE,
-    senha TEXT
-    )
-    """)
+    try:
+        c.execute("ALTER TABLE sincronizacoes_clientes ADD COLUMN ultimo_hash TEXT")
+    except:
+        pass
 
-    # 🔥 CLIENTES
+    try:
+        c.execute("ALTER TABLE sincronizacoes_clientes ADD COLUMN colunas_ultima_sync TEXT")
+    except:
+        pass
+
+    conn.commit()
+    conn.close()
+
+def init_db():
+    conn = conectar()
+    c = conn.cursor()
+    atualizar_banco()
+
+def criar_todas_tabelas():
+    conn = sqlite3.connect("database_v2.db")
+    c = conn.cursor()
+
+    # 🔔 NOTIFICAÇÕES
     c.execute("""
-    CREATE TABLE IF NOT EXISTS clientes (
+    CREATE TABLE IF NOT EXISTS notificacoes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL,
-        telefone TEXT
+        mensagem TEXT,
+        tipo TEXT,
+        lida INTEGER DEFAULT 0,
+        criada_em TEXT
     )
     """)
 
-    # 🔥 VEÍCULOS
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS veiculos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        placa TEXT UNIQUE NOT NULL,
-        modelo TEXT,
-        cor TEXT,
-        cliente_id INTEGER,
-        FOREIGN KEY(cliente_id) REFERENCES clientes(id)
-    )
-    """)
-
+    # 🔄 SINCRONIZAÇÕES
     c.execute("""
     CREATE TABLE IF NOT EXISTS sincronizacoes_clientes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -181,6 +209,75 @@ def init_db():
         atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
+
+    conn.commit()
+    conn.close()
+
+    # 🔐 USUÁRIOS
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS usuarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario TEXT UNIQUE,
+        senha TEXT
+    )
+    """)
+
+    # 👤 CLIENTES
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS clientes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        telefone TEXT
+    )
+    """)
+
+    # 🚗 VEÍCULOS
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS veiculos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        placa TEXT UNIQUE NOT NULL,
+        modelo TEXT,
+        cor TEXT,
+        cliente_id INTEGER,
+        FOREIGN KEY(cliente_id) REFERENCES clientes(id)
+    )
+    """)
+
+    # 🔔 NOTIFICAÇÕES
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS notificacoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        mensagem TEXT,
+        tipo TEXT,
+        lida INTEGER DEFAULT 0,
+        criada_em TEXT
+    )
+    """)
+
+    # 🔄 SINCRONIZAÇÕES
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS sincronizacoes_clientes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT,
+        url TEXT NOT NULL,
+        intervalo_minutos INTEGER NOT NULL DEFAULT 60,
+        campo_placa TEXT NOT NULL,
+        campo_nome TEXT,
+        campo_telefone TEXT,
+        campo_modelo TEXT,
+        campo_cor TEXT,
+        ativo INTEGER NOT NULL DEFAULT 1,
+        ultimo_sync_em TEXT,
+        proximo_sync_em TEXT,
+        ultimo_status TEXT,
+        ultima_mensagem TEXT,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    conn.commit()
+    conn.close()
 
     # 🔥 TIPOS DE SERVIÇO
     c.execute("""
@@ -282,6 +379,15 @@ def definir_feedback_clientes(tipo, mensagem):
 def limpar_preview_sincronizacao():
     session.pop("clientes_sync_preview", None)
 
+def detectar_novas_colunas(colunas_atuais, colunas_antigas_str):
+    if not colunas_antigas_str:
+        return []
+
+    colunas_antigas = colunas_antigas_str.split(",")
+
+    novas = [c for c in colunas_atuais if c not in colunas_antigas]
+    return novas
+
 def normalizar_texto_comparacao(valor):
     valor = str(valor or "").strip().lower()
     valor = unicodedata.normalize("NFKD", valor)
@@ -304,6 +410,42 @@ def normalizar_link_planilha(url):
 
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
 
+def corrigir_link_google_sheets(url):
+    try:
+        # ❌ BLOQUEIA LINK ERRADO (googleusercontent)
+        if "googleusercontent.com" in url:
+            raise Exception("Link inválido. Use o link original do Google Sheets (docs.google.com).")
+
+        # ✅ TRATA LINK DO GOOGLE SHEETS
+        if "docs.google.com" in url and "/spreadsheets/d/" in url:
+
+            # extrair ID da planilha
+            partes = url.split("/d/")
+            if len(partes) < 2:
+                raise Exception("Não foi possível identificar o ID da planilha.")
+
+            resto = partes[1]
+            sheet_id = resto.split("/")[0]
+
+            # pegar gid (aba)
+            gid = "0"
+            if "gid=" in url:
+                gid = url.split("gid=")[-1].split("&")[0]
+
+            # montar link final LIMPO
+            novo_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+
+            return novo_url
+
+        # ❌ NÃO É GOOGLE SHEETS
+        raise Exception("Link não suportado. Use uma planilha do Google Sheets.")
+
+    except Exception as e:
+        raise Exception(f"Erro ao processar link: {e}")
+
+    except Exception:
+        return url
+
 def adicionar_parametros_url(url, **novos_parametros):
     parsed = urlparse(url)
     query = parse_qs(parsed.query, keep_blank_values=True)
@@ -314,6 +456,7 @@ def adicionar_parametros_url(url, **novos_parametros):
     return urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
 
 def gerar_urls_candidatas_planilha(url):
+    url = corrigir_link_google_sheets(url)
     base = normalizar_link_planilha(url)
     candidatas = [base]
     parsed = urlparse(base)
@@ -636,18 +779,84 @@ def executar_sincronizacao_cliente(sync_id):
         return False, "Sincronização não encontrada."
 
     try:
-        df, url_normalizada = ler_dataframe_link_planilha(sync["url"])
+        resposta = None
+        url_usada = None
+        ultimo_erro = None
+
+        # 🔽 BAIXAR PLANILHA (CORRIGIDO)
+        url_base = corrigir_link_google_sheets(sync["url"])
+
+        try:
+            r = requests.get(url_base, timeout=20)
+            r.raise_for_status()
+            # 🔍 DEBUG (COLOCA AQUI)
+            print("URL FINAL:", url_base)
+            print("STATUS:", r.status_code)
+            print("CONTENT TYPE:", r.headers.get("content-type"))
+            print("INICIO CONTEUDO:", r.text[:200])
+            print("LINK REAL USADO:", sync["url"])
+
+            conteudo_texto = r.content.decode("utf-8", errors="ignore")
+
+            if parece_html(conteudo_texto[:200]):
+                raise Exception("Planilha retornou HTML ao invés de CSV")
+
+            resposta = r
+            url_usada = url_base
+
+        except Exception as e:
+            raise Exception(f"Erro ao acessar planilha: {e}")
+
+        # 🔥 HASH (detectar mudança de conteúdo)
+        hash_atual = hashlib.md5(resposta.content).hexdigest()
+
+        if sync["ultimo_hash"] == hash_atual:
+            return True, "Sem alterações na planilha."
+
+        # 🔽 CONVERTER PARA DATAFRAME
+        conteudo = BytesIO(resposta.content)
+
+        try:
+            if "csv" in (resposta.headers.get("content-type") or "").lower():
+                df = ler_csv_flexivel(resposta.content)
+            else:
+                df = pd.read_excel(conteudo)
+        except Exception:
+            conteudo.seek(0)
+            df = ler_csv_flexivel(resposta.content)
+
+        df = df.fillna("")
+        df.columns = [str(col).strip().lower() for col in df.columns]
+
+        # 🔥 DETECTAR NOVAS COLUNAS
+        colunas_atuais = list(df.columns)
+        colunas_str = ",".join(colunas_atuais)
+
+        novas_colunas = detectar_novas_colunas(
+            colunas_atuais,
+            sync["colunas_ultima_sync"]
+        )
+
+        # 🔽 MAPEAMENTO
         mapeamento = {
             campo["key"]: sync[f"campo_{campo['key']}"] or ""
             for campo in CAMPOS_SINCRONIZACAO_CLIENTES
         }
 
+        # 🔽 IMPORTAÇÃO
         estatisticas = importar_clientes_dataframe(df, mapeamento)
         mensagem = resumir_importacao_clientes(estatisticas)
+
+        # 🔥 SE DETECTOU NOVA COLUNA
+        if novas_colunas:
+            mensagem += f" | Novas colunas detectadas: {', '.join(novas_colunas)}"
+
         agora_atual = agora_iso()
 
+        # 🔽 SALVAR RESULTADO + HASH + COLUNAS
         conn = conectar()
         c = conn.cursor()
+
         c.execute("""
             UPDATE sincronizacoes_clientes
             SET url=?,
@@ -655,27 +864,36 @@ def executar_sincronizacao_cliente(sync_id):
                 proximo_sync_em=?,
                 ultimo_status=?,
                 ultima_mensagem=?,
+                ultimo_hash=?,
+                colunas_ultima_sync=?,
                 atualizado_em=?
             WHERE id=?
         """, (
-            url_normalizada,
+            url_usada,
             agora_atual,
             somar_minutos_iso(sync["intervalo_minutos"]),
             "OK",
             mensagem,
+            hash_atual,
+            colunas_str,
             agora_atual,
             sync_id
         ))
+
         conn.commit()
         conn.close()
 
+        salvar_notificacao(mensagem, "sucesso")
+
         return True, mensagem
+
     except Exception as e:
         mensagem = f"Erro ao sincronizar: {e}"
         agora_atual = agora_iso()
 
         conn = conectar()
         c = conn.cursor()
+
         c.execute("""
             UPDATE sincronizacoes_clientes
             SET ultimo_status=?,
@@ -683,10 +901,52 @@ def executar_sincronizacao_cliente(sync_id):
                 proximo_sync_em=?,
                 atualizado_em=?
             WHERE id=?
-        """, ("ERRO", mensagem, somar_minutos_iso(sync["intervalo_minutos"]), agora_atual, sync_id))
+        """, (
+            "ERRO",
+            mensagem,
+            somar_minutos_iso(sync["intervalo_minutos"]),
+            agora_atual,
+            sync_id
+        ))
+
         conn.commit()
         conn.close()
 
+        salvar_notificacao(mensagem, "erro")
+
+        return False, mensagem
+
+def importar_planilha_local():
+    try:
+        caminho = os.path.join("static", "CONTROLE LAVAGENS.xlsx")
+
+        if not os.path.exists(caminho):
+            return False, "Arquivo clientes.csv não encontrado."
+
+        df = pd.read_excel(caminho)
+
+        df = df.fillna("")
+        df.columns = [str(col).strip().lower() for col in df.columns]
+
+        # 🔽 MAPEAMENTO SIMPLES
+        mapeamento = {
+            "placa": "placa",
+            "nome": "nome",
+            "telefone": "telefone",
+            "modelo": "modelo",
+            "cor": "cor"
+        }
+
+        estatisticas = importar_clientes_dataframe(df, mapeamento)
+        mensagem = resumir_importacao_clientes(estatisticas)
+
+        salvar_notificacao(mensagem, "sucesso")
+
+        return True, mensagem
+
+    except Exception as e:
+        mensagem = f"Erro ao importar planilha local: {e}"
+        salvar_notificacao(mensagem, "erro")
         return False, mensagem
 
 def sincronizar_fontes_pendentes():
@@ -732,6 +992,13 @@ def iniciar_worker_sincronizacao():
 
     sync_worker_iniciado = True
     Thread(target=loop_worker_sincronizacao, daemon=True).start()
+
+def loop_importacao():
+    while True:
+        importar_planilha_local()
+        time.sleep(60)  # atualiza a cada 1 minuto
+
+Thread(target=loop_importacao, daemon=True).start()
 
 def carregar_contexto_clientes(busca="", limpar=False):
     conn = conectar()
@@ -850,6 +1117,44 @@ def api_clima():
         print("ERRO CLIMA:", e)
         return {"erro": str(e)}
 
+@app.route("/clientes/importar-local")
+def importar_local():
+    sucesso, mensagem = importar_planilha_local()
+    definir_feedback_clientes("sucesso" if sucesso else "erro", mensagem)
+    return redirect("/clientes")
+
+
+@app.route("/api/notificacoes")
+def api_notificacoes():
+    if not session.get("logado"):
+        return jsonify([])
+
+    conn = conectar()
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT * FROM notificacoes
+        ORDER BY id DESC
+        LIMIT 20
+    """)
+
+    dados = c.fetchall()
+    conn.close()
+
+    return jsonify([dict(row) for row in dados])
+
+@app.route("/api/notificacoes/lida/<int:id>", methods=["POST"])
+def marcar_notificacao_lida(id):
+    conn = conectar()
+    c = conn.cursor()
+
+    c.execute("UPDATE notificacoes SET lida=1 WHERE id=?", (id,))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "ok"})
+
 @app.route("/api/hud")
 def api_hud():
     if not session.get("logado"):
@@ -911,6 +1216,32 @@ def api_hud():
         "atrasados": atrasados,
         "ticket": round(ticket, 2)
     }
+
+@app.route("/status_sync")
+def status_sync():
+    if not session.get("logado"):
+        return jsonify({"status": "erro"})
+
+    conn = conectar()
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT ultima_mensagem, ultimo_status
+        FROM sincronizacoes_clientes
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        return jsonify({"status": "vazio"})
+
+    return jsonify({
+        "status": row[1],
+        "mensagem": row[0]
+    })
 
 @app.route("/editar_servico_inline/<int:id>", methods=["POST"])
 def editar_servico_inline(id):
@@ -1183,6 +1514,7 @@ def preview_sincronizacao_clientes():
         return redirect("/clientes")
 
     try:
+        url = corrigir_link_google_sheets(url)
         df, url_normalizada = ler_dataframe_link_planilha(url)
         colunas = list(df.columns)
         mapeamento_sugerido = sugerir_mapeamento_colunas(colunas)
@@ -1797,6 +2129,30 @@ def editar_cliente():
         return redirect("/clientes")
 
     return redirect(f"/?placa={placa}")
+
+# 🔄 LOOP AUTOMÁTICO (COLOCA AQUI)
+import time
+from threading import Thread
+
+def loop_importacao():
+    while True:
+        try:
+            print("🔄 Verificando planilha...")
+
+            sucesso, msg = importar_planilha_local()
+
+            if sucesso:
+                print("✅ Atualizado:", msg)
+            else:
+                print("⚠️:", msg)
+
+        except Exception as e:
+            print("ERRO LOOP:", e)
+
+        time.sleep(60)
+
+# 🔥 inicia thread
+Thread(target=loop_importacao, daemon=True).start()
 
 if __name__ == "__main__":
     import os
