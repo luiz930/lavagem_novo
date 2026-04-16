@@ -19,6 +19,27 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 from datetime import datetime, date, time as dt_time
 
+def ler_planilha_sheety(url):
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+
+        data = response.json()
+
+        # 🔥 pega a lista principal
+        chave = list(data.keys())[0]
+        lista = data[chave]
+
+        df = pd.DataFrame(lista)
+
+        # normaliza colunas
+        df.columns = [str(col).strip().lower() for col in df.columns]
+
+        return df
+
+    except Exception as e:
+        raise Exception(f"Erro ao ler Sheety: {e}")
+
 def sanitizar_para_json(obj):
     if isinstance(obj, datetime):
         return obj.strftime("%Y-%m-%d %H:%M:%S")
@@ -587,7 +608,13 @@ def sugerir_mapeamento_colunas(colunas):
     return sugestao
 
 def ler_dataframe_link_planilha(url):
+
+    # 🔥 DETECTAR SHEETY
+    if "sheety.co" in url:
+        df = ler_planilha_sheety(url)
+        return df, url
     if not url:
+
         raise ValueError("Informe um link de planilha válido.")
 
     ultimo_erro = None
@@ -779,63 +806,56 @@ def executar_sincronizacao_cliente(sync_id):
         return False, "Sincronização não encontrada."
 
     try:
-        resposta = None
-        url_usada = None
-        ultimo_erro = None
+        url_base = sync["url"]
 
-        # 🔽 BAIXAR PLANILHA (CORRIGIDO)
-        url_base = corrigir_link_google_sheets(sync["url"])
+        # 🔥 SHEETY (FLUXO DIRETO)
+        if "sheety.co" in url_base:
+            df = ler_planilha_sheety(url_base)
 
-        try:
-            r = requests.get(url_base, timeout=20)
-            r.raise_for_status()
-            # 🔍 DEBUG (COLOCA AQUI)
-            print("URL FINAL:", url_base)
-            print("STATUS:", r.status_code)
-            print("CONTENT TYPE:", r.headers.get("content-type"))
-            print("INICIO CONTEUDO:", r.text[:200])
-            print("LINK REAL USADO:", sync["url"])
+            print("🔥 DADOS SHEETY:")
+            print(df.tail(5))
 
-            conteudo_texto = r.content.decode("utf-8", errors="ignore")
-
-            if parece_html(conteudo_texto[:200]):
-                raise Exception("Planilha retornou HTML ao invés de CSV")
-
-            resposta = r
+            # força atualização sempre
+            hash_atual = str(time.time())
             url_usada = url_base
 
-        except Exception as e:
-            raise Exception(f"Erro ao acessar planilha: {e}")
+        # 🔽 PLANILHA NORMAL (GOOGLE, CSV, EXCEL)
+        else:
+            url_base = corrigir_link_google_sheets(url_base)
 
-        # 🔥 HASH (detectar mudança de conteúdo)
-        hash_atual = hashlib.md5(resposta.content).hexdigest()
+            url_base = url_base + "?_=" + str(time.time())
+            resposta = requests.get(url_base, timeout=20)
+            resposta.raise_for_status()
 
-        if sync["ultimo_hash"] == hash_atual:
-            return True, "Sem alterações na planilha."
+            print("URL FINAL:", url_base)
+            print("STATUS:", resposta.status_code)
+            print("CONTENT TYPE:", resposta.headers.get("content-type"))
 
-        # 🔽 CONVERTER PARA DATAFRAME
-        conteudo = BytesIO(resposta.content)
+            hash_atual = hashlib.md5(resposta.content).hexdigest()
 
-        try:
-            if "csv" in (resposta.headers.get("content-type") or "").lower():
+            conteudo = BytesIO(resposta.content)
+
+            try:
+                if "csv" in (resposta.headers.get("content-type") or "").lower():
+                    df = ler_csv_flexivel(resposta.content)
+                else:
+                    df = pd.read_excel(conteudo)
+            except:
+                conteudo.seek(0)
                 df = ler_csv_flexivel(resposta.content)
-            else:
-                df = pd.read_excel(conteudo)
-        except Exception:
-            conteudo.seek(0)
-            df = ler_csv_flexivel(resposta.content)
 
-        df = df.fillna("")
-        df.columns = [str(col).strip().lower() for col in df.columns]
+            df = df.fillna("")
+            df.columns = [str(col).strip().lower() for col in df.columns]
 
-        # 🔥 DETECTAR NOVAS COLUNAS
-        colunas_atuais = list(df.columns)
-        colunas_str = ",".join(colunas_atuais)
+            print("🔥 DADOS PLANILHA:")
+            print(df.tail(5))
 
-        novas_colunas = detectar_novas_colunas(
-            colunas_atuais,
-            sync["colunas_ultima_sync"]
-        )
+            url_usada = url_base
+
+        # 🔥 SE NÃO FOR SHEETY, VERIFICA HASH
+        if "sheety.co" not in sync["url"]:
+            if sync["ultimo_hash"] == hash_atual:
+                return True, "Sem alterações na planilha."
 
         # 🔽 MAPEAMENTO
         mapeamento = {
@@ -847,13 +867,9 @@ def executar_sincronizacao_cliente(sync_id):
         estatisticas = importar_clientes_dataframe(df, mapeamento)
         mensagem = resumir_importacao_clientes(estatisticas)
 
-        # 🔥 SE DETECTOU NOVA COLUNA
-        if novas_colunas:
-            mensagem += f" | Novas colunas detectadas: {', '.join(novas_colunas)}"
-
         agora_atual = agora_iso()
 
-        # 🔽 SALVAR RESULTADO + HASH + COLUNAS
+        # 🔽 SALVAR RESULTADO
         conn = conectar()
         c = conn.cursor()
 
@@ -865,7 +881,6 @@ def executar_sincronizacao_cliente(sync_id):
                 ultimo_status=?,
                 ultima_mensagem=?,
                 ultimo_hash=?,
-                colunas_ultima_sync=?,
                 atualizado_em=?
             WHERE id=?
         """, (
@@ -875,7 +890,6 @@ def executar_sincronizacao_cliente(sync_id):
             "OK",
             mensagem,
             hash_atual,
-            colunas_str,
             agora_atual,
             sync_id
         ))
@@ -889,7 +903,6 @@ def executar_sincronizacao_cliente(sync_id):
 
     except Exception as e:
         mensagem = f"Erro ao sincronizar: {e}"
-        agora_atual = agora_iso()
 
         conn = conectar()
         c = conn.cursor()
@@ -905,7 +918,7 @@ def executar_sincronizacao_cliente(sync_id):
             "ERRO",
             mensagem,
             somar_minutos_iso(sync["intervalo_minutos"]),
-            agora_atual,
+            agora_iso(),
             sync_id
         ))
 
@@ -996,7 +1009,7 @@ def iniciar_worker_sincronizacao():
 def loop_importacao():
     while True:
         importar_planilha_local()
-        time.sleep(60)  # atualiza a cada 1 minuto
+        time.sleep(3600)  # atualiza a cada 1 minuto
 
 Thread(target=loop_importacao, daemon=True).start()
 
