@@ -347,7 +347,7 @@ if ("serviceWorker" in navigator) {
     <div class="top-spacing">
         <h2 class="section-title">Clientes e veiculos</h2>
 
-        <div class="clientes-grid">
+        <div class="clientes-grid" id="clientesContainer">
             {% for c in clientes %}
             <div class="page-card">
                 <form method="POST" action="/editar_cliente" class="cliente-form">
@@ -391,6 +391,64 @@ if ("serviceWorker" in navigator) {
         </div>
     </div>
 </div>
+
+<script>
+async function atualizarClientesSemReload() {
+    try {
+        const res = await fetch(window.location.href);
+        const html = await res.text();
+
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, "text/html");
+
+        const novo = doc.getElementById("clientesContainer");
+        const atual = document.getElementById("clientesContainer");
+
+        if (novo && atual) {
+            atual.innerHTML = novo.innerHTML;
+        }
+
+        console.log("🔄 Clientes atualizados");
+
+    } catch (e) {
+        console.log("Erro ao atualizar:", e);
+    }
+}
+</script>
+
+<script>
+let ultimaMensagem = "";
+
+async function verificarSync() {
+    try {
+        const res = await fetch("/status_sync");
+        const data = await res.json();
+
+        if (data.mensagem && data.mensagem !== ultimaMensagem) {
+
+            ultimaMensagem = data.mensagem;
+
+            if (data.status === "OK") {
+                mostrarPopup(data.mensagem, "sucesso");
+
+                setTimeout(() => {
+                    atualizarClientesSemReload();
+                }, 1000);
+            }
+
+            if (data.status === "ERRO") {
+                mostrarPopup(data.mensagem, "erro");
+            }
+        }
+
+    } catch (e) {
+        console.log("Erro ao verificar sync");
+    }
+}
+
+// 🔥 roda automático
+setInterval(verificarSync, 10000);
+</script>
 
 </body>
 </html>
