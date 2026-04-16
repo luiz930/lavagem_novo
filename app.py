@@ -1239,21 +1239,31 @@ def status_sync():
     c = conn.cursor()
 
     c.execute("""
-        SELECT ultima_mensagem, ultimo_status
+        SELECT id, ultima_mensagem, ultimo_status
         FROM sincronizacoes_clientes
         ORDER BY id DESC
         LIMIT 1
     """)
 
     row = c.fetchone()
-    conn.close()
 
     if not row:
+        conn.close()
         return jsonify({"status": "vazio"})
 
+    # 🔥 limpa a mensagem depois de ler (ANTI-SPAM)
+    c.execute("""
+        UPDATE sincronizacoes_clientes
+        SET ultima_mensagem=NULL
+        WHERE id=?
+    """, (row["id"],))
+
+    conn.commit()
+    conn.close()
+
     return jsonify({
-        "status": row[1],
-        "mensagem": row[0]
+        "status": row["ultimo_status"],
+        "mensagem": row["ultima_mensagem"]
     })
 
 @app.route("/editar_servico_inline/<int:id>", methods=["POST"])
@@ -2018,6 +2028,8 @@ def cadastrar_pneu():
     conn.close()
 
     return render_template("pneu.html", produtos=lista)
+
+
 
 @app.route("/painel")
 def painel():

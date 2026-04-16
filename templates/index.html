@@ -581,7 +581,11 @@ input[type="file"] {
         🔔 <span id="badge">0</span>
     </button>
 
-    <div id="dropdown-notificacoes" class="hidden"></div>
+    <div id="dropdown-notificacoes" class="hidden">
+    <button onclick="limparNotificacoes()" style="width:100%; margin-bottom:10px;">
+        🧹 Limpar notificações
+    </button>
+</div>
 </div>
 
 <!-- MAIN -->
@@ -811,15 +815,24 @@ function abrirServico() {
 </script>
 
 <script>
+
+let ultimaMensagem = "";
+
 async function verificarSync() {
     try {
         const res = await fetch("/status_sync");
         const data = await res.json();
 
-        if (data.status === "OK") {
-            mostrarPopup(data.mensagem, "sucesso");
-        } else if (data.status === "ERRO") {
-            mostrarPopup(data.mensagem, "erro");
+        // 🔥 evita repetir a mesma notificação
+        if (data.mensagem && data.mensagem !== ultimaMensagem) {
+
+            ultimaMensagem = data.mensagem;
+
+            if (data.status === "OK") {
+                mostrarPopup(data.mensagem, "sucesso");
+            } else if (data.status === "ERRO") {
+                mostrarPopup(data.mensagem, "erro");
+            }
         }
 
     } catch (e) {
@@ -863,7 +876,7 @@ async function carregarNotificacoes() {
 
     let naoLidas = 0;
 
-    dados.forEach(n => {
+    dados.slice(0, 2).forEach(n => {
         if (n.lida === 0) naoLidas++;
 
         const div = document.createElement("div");
@@ -1004,5 +1017,18 @@ atualizarClima();
 atualizarHUD();
 atualizarRelogio();
 </script>
+
+<script>
+async function limparNotificacoes() {
+    if (!confirm("Deseja limpar todas as notificações?")) return;
+
+    await fetch("/api/notificacoes/limpar", {
+        method: "POST"
+    });
+
+    carregarNotificacoes();
+}
+</script>
+
 </body>
 </html>
