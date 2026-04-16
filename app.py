@@ -111,7 +111,7 @@ def arquivo_permitido(filename):
 app = Flask(__name__)
 app.secret_key = "wagen_super_segura_123"
 
-APP_VERSION = "Versão: 0.1.7-alpha"
+APP_VERSION = "Versão: 0.2.5-alpha"
 
 CAMPOS_SINCRONIZACAO_CLIENTES = [
     {"key": "placa", "label": "Placa", "required": True},
