@@ -14,6 +14,10 @@ import bcrypt  # 👈 se já adicionou
 import pandas as pd
 import requests
 from werkzeug.utils import secure_filename
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from flask import send_file
+
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -1081,6 +1085,135 @@ def preparar_sincronizacoes():
 
     if session.get("logado"):
         sincronizar_fontes_pendentes()
+
+@app.route("/api/cliente/<placa>")
+def buscar_cliente_api(placa):
+    if not session.get("logado"):
+        return {"erro": "nao autorizado"}
+
+    conn = conectar()
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT 
+            veiculos.placa,
+            veiculos.modelo,
+            clientes.nome,
+            clientes.telefone
+        FROM veiculos
+        LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
+        WHERE veiculos.placa=?
+    """, (placa.upper(),))
+
+    dados = c.fetchone()
+    conn.close()
+
+    if not dados:
+        return {"encontrado": False}
+
+    return {
+        "encontrado": True,
+        "nome": dados["nome"],
+        "telefone": dados["telefone"],
+        "modelo": dados["modelo"],
+        "placa": dados["placa"]
+    }
+
+@app.route("/orcamento")
+def pagina_orcamento():
+    if not session.get("logado"):
+        return redirect("/login")
+
+    conn = conectar()
+    c = conn.cursor()
+
+    c.execute("SELECT nome, valor FROM tipos_servico")
+    servicos = c.fetchall()
+
+    conn.close()
+
+    return render_template("orcamento.html", servicos=servicos)
+
+@app.route("/gerar_orcamento", methods=["POST"])
+def gerar_orcamento():
+    if not session.get("logado"):
+        return redirect("/login")
+
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer)
+
+    styles = getSampleStyleSheet()
+    elementos = []
+
+    # 🔥 LOGO
+    try:
+        logo = Image("static/logo.jpg", width=120, height=60)
+        elementos.append(logo)
+    except:
+        pass
+
+    elementos.append(Spacer(1, 20))
+
+    # 🔥 DADOS
+    nome = request.form.get("nome")
+    telefone = request.form.get("telefone")
+    placa = request.form.get("placa")
+    modelo = request.form.get("modelo")
+    observacoes = request.form.get("observacoes")
+
+    elementos.append(Paragraph(f"<b>Cliente:</b> {nome}", styles["Normal"]))
+    elementos.append(Paragraph(f"<b>Telefone:</b> {telefone}", styles["Normal"]))
+    elementos.append(Paragraph(f"<b>Veículo:</b> {modelo} - {placa}", styles["Normal"]))
+
+    elementos.append(Spacer(1, 20))
+
+    # 🔥 TABELA
+    servicos = request.form.getlist("servico[]")
+    valores = request.form.getlist("valor[]")
+
+    dados_tabela = [["Serviço", "Valor (R$)"]]
+
+    total = 0
+
+    for s, v in zip(servicos, valores):
+        try:
+            valor = float(v)
+        except:
+            valor = 0
+
+        dados_tabela.append([s, f"{valor:.2f}"])
+        total += valor
+
+    dados_tabela.append(["TOTAL", f"{total:.2f}"])
+
+    tabela = Table(dados_tabela)
+
+    tabela.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.black),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+
+        ("BACKGROUND", (0,-1), (-1,-1), colors.lightgrey),
+
+        ("GRID", (0,0), (-1,-1), 1, colors.black),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+    ]))
+
+    elementos.append(tabela)
+
+    # 🔥 OBSERVAÇÕES
+    if observacoes:
+        elementos.append(Spacer(1, 20))
+        elementos.append(Paragraph("<b>Observações:</b>", styles["Normal"]))
+        elementos.append(Paragraph(observacoes, styles["Normal"]))
+
+    doc.build(elementos)
+    buffer.seek(0)
+
+    return send_file(buffer, as_attachment=True, download_name="orcamento.pdf", mimetype="application/pdf")
 
 @app.route("/api/clima")
 def api_clima():
