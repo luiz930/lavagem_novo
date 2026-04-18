@@ -17,11 +17,37 @@ from werkzeug.utils import secure_filename
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from flask import send_file
+from reportlab.lib.units import cm
+from reportlab.platypus import Flowable
+from reportlab.lib.utils import ImageReader
 
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 from datetime import datetime, date, time as dt_time
+
+class ImagemRedonda(Flowable):
+    def __init__(self, path, size=60):
+        Flowable.__init__(self)
+        self.img = ImageReader(path)
+        self.size = size
+
+    def draw(self):
+        c = self.canv
+
+        c.saveState()
+
+        # 🔥 cria caminho circular
+        path = c.beginPath()
+        path.circle(self.size/2, self.size/2, self.size/2)
+
+        # 🔥 aplica máscara corretamente
+        c.clipPath(path, stroke=0, fill=0)
+
+        # 🔥 desenha imagem dentro do círculo
+        c.drawImage(self.img, 0, 0, width=self.size, height=self.size)
+
+        c.restoreState()
 
 def ler_planilha_sheety(url):
     try:
@@ -1142,17 +1168,35 @@ def gerar_orcamento():
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.enums import TA_CENTER  # 🔥 ADICIONA ISSO
 
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer)
+    doc = SimpleDocTemplate(
+        buffer,
+        leftMargin=0,
+        rightMargin=0
+    )
 
     styles = getSampleStyleSheet()
+    style_centro = styles["Normal"]
+    style_centro.alignment = TA_CENTER
     elementos = []
 
     # 🔥 LOGO
     try:
-        logo = Image("static/logo.jpg", width=120, height=60)
-        elementos.append(logo)
+        logo = ImagemRedonda("static/logo.jpg", size=80)
+
+        tabela_logo = Table(
+            [[logo]],
+            colWidths=[500]  # 🔥 ESSENCIAL
+        )
+
+        tabela_logo.setStyle([
+            ("ALIGN", (0,0), (-1,-1), "LEFT")
+        ])
+
+        elementos.append(tabela_logo)
+
     except:
         pass
 
@@ -1165,9 +1209,9 @@ def gerar_orcamento():
     modelo = request.form.get("modelo")
     observacoes = request.form.get("observacoes")
 
-    elementos.append(Paragraph(f"<b>Cliente:</b> {nome}", styles["Normal"]))
-    elementos.append(Paragraph(f"<b>Telefone:</b> {telefone}", styles["Normal"]))
-    elementos.append(Paragraph(f"<b>Veículo:</b> {modelo} - {placa}", styles["Normal"]))
+    elementos.append(Paragraph(f"<b>Cliente:</b> {nome}", style_centro))
+    elementos.append(Paragraph(f"<b>Telefone:</b> {telefone}", style_centro))
+    elementos.append(Paragraph(f"<b>Veículo:</b> {modelo} - {placa}", style_centro))
 
     elementos.append(Spacer(1, 20))
 
@@ -1191,6 +1235,7 @@ def gerar_orcamento():
     dados_tabela.append(["TOTAL", f"{total:.2f}"])
 
     tabela = Table(dados_tabela)
+    tabela.hAlign = "CENTER"
 
     tabela.setStyle(TableStyle([
         ("BACKGROUND", (0,0), (-1,0), colors.black),
