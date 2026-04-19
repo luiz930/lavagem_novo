@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>{% block title %}{% endblock %}</title>
+
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#facc15">
+
+<link rel="icon" href="/static/favicon.jpg">
+<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+
+<link rel="stylesheet" href="/static/responsive.css">
+
+<script>
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/sw.js");
+}
+</script>
+
+<style>
+/* 🔥 SIDEBAR */
+.sidebar {
+    position: fixed;
+    top: 0;
+    left: -260px;
+    width: 250px;
+    height: 100%;
+    background: #111827;
+    border-right: 2px solid #facc15;
+    padding: 20px;
+    transition: 0.3s;
+    z-index: 2000;
+}
+
+.sidebar.show {
+    left: 0;
+}
+
+.sidebar a {
+    display: block;
+    margin: 10px 0;
+    text-decoration: none;
+}
+
+.sidebar button {
+    width: 100%;
+}
+
+/* 🔥 BOTÃO MENU */
+.menu-btn {
+    position: fixed;
+    top: 15px;
+    left: 15px;
+    z-index: 3000;
+    background: #facc15;
+}
+
+/* 🔥 OVERLAY */
+.overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.6);
+    display: none;
+    z-index: 1500;
+}
+
+.overlay.show {
+    display: block;
+}
+
+/* 🔥 AJUSTE DO CONTEÚDO */
+.main-content {
+    padding-left: 0;
+    transition: 0.3s;
+}
+
+.main-content.shift {
+    padding-left: 260px;
+}
+
+/* 🔥 RESPONSIVO GLOBAL */
+
+.responsive-main {
+    transition: 0.3s;
+}
+
+/* 📱 MOBILE */
+@media (max-width: 768px) {
+
+    .menu-btn {
+        width: 48px;
+        height: 48px;
+        font-size: 22px;
+    }
+
+    .page-header {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    .actions-row {
+        width: 100%;
+        flex-direction: column;
+    }
+
+    .actions-row button {
+        width: 100%;
+    }
+
+    .page-title {
+        font-size: 1.6rem;
+    }
+
+}
+
+/* 📲 TABLET */
+@media (max-width: 1024px) {
+
+    .page-shell {
+        padding: 0 10px;
+    }
+
+}
+
+/* 📱 SIDEBAR MOBILE */
+
+@media (max-width: 768px) {
+
+    .sidebar {
+        width: 80%;
+        left: -100%;
+    }
+
+    .sidebar.show {
+        left: 0;
+    }
+
+    .main-content.shift {
+        padding-left: 0;
+    }
+}
+
+/* 🔥 LOGIN SEM SIDEBAR */
+.no-sidebar {
+    padding-left: 0 !important;
+}
+
+</style>
+
+</head>
+
+<body class="responsive-page">
+
+{% if session.get("usuario") %}
+
+<button class="menu-btn" onclick="toggleMenu()">☰</button>
+
+<div id="sidebar" class="sidebar">
+
+    <h2>Wagen</h2>
+
+<a href="{{ url_for('index') }}"><button>🏠 Início</button></a>
+<a href="{{ url_for('clientes') }}"><button>👥 Clientes</button></a>
+<a href="{{ url_for('cadastrar_servico') }}"><button>🛠 Serviços</button></a>
+<a href="{{ url_for('painel') }}"><button>📊 Painel</button></a>
+<a href="{{ url_for('financeiro') }}"><button>💰 Financeiro</button></a>
+<a href="{{ url_for('pagina_orcamento') }}"><button>🧾 Orçamento</button></a>
+<a href="{{ url_for('cadastrar_pneu') }}"><button>🛞 Pneus</button></a>
+<a href="{{ url_for('clima') }}"><button>🌦 Clima</button></a>
+
+<a href="{{ url_for('logout') }}">
+    <button style="background:#dc2626;color:white;width:100%;">🚪 Sair</button>
+</a>
+    </div>
+
+</div>
+
+<div id="overlay" class="overlay" onclick="toggleMenu()"></div>
+
+{% endif %}
+
+
+<!-- 🔥 CONTEÚDO -->
+<div id="main" class="main-content responsive-main {% if session.get('usuario') %}{% else %}no-sidebar{% endif %}">
+
+<div class="page-shell page-shell--wide">
+
+    <div class="page-header">
+        <div class="brand-block">
+            <img src="/static/logo.jpg" class="brand-avatar">
+            <div>
+                <p class="brand-kicker">Wagen Estetica</p>
+                <h1 class="page-title">{% block titulo %}{% endblock %}</h1>
+                <p class="page-subtitle">{% block subtitulo %}{% endblock %}</p>
+            </div>
+        </div>
+
+        <div class="actions-row">
+            {% block actions %}{% endblock %}
+        </div>
+    </div>
+
+    {% block content %}{% endblock %}
+
+</div>
+
+</div>
+
+<script>
+function toggleMenu() {
+    const sidebar = document.getElementById("sidebar");
+    const overlay = document.getElementById("overlay");
+    const main = document.getElementById("main");
+
+    sidebar.classList.toggle("show");
+    overlay.classList.toggle("show");
+    main.classList.toggle("shift");
+}
+</script>
+
+</body>
+</html>

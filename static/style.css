@@ -102,6 +102,69 @@ button:hover {
     transform: scale(1.02);
 }
 
+.page-container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.search-panel {
+    display: flex;
+    justify-content: center;
+    margin: 20px 0;
+}
+
+.busca-form {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    max-width: 500px;
+}
+
+.busca-form input {
+    flex: 1;
+}
+
+.busca-form input {
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid #333;
+    background: #111;
+    color: white;
+}
+
+.busca-form button {
+    padding: 12px 20px;
+    border-radius: 10px;
+    background: #facc15;
+    border: none;
+    cursor: pointer;
+}
+
+.center-box {
+    display: flex;
+    justify-content: center;
+    margin-top: 30px;
+}
+
+.container-cliente {
+    display: flex;
+    justify-content: center;
+    margin-top: 20px;
+}
+
+.hud-box {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    width: 250px;
+}
+
+.card-cliente {
+    width: 100%;
+    max-width: 500px;
+}
+
 /* 🔥 BOTÃO TOPO */
 .btn-topo {
     width: auto !important;
@@ -144,3 +207,9 @@ form {
     flex-direction: column;
     gap: 8px;
 }
+
+#sidebar {
+    overflow-y: auto;
+    max-height: 100vh;
+}
+

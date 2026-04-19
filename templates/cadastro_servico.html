@@ -1,181 +1,46 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cadastro de Servicos</title>
+{% extends "base.html" %}
 
-<link rel="manifest" href="/static/manifest.json">
-<meta name="theme-color" content="#facc15">
+{% block title %}Serviços{% endblock %}
+{% block titulo %}Cadastro de Serviços{% endblock %}
+{% block subtitulo %}Gerencie seus serviços{% endblock %}
 
-<link rel="icon" href="/static/favicon.jpg">
-<link rel="apple-touch-icon" href="/static/icon-192.jpg">
-<link rel="stylesheet" href="/static/responsive.css">
+{% block actions %}
+<a href="/" class="button-link">
+    <button type="button">Voltar</button>
+</a>
+{% endblock %}
 
-<script>
-if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/static/sw.js")
-    .then(() => console.log("SW registrado"));
-}
-</script>
+{% block content %}
 
-<script>
-function editar(id) {
-    const card = document.getElementById("servico-" + id);
-    card.querySelector(".view").style.display = "none";
-    card.querySelector(".edit").style.display = "block";
-}
+<div class="page-card">
+    <h2 class="section-title">Novo serviço</h2>
 
-function salvar(id) {
-    const card = document.getElementById("servico-" + id);
+    <form method="POST" class="stack-form">
+        <input name="nome" placeholder="Nome do serviço">
+        <input name="valor" placeholder="Valor">
+        <button>Salvar</button>
+    </form>
+</div>
 
-    const nome = card.querySelector(".input-nome").value;
-    const valor = card.querySelector(".input-valor").value;
+<div class="top-spacing">
+    <h2 class="section-title">Serviços cadastrados</h2>
 
-    fetch("/editar_servico_inline/" + id, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ nome, valor })
-    })
-    .then(res => res.json())
-    .then(data => {
-        if (data.status === "ok") {
-            card.querySelector(".nome").innerText = nome;
-            card.querySelector(".valor").innerText = valor;
+    <div class="list-grid">
+        {% for s in servicos %}
+        <div class="page-card">
 
-            card.querySelector(".view").style.display = "block";
-            card.querySelector(".edit").style.display = "none";
-        }
-    });
-}
-</script>
+            <p><b>{{s[1]}}</b> - R$ {{s[2]}}</p>
 
-<style>
-.card {
-    width: 100%;
-}
-
-.service-line {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 6px;
-    margin-bottom: 10px;
-}
-
-.service-actions {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 10px;
-}
-
-.edit {
-    margin-top: 10px;
-}
-
-.edit input {
-    width: 100%;
-    margin: 0 0 10px;
-}
-
-.danger-button {
-    background: #ef4444;
-    color: white;
-}
-
-@media (max-width: 640px) {
-    .service-actions {
-        flex-direction: column;
-    }
-
-    .service-actions button {
-        width: 100%;
-    }
-}
-</style>
-</head>
-
-<body class="responsive-page">
-
-<div class="page-shell page-shell--narrow">
-    <div class="page-header">
-        <div class="brand-block">
-            <img src="/static/logo.jpg" class="brand-avatar">
-            <div>
-                <p class="brand-kicker">Wagen Estetica</p>
-            <h1 class="page-title">Cadastro de Servicos</h1>
-            <p class="page-subtitle">Tela pronta para celular, tablet e desktop.</p>
+            <div class="actions-row">
+                <button onclick="editar({{s[0]}})">Editar</button>
+                <a href="/excluir_servico/{{s[0]}}">
+                    <button class="button-danger">Excluir</button>
+                </a>
             </div>
+
         </div>
-        <a href="/" class="button-link">
-            <button type="button">Voltar</button>
-        </a>
-    </div>
-
-    <div class="page-card">
-        <h2 class="section-title">Novo servico</h2>
-        <form method="POST" class="stack-form">
-            <input name="nome" placeholder="Nome do servico">
-            <input name="valor" placeholder="Valor">
-            <button>Salvar</button>
-        </form>
-    </div>
-
-    <div class="top-spacing">
-        <h2 class="section-title">Servicos cadastrados</h2>
-
-        <div class="list-grid">
-            {% for s in servicos %}
-            <div class="page-card card" id="servico-{{s[0]}}">
-                <div class="view">
-                    <div class="service-line">
-                        <span class="nome">{{s[1]}}</span>
-                        <span>-</span>
-                        <span>R$<span class="valor">{{s[2]}}</span></span>
-                    </div>
-
-                    <div class="service-actions">
-                        <button type="button" onclick="editar({{s[0]}})">Editar</button>
-                        <button type="button" class="danger-button" onclick="excluir({{s[0]}})">Excluir</button>
-                    </div>
-                </div>
-
-                <div class="edit" style="display:none;">
-                    <input class="input-nome" value="{{s[1]}}">
-                    <input class="input-valor" value="{{s[2]}}">
-                    <button type="button" onclick="salvar({{s[0]}})">Salvar</button>
-                </div>
-            </div>
-            {% else %}
-            <div class="page-card">
-                <p class="muted-text">Nenhum servico cadastrado ainda.</p>
-            </div>
-            {% endfor %}
-        </div>
+        {% endfor %}
     </div>
 </div>
 
-<script>
-function excluir(id) {
-    if (!confirm("Tem certeza que deseja excluir este servico?")) {
-        return;
-    }
-
-    fetch("/excluir_servico/" + id, {
-        method: "POST"
-    })
-    .then(res => res.json())
-    .then(data => {
-        if (data.status === "ok") {
-            const card = document.getElementById("servico-" + id);
-            card.remove();
-        }
-    });
-}
-</script>
-
-</body>
-</html>
+{% endblock %}

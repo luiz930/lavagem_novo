@@ -1,43 +1,20 @@
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<link rel="icon" href="/static/favicon.jpg">
-<title>Orçamento</title>
+{% extends "base.html" %}
 
-<link rel="stylesheet" href="/static/style.css">
+{% block title %}Orçamento{% endblock %}
+{% block titulo %}Orçamento{% endblock %}
+{% block subtitulo %}Gerar orçamento{% endblock %}
 
-</head>
+{% block actions %}
+<a href="/" class="button-link">
+    <button type="button">Voltar</button>
+</a>
+{% endblock %}
 
-<body>
+{% block content %}
 
-<!-- 🔥 HEADER (COLOCA AQUI) -->
-<div class="header">
+<div class="page-card">
 
-    <div>
-        <img src="/static/logo.jpg" class="img-redonda">
-
-        <h1 class="page-title">Orçamento</h1>
-
-        <span style="color:#9ca3af; font-size:14px;">
-            Gerar orçamento
-        </span>
-    </div>
-
-    <div style="display:flex; gap:10px;">
-        <button onclick="history.back()" class="btn-topo">
-            ← Voltar
-        </button>
-    </div>
-
-</div> <!-- 🔥 FECHA AQUI -->
-
-<div class="page-shell">
-    <div class="page-shell--narrow">
-
-<div class="card">
-
-<form action="/gerar_orcamento" method="POST" class="form-box">
+<form action="/gerar_orcamento" method="POST" class="stack-form stack-form--wide">
 
 <input id="placa" name="placa" placeholder="Placa" onblur="buscarCliente()">
 <input id="nome" name="nome" placeholder="Nome">
@@ -46,7 +23,6 @@
 
 <h3>Serviços</h3>
 
-<!-- 🔽 SERVIÇO DO BANCO -->
 <select id="selectServico">
 <option value="">Selecione</option>
 {% for s in servicos %}
@@ -56,19 +32,14 @@
 {% endfor %}
 </select>
 
-<div class="btn-group">
-    <button type="button" onclick="addServico()">Adicionar do sistema</button>
-</div>
+<button type="button" onclick="addServico()">Adicionar</button>
 
 <hr>
 
-<!-- 🔽 SERVIÇO MANUAL -->
 <input id="manualNome" placeholder="Serviço manual">
 <input id="manualValor" placeholder="Valor">
 
-<div class="btn-group">
-    <button type="button" onclick="addManual()">Adicionar manual</button>
-</div>
+<button type="button" onclick="addManual()">Adicionar manual</button>
 
 <hr>
 
@@ -78,85 +49,10 @@
 
 <textarea name="observacoes" placeholder="Observações"></textarea>
 
-<div class="btn-group">
-    <button type="submit">Gerar PDF</button>
-</div>
+<button type="submit">Gerar PDF</button>
 
 </form>
 
 </div>
 
-</div>
-
-<script>
-
-let total = 0;
-
-async function buscarCliente() {
-    const placa = document.getElementById("placa").value;
-
-    const res = await fetch("/api/cliente/" + placa);
-    const data = await res.json();
-
-    if (data.encontrado) {
-        document.getElementById("nome").value = data.nome;
-        document.getElementById("telefone").value = data.telefone;
-        document.getElementById("modelo").value = data.modelo;
-    }
-}
-
-function atualizarTotal() {
-    document.getElementById("total").innerText = "Total: R$ " + total.toFixed(2);
-}
-
-function addServico() {
-    const select = document.getElementById("selectServico");
-    const nome = select.value;
-    const valor = parseFloat(select.selectedOptions[0].dataset.valor);
-
-    if (!nome) return;
-
-    total += valor;
-
-    criarItem(nome, valor);
-}
-
-function addManual() {
-    const nome = document.getElementById("manualNome").value;
-    const valor = parseFloat(document.getElementById("manualValor").value);
-
-    if (!nome || isNaN(valor)) return;
-
-    total += valor;
-
-    criarItem(nome, valor);
-
-    document.getElementById("manualNome").value = "";
-    document.getElementById("manualValor").value = "";
-}
-
-function criarItem(nome, valor) {
-    const div = document.createElement("div");
-
-    div.innerHTML = `
-        ${nome} - R$ ${valor.toFixed(2)}
-        <button type="button" onclick="remover(this, ${valor})">❌</button>
-        <input type="hidden" name="servico[]" value="${nome}">
-        <input type="hidden" name="valor[]" value="${valor}">
-    `;
-
-    document.getElementById("lista").appendChild(div);
-
-    atualizarTotal();
-}
-
-function remover(btn, valor) {
-    total -= valor;
-    btn.parentElement.remove();
-    atualizarTotal();
-}
-
-</script>
-
-</body>
-</html>
+{% endblock %}

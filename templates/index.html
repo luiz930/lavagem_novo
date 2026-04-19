@@ -573,6 +573,16 @@ input[type="file"] {
 <a href="/financeiro"><button><span>&#128176;</span> Financeiro</button></a>
 <a href="/pneu"><button><span>&#128736;</span> Pneus</button></a>
 <a href="/clima"><button><span>&#9729;</span> Clima</button></a>
+<a href="/logout">
+    <button style="
+        background: linear-gradient(135deg, #dc2626, #b91c1c);
+        color: white;
+        border: 1px solid rgba(255, 0, 0, 0.4);
+    ">
+        <span>🚪</span> Sair
+    </button>
+</a>
+
 </div>
 
 </div>
@@ -818,22 +828,31 @@ function abrirServico() {
 <script>
 
 let ultimaMensagem = "";
+let ultimoErro = "";
 
 async function verificarSync() {
     try {
         const res = await fetch("/status_sync");
         const data = await res.json();
 
-        // 🔥 evita repetir a mesma notificação
-        if (data.mensagem && data.mensagem !== ultimaMensagem) {
+        if (data.status === "ERRO") {
 
-            ultimaMensagem = data.mensagem;
-
-            if (data.status === "OK") {
-                mostrarPopup(data.mensagem, "sucesso");
-            } else if (data.status === "ERRO") {
+            // 🔥 evita spam de erro repetido
+            if (data.mensagem !== ultimoErro) {
                 mostrarPopup(data.mensagem, "erro");
+                ultimoErro = data.mensagem;
             }
+
+            return;
+        }
+
+        if (data.status === "OK") {
+
+            if (data.mensagem !== ultimaMensagem) {
+                mostrarPopup(data.mensagem, "sucesso");
+                ultimaMensagem = data.mensagem;
+            }
+
         }
 
     } catch (e) {
@@ -846,7 +865,14 @@ setInterval(verificarSync, 10000);
 </script>
 
 <script>
+let popupAtivo = false;
+
 function mostrarPopup(texto, tipo) {
+
+    if (popupAtivo) return; // 🔥 trava spam
+
+    popupAtivo = true;
+
     const popup = document.createElement("div");
 
     popup.innerText = texto;
@@ -860,8 +886,13 @@ function mostrarPopup(texto, tipo) {
 
     setTimeout(() => {
         popup.classList.remove("mostrar");
-        setTimeout(() => popup.remove(), 500);
-    }, 5000);
+
+        setTimeout(() => {
+            popup.remove();
+            popupAtivo = false;
+        }, 500);
+
+    }, 4000);
 }
 </script>
 

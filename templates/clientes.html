@@ -1,454 +1,71 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Clientes</title>
+{% extends "base.html" %}
 
-<link rel="manifest" href="/static/manifest.json">
-<meta name="theme-color" content="#facc15">
+{% block title %}Clientes{% endblock %}
+{% block titulo %}Clientes{% endblock %}
+{% block subtitulo %}Gestão e sincronização{% endblock %}
 
-<link rel="icon" href="/static/favicon.jpg">
-<link rel="apple-touch-icon" href="/static/icon-192.jpg">
-<link rel="stylesheet" href="/static/responsive.css">
+<button style="position:fixed;bottom:20px;left:20px;z-index:9999;background:red;color:white;">
+    🚪 TESTE SAIR
+</button>
 
-<script>
-if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/static/sw.js")
-    .then(() => console.log("SW registrado"));
-}
-</script>
+{% block actions %}
+<a href="/" class="button-link">
+    <button type="button">Voltar</button>
+</a>
 
-<style>
-.clientes-shell {
-    max-width: 1240px;
-}
+<a href="/clientes?limpar=1" class="button-link">
+    <button type="button">Limpar busca</button>
+</a>
+{% endblock %}
 
-.sync-form-grid,
-.mapeamento-grid,
-.cliente-form {
-    display: grid;
-    gap: 12px;
-}
+{% block content %}
 
-.sync-form-grid {
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
-.field-block {
-    display: grid;
-    gap: 8px;
-    text-align: left;
-}
-
-.field-block label {
-    color: #facc15;
-    font-size: 0.9rem;
-    font-weight: bold;
-}
-
-.field-block--full {
-    grid-column: 1 / -1;
-}
-
-.sync-actions,
-.cliente-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-}
-
-.sync-actions form,
-.cliente-actions form {
-    margin: 0;
-}
-
-.sync-actions button,
-.cliente-actions button {
-    margin: 0;
-}
-
-.feedback-banner {
-    border-radius: 16px;
-    padding: 14px 16px;
-    border: 1px solid transparent;
-}
-
-.feedback-banner--sucesso {
-    background: rgba(34, 197, 94, 0.18);
-    border-color: rgba(34, 197, 94, 0.36);
-    color: #dcfce7;
-}
-
-.feedback-banner--erro {
-    background: rgba(239, 68, 68, 0.16);
-    border-color: rgba(239, 68, 68, 0.34);
-    color: #fee2e2;
-}
-
-.sync-list {
-    display: grid;
-    gap: 14px;
-}
-
-.sync-card {
-    display: grid;
-    gap: 14px;
-}
-
-.sync-card-head {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 12px;
-    align-items: flex-start;
-}
-
-.sync-card-head h3 {
-    margin: 0;
-    color: #f9fafb;
-}
-
-.sync-card-head p {
-    margin: 6px 0 0;
-    color: #9ca3af;
-    word-break: break-word;
-}
-
-.status-row,
-.campos-row,
-.meta-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.status-tag {
-    display: inline-flex;
-    align-items: center;
-    padding: 7px 12px;
-    border-radius: 999px;
-    font-size: 0.84rem;
-    font-weight: 700;
-}
-
-.status-tag--ok {
-    background: rgba(34, 197, 94, 0.18);
-    color: #bbf7d0;
-}
-
-.status-tag--erro {
-    background: rgba(239, 68, 68, 0.18);
-    color: #fecaca;
-}
-
-.status-tag--pausado {
-    background: rgba(156, 163, 175, 0.18);
-    color: #e5e7eb;
-}
-
-.status-tag--agendado {
-    background: rgba(250, 204, 21, 0.18);
-    color: #fde68a;
-}
-
-.campo-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 7px 12px;
-    border-radius: 999px;
-    background: rgba(250, 204, 21, 0.1);
-    color: #fde68a;
-    border: 1px solid rgba(250, 204, 21, 0.22);
-    font-size: 0.84rem;
-}
-
-.meta-row p,
-.sync-message {
-    margin: 0;
-    color: #cbd5e1;
-}
-
-.clientes-grid {
-    display: grid;
-    gap: 14px;
-}
-
-.cliente-form {
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-}
-
-.cliente-form button {
-    margin: 0;
-}
-
-.table-wrap {
-    margin-top: 14px;
-}
-
-@media (max-width: 640px) {
-    .sync-actions,
-    .cliente-actions {
-        flex-direction: column;
-    }
-
-    .sync-actions form,
-    .sync-actions button,
-    .cliente-actions form,
-    .cliente-actions button {
-        width: 100%;
-    }
-}
-</style>
-</head>
-
-<body class="responsive-page">
-
-<div class="page-shell page-shell--wide clientes-shell">
-    <div class="page-header">
-        <div class="brand-block">
-            <img src="/static/logo.jpg" class="brand-avatar">
-            <div>
-                <p class="brand-kicker">Wagen Estetica</p>
-                <h1 class="page-title">Clientes</h1>
-                <p class="page-subtitle">Sincronize planilhas por link, ou localmente(Melhor Escolha), escolha intervalo de atualização.</p>
-            </div>
-        </div>
-
-        <div class="actions-row">
-            <a href="/" class="button-link">
-                <button type="button">Voltar</button>
-            </a>
-            <a href="/clientes?limpar=1" class="button-link">
-                <button type="button">Limpar busca</button>
-            </a>
-        </div>
-    </div>
-
-    <div class="page-card">
-        <form method="POST" class="inline-form busca-form">
-            <input name="busca" placeholder="Buscar placa, modelo ou cliente" value="{{busca}}">
-            <button>Buscar</button>
-        </form>
-    </div>
-<div style="text-align: center; margin-top: 20px;">
-    <a href="/clientes/importar-local">
-    </a>
+<div class="page-card">
+    <form method="POST" class="inline-form">
+        <input name="busca" placeholder="Buscar placa, modelo ou cliente" value="{{busca}}">
+        <button>Buscar</button>
+    </form>
 </div>
 
-    {% if feedback %}
-    <div class="feedback-banner feedback-banner--{{feedback.tipo}} top-spacing">
-        {{feedback.mensagem}}
-    </div>
-    {% endif %}
+{% if feedback %}
+<div class="page-card top-spacing">
+    <p>{{feedback.mensagem}}</p>
+</div>
+{% endif %}
 
-    <div class="page-card top-spacing">
-        <h2 class="section-title">Nova sincronizacao por link</h2>
-        <p class="page-subtitle">Cole o link da planilha, escolha o intervalo e depois mapeie as colunas que devem ser salvas.</p>
+<div class="page-card top-spacing">
+    <h2 class="section-title">Nova sincronização</h2>
 
-        <form action="/clientes/sincronizacao/adicionar" method="POST" class="sync-form-grid top-spacing">
-            <div class="field-block">
-                <label for="nome-sync">Nome da fonte</label>
-                <input id="nome-sync" name="nome" placeholder="Ex: Planilha portaria">
-            </div>
+    <form action="/clientes/sincronizacao/adicionar" method="POST" class="stack-form stack-form--wide">
 
-            <div class="field-block field-block--full">
-                <label for="url-sync">Link da planilha</label>
-                <input id="url-sync" name="url" placeholder="https://..." required>
-            </div>
+        <input name="nome" placeholder="Nome da fonte">
 
-            <div class="field-block">
-                <label for="intervalo-sync">Tempo de atualizacao</label>
-                <select id="intervalo-sync" name="intervalo_minutos">
-                    {% set intervalo_atual = 60 %}
-                    {% for intervalo in intervalos_sync %}
-                    <option value="{{intervalo.value}}" {% if intervalo.value == intervalo_atual %}selected{% endif %}>{{intervalo.label}}</option>
-                    {% endfor %}
-                </select>
-            </div>
+        <input name="url" placeholder="Link da planilha" required>
 
-            <div class="field-block" style="align-self:end;">
-                <button>Importar e sincronizar</button>
-            </div>
-        </form>
-    </div>
-
-
-    <div class="top-spacing">
-        <h2 class="section-title">Sincronizacoes configuradas</h2>
-
-        <div class="sync-list">
-            {% for sync in sincronizacoes %}
-            <div class="page-card sync-card">
-                <div class="sync-card-head">
-                    <div>
-                        <h3>{{sync.nome or "Planilha clientes"}}</h3>
-                        <p>{{sync.url}}</p>
-                    </div>
-
-                    <div class="status-row">
-                        {% if sync.ativo %}
-                        <span class="status-tag status-tag--agendado">Ativa</span>
-                        {% else %}
-                        <span class="status-tag status-tag--pausado">Pausada</span>
-                        {% endif %}
-
-                        {% if sync.ultimo_status == "OK" %}
-                        <span class="status-tag status-tag--ok">Ultimo sync OK</span>
-                        {% elif sync.ultimo_status == "ERRO" %}
-                        <span class="status-tag status-tag--erro">Ultimo sync com erro</span>
-                        {% elif sync.ultimo_status == "PAUSADO" %}
-                        <span class="status-tag status-tag--pausado">Pausada</span>
-                        {% else %}
-                        <span class="status-tag status-tag--agendado">{{sync.ultimo_status or "Agendada"}}</span>
-                        {% endif %}
-                    </div>
-                </div>
-
-                <div class="campos-row">
-                    <span class="campo-pill">Atualiza a cada {{sync.intervalo_minutos}} min</span>
-                    {% for campo in sync.campos %}
-                    <span class="campo-pill">{{campo.label}}: {{campo.coluna}}</span>
-                    {% endfor %}
-                </div>
-
-                <div class="meta-row">
-                    <p>Ultima execucao: {{sync.ultimo_sync_em_fmt}}</p>
-                    <p>Proxima execucao: {{sync.proximo_sync_em_fmt if sync.ativo else "Pausada"}}</p>
-                </div>
-
-                {% if sync.ultima_mensagem %}
-                <p class="sync-message">{{sync.ultima_mensagem}}</p>
-                {% endif %}
-
-                <div class="sync-actions">
-                    <form action="/clientes/sincronizacao/{{sync.id}}/executar" method="POST">
-                        <button type="submit">Sincronizar agora</button>
-                    </form>
-
-                    <form action="/clientes/sincronizacao/{{sync.id}}/alternar" method="POST">
-                        <button type="submit">{% if sync.ativo %}Pausar{% else %}Ativar{% endif %}</button>
-                    </form>
-
-                    <form action="/clientes/sincronizacao/{{sync.id}}/excluir" method="POST" onsubmit="return confirm('Remover esta sincronizacao?')">
-                        <button type="submit" class="button-danger">Excluir</button>
-                    </form>
-                </div>
-            </div>
-            {% else %}
-            <div class="page-card empty-state">
-                Nenhuma sincronizacao configurada ainda.
-            </div>
+        <select name="intervalo_minutos">
+            {% for intervalo in intervalos_sync %}
+            <option value="{{intervalo.value}}">
+                {{intervalo.label}}
+            </option>
             {% endfor %}
+        </select>
+
+        <button>Adicionar</button>
+
+    </form>
+</div>
+
+<div class="top-spacing">
+    <h2 class="section-title">Clientes</h2>
+
+    <div class="list-grid">
+        {% for c in clientes %}
+        <div class="page-card">
+            <p><b>{{c.nome}}</b></p>
+            <p>{{c.telefone}}</p>
         </div>
-    </div>
-
-    <div class="top-spacing">
-        <h2 class="section-title">Clientes e veiculos</h2>
-
-        <div class="clientes-grid" id="clientesContainer">
-            {% for c in clientes %}
-            <div class="page-card">
-                <form method="POST" action="/editar_cliente" class="cliente-form">
-                    <input type="hidden" name="origem" value="clientes">
-
-                    <div class="field-block">
-                        <label>Placa</label>
-                        <input name="placa" value="{{c['placa']}}">
-                    </div>
-
-                    <div class="field-block">
-                        <label>Nome</label>
-                        <input name="nome" value="{{c['cliente_nome'] or ''}}">
-                    </div>
-
-                    <div class="field-block">
-                        <label>Telefone</label>
-                        <input name="telefone" value="{{c['cliente_telefone'] or ''}}">
-                    </div>
-
-                    <div class="field-block">
-                        <label>Modelo</label>
-                        <input name="modelo" value="{{c['modelo'] or ''}}">
-                    </div>
-
-                    <div class="field-block">
-                        <label>Cor</label>
-                        <input name="cor" value="{{c['cor'] or ''}}">
-                    </div>
-
-                    <div class="field-block" style="align-self:end;">
-                        <button>Salvar</button>
-                    </div>
-                </form>
-            </div>
-            {% else %}
-            <div class="page-card empty-state">
-                Nenhum cliente encontrado.
-            </div>
-            {% endfor %}
-        </div>
+        {% endfor %}
     </div>
 </div>
 
-<script>
-async function atualizarClientesSemReload() {
-    try {
-        const res = await fetch(window.location.href);
-        const html = await res.text();
-
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, "text/html");
-
-        const novo = doc.getElementById("clientesContainer");
-        const atual = document.getElementById("clientesContainer");
-
-        if (novo && atual) {
-            atual.innerHTML = novo.innerHTML;
-        }
-
-        console.log("🔄 Clientes atualizados");
-
-    } catch (e) {
-        console.log("Erro ao atualizar:", e);
-    }
-}
-</script>
-
-<script>
-let ultimaMensagem = "";
-
-async function verificarSync() {
-    try {
-        const res = await fetch("/status_sync");
-        const data = await res.json();
-
-        if (data.mensagem && data.mensagem !== ultimaMensagem) {
-
-            ultimaMensagem = data.mensagem;
-
-            if (data.status === "OK") {
-                mostrarPopup(data.mensagem, "sucesso");
-
-                setTimeout(() => {
-                    atualizarClientesSemReload();
-                }, 1000);
-            }
-
-            if (data.status === "ERRO") {
-                mostrarPopup(data.mensagem, "erro");
-            }
-        }
-
-    } catch (e) {
-        console.log("Erro ao verificar sync");
-    }
-}
-
-// 🔥 roda automático
-setInterval(verificarSync, 10000);
-</script>
-
-</body>
-</html>
+{% endblock %}

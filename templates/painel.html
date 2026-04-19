@@ -1,255 +1,44 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta charset="UTF-8">
-<title>Painel Operacional</title>
+{% extends "base.html" %}
 
-<link rel="manifest" href="/static/manifest.json">
-<meta name="theme-color" content="#facc15">
+{% block title %}Painel{% endblock %}
+{% block titulo %}Painel Operacional{% endblock %}
+{% block subtitulo %}Controle dos serviços{% endblock %}
 
-<link rel="icon" href="/static/favicon.jpg">
-<link rel="apple-touch-icon" href="/static/icon-192.jpg">
-<link rel="stylesheet" href="/static/responsive.css">
+{% block actions %}
+<a href="/" class="button-link">
+    <button type="button">Voltar</button>
+</a>
+{% endblock %}
 
-<script>
-if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/static/sw.js")
-    .then(() => console.log("SW registrado"));
-}
-</script>
+{% block content %}
 
-<style>
-.painel-list {
-    display: grid;
-    gap: 16px;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-}
+<div class="page-grid">
 
-.card {
-    padding: 20px;
-    width: 100%;
-    text-align: left;
-    transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
-}
+{% for s in servicos %}
+<div class="page-card">
 
-.card:hover {
-    transform: translateY(-2px);
-}
+    <p class="pill-label">Fila {{loop.index}}</p>
 
-.card.topo {
-    border-color: #22c55e;
-    box-shadow: 0 0 20px rgba(34, 197, 94, 0.24);
-}
+    <h2>{{s[1]}}</h2>
 
-.card-head {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 12px;
-}
+    <p><b>Cliente:</b> {{s[2]}}</p>
+    <p><b>Valor:</b> R$ {{s[3]}}</p>
 
-.placa {
-    font-size: clamp(1.6rem, 4vw, 2.1rem);
-    font-weight: bold;
-    color: #facc15;
-    margin-bottom: 8px;
-}
+    <p class="muted-text">{{s[13]}}</p>
 
-.status {
-    color: #facc15;
-    font-weight: bold;
-}
+    <div class="actions-row">
+        <a href="/prioridade/{{s[0]}}/up">
+            <button>Subir</button>
+        </a>
 
-.status.andamento {
-    color: #facc15;
-}
-
-.status.finalizado {
-    color: #22c55e;
-}
-
-.acoes {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin: 14px 0;
-}
-
-.acoes a {
-    flex: 1 1 120px;
-    text-decoration: none;
-}
-
-.btn.small {
-    width: 100%;
-    font-size: 15px;
-}
-
-form {
-    display: grid;
-    gap: 10px;
-    margin-top: 12px;
-}
-
-.muted {
-    color: #9ca3af;
-}
-
-.vazio {
-    text-align: center;
-}
-
-@media (max-width: 640px) {
-    .card {
-        padding: 16px;
-        border-radius: 16px;
-    }
-
-    .acoes {
-        flex-direction: column;
-    }
-
-    .acoes a,
-    button {
-        width: 100%;
-    }
-}
-</style>
-</head>
-
-<body class="responsive-page">
-
-<div class="page-shell page-shell--wide">
-    <div class="page-header">
-        <div class="brand-block">
-            <img src="/static/logo.jpg" class="brand-avatar">
-            <div>
-                <p class="brand-kicker">Wagen Estetica</p>
-                <h1 class="page-title">Painel Operacional</h1>
-                <p class="page-subtitle">Ordem de fila e acoes rapidas no mesmo padrao visual do sistema.</p>
-            </div>
-        </div>
-
-        <a href="/" class="button-link">
-            <button type="button">Voltar</button>
+        <a href="/prioridade/{{s[0]}}/down">
+            <button>Descer</button>
         </a>
     </div>
 
-    <div class="painel-list">
-        {% for s in servicos %}
-        <div class="page-card card {% if loop.index == 1 %}topo{% endif %}">
-            <div class="card-head">
-                <p><span class="pill-label">Prioridade IA</span>
-                {% if s.prioridade_ia >= 4 %}
-                    <span style="color:#ef4444;">ALTA</span>
-                {% elif s.prioridade_ia >= 2 %}
-                    <span style="color:#facc15;">MEDIA</span>
-                {% else %}
-                    <span style="color:#22c55e;">BAIXA</span>
-                {% endif %}
-                </p>
+</div>
+{% endfor %}
 
-                <p class="pill-label">Fila {{loop.index}}</p>
-            </div>
-
-            <div class="placa">{{s[1]}}</div>
-
-            <div class="acoes">
-                <a href="/prioridade/{{s[0]}}/up">
-                    <button type="button" class="btn small">Subir</button>
-                </a>
-
-                <a href="/prioridade/{{s[0]}}/down">
-                    <button type="button" class="btn small">Descer</button>
-                </a>
-            </div>
-
-            <p><b>Cliente:</b> {{s[2]}}</p>
-            <p><b>Valor:</b> R$ {{s[3]}}</p>
-
-            <p class="status {% if s[13] == 'EM ANDAMENTO' %}andamento{% endif %}{% if s[13] == 'FINALIZADO' %} finalizado{% endif %}">
-            {{s[13]}}
-            </p>
-
-            <p>Entrada: {{s[4]}}</p>
-            <p><b>Tempo de espera:</b>
-                <span class="tempo" data-entrada="{{s[4]}}">
-                    carregando...
-                </span>
-            </p>
-            <p>Entrega: {{s[5]}}</p>
-
-            {% if s[13] == "EM ANDAMENTO" %}
-            <form action="/detalhe/{{s[0]}}" method="POST" enctype="multipart/form-data">
-                <input type="file" name="foto_detalhe" accept="image/*" multiple>
-                <button type="submit">Salvar fotos</button>
-            </form>
-            {% endif %}
-
-            {% if s[13] == "EM ANDAMENTO" %}
-            <form action="/finalizar/{{s[0]}}" method="POST" enctype="multipart/form-data">
-                <input type="file" name="foto_saida" accept="image/*" capture="environment" required>
-                <button>Finalizar</button>
-            </form>
-            {% endif %}
-        </div>
-        {% else %}
-        <div class="page-card vazio">
-            <p class="muted">Nenhum servico no painel neste momento.</p>
-        </div>
-        {% endfor %}
-    </div>
 </div>
 
-<script>
-function atualizarTempo() {
-    const elementos = document.querySelectorAll(".tempo");
-
-    elementos.forEach(el => {
-        const entradaStr = el.getAttribute("data-entrada");
-
-        if (!entradaStr) return;
-
-        try {
-            const entrada = new Date(entradaStr);
-            const agora = new Date();
-
-            const diffMs = agora - entrada;
-            const minutos = Math.floor(diffMs / 60000);
-
-            const horas = Math.floor(minutos / 60);
-            const mins = minutos % 60;
-
-            let texto = "";
-
-            if (horas > 0) {
-                texto = `${horas}h ${mins}min`;
-            } else {
-                texto = `${mins}min`;
-            }
-
-            if (horas >= 2) {
-                el.innerHTML = "ALTA " + texto;
-                el.style.color = "#ef4444";
-            } else if (horas >= 1) {
-                el.innerHTML = "MEDIA " + texto;
-                el.style.color = "#facc15";
-            } else {
-                el.innerHTML = "OK " + texto;
-                el.style.color = "#22c55e";
-            }
-
-        } catch (e) {
-            el.innerHTML = "N/A";
-        }
-    });
-}
-
-setInterval(atualizarTempo, 5000);
-atualizarTempo();
-</script>
-
-</body>
-</html>
+{% endblock %}

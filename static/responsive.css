@@ -429,3 +429,49 @@ iframe {
         min-width: 540px;
     }
 }
+
+/* 🔥 MELHORIAS MOBILE */
+
+@media (max-width: 768px) {
+
+    .page-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    .list-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    .page-card {
+        padding: 16px;
+    }
+
+    .stack-form {
+        width: 100%;
+    }
+
+}
+
+@media (max-width: 768px) {
+
+    input, select, textarea {
+        font-size: 16px; /* evita zoom no mobile */
+    }
+
+    button {
+        width: 100%;
+    }
+
+}
+
+@media (max-width: 768px) {
+
+    .button-link {
+        width: 100%;
+    }
+
+    .button-link button {
+        width: 100%;
+    }
+
+}

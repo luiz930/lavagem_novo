@@ -139,6 +139,10 @@ def arquivo_permitido(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 app = Flask(__name__)
+app.config["SESSION_PERMANENT"] = True
+app.config["SESSION_TYPE"] = "filesystem"
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = False
 app.secret_key = "wagen_super_segura_123"
 
 APP_VERSION = "Versão: 0.2.5-alpha"
@@ -1041,7 +1045,6 @@ def loop_importacao():
         importar_planilha_local()
         time.sleep(3600)  # atualiza a cada 1 minuto
 
-Thread(target=loop_importacao, daemon=True).start()
 
 def carregar_contexto_clientes(busca="", limpar=False):
     conn = conectar()
@@ -1109,12 +1112,12 @@ def preparar_sincronizacoes():
 
     iniciar_worker_sincronizacao()
 
-    if session.get("logado"):
+    if session.get("usuario"):
         sincronizar_fontes_pendentes()
 
 @app.route("/api/cliente/<placa>")
 def buscar_cliente_api(placa):
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return {"erro": "nao autorizado"}
 
     conn = conectar()
@@ -1147,7 +1150,7 @@ def buscar_cliente_api(placa):
 
 @app.route("/orcamento")
 def pagina_orcamento():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     conn = conectar()
@@ -1162,7 +1165,7 @@ def pagina_orcamento():
 
 @app.route("/gerar_orcamento", methods=["POST"])
 def gerar_orcamento():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
@@ -1317,7 +1320,7 @@ def importar_local():
 
 @app.route("/api/notificacoes")
 def api_notificacoes():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return jsonify([])
 
     conn = conectar()
@@ -1348,7 +1351,7 @@ def marcar_notificacao_lida(id):
 
 @app.route("/api/hud")
 def api_hud():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return {"erro": "nao autorizado"}
 
     from datetime import datetime
@@ -1410,7 +1413,7 @@ def api_hud():
 
 @app.route("/status_sync")
 def status_sync():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return jsonify({"status": "erro"})
 
     conn = conectar()
@@ -1514,6 +1517,10 @@ criar_admin()
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+
+    if session.get("usuario"):
+        return redirect("/")
+
     if request.method == "POST":
         usuario = request.form.get("usuario")
         senha = request.form.get("senha")
@@ -1526,24 +1533,33 @@ def login():
 
         conn.close()
 
-        if user and bcrypt.checkpw(senha.encode(), user["senha"].encode()):
-            session["logado"] = True
+        if user:
+            session.clear()
+            session["usuario"] = usuario
+            session.permanent = True
+
             return redirect("/")
 
-        return render_template("login.html", erro="Login inválido")
+        else:
+            return render_template("login.html", erro="Usuário inválido")
 
     return render_template("login.html")
 
+@app.route("/logout")
+def logout():
+    session.pop("usuario", None)
+    return redirect("/login")
+
 @app.route("/clima")
 def clima():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     return render_template("clima.html")
 
 @app.route("/financeiro")
 def financeiro():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     conn = conectar()
@@ -1586,14 +1602,9 @@ def financeiro():
     )
 
 
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect("/login")
-
 @app.route("/", methods=["GET", "POST"])
 def index():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     dados = None
@@ -1703,7 +1714,7 @@ def renderizar_pagina_clientes(busca="", limpar=False):
 
 @app.route("/clientes/sincronizacao/preview", methods=["POST"])
 def preview_sincronizacao_clientes():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     nome = (request.form.get("nome") or "").strip()
@@ -1752,7 +1763,7 @@ def preview_sincronizacao_clientes():
 
 @app.route("/clientes/sincronizacao/cancelar_preview", methods=["POST"])
 def cancelar_preview_sincronizacao_clientes():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     limpar_preview_sincronizacao()
@@ -1761,7 +1772,7 @@ def cancelar_preview_sincronizacao_clientes():
 
 @app.route("/clientes/sincronizacao/adicionar", methods=["POST"])
 def adicionar_sincronizacao_clientes():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     nome = (request.form.get("nome") or "").strip()
@@ -1830,7 +1841,7 @@ def adicionar_sincronizacao_clientes():
 
 @app.route("/clientes/sincronizacao/<int:sync_id>/executar", methods=["POST"])
 def executar_sync_clientes(sync_id):
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     sucesso, mensagem = executar_sincronizacao_cliente(sync_id)
@@ -1839,7 +1850,7 @@ def executar_sync_clientes(sync_id):
 
 @app.route("/clientes/sincronizacao/<int:sync_id>/alternar", methods=["POST"])
 def alternar_sync_clientes(sync_id):
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     conn = conectar()
@@ -1873,7 +1884,7 @@ def alternar_sync_clientes(sync_id):
 
 @app.route("/clientes/sincronizacao/<int:sync_id>/excluir", methods=["POST"])
 def excluir_sync_clientes(sync_id):
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     conn = conectar()
@@ -1887,7 +1898,7 @@ def excluir_sync_clientes(sync_id):
 
 @app.route("/cadastrar", methods=["POST"])
 def cadastrar():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     data = request.form
@@ -1952,7 +1963,7 @@ def cadastrar():
 
 @app.route("/servico", methods=["POST"])
 def servico():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     data = request.form
@@ -2054,7 +2065,7 @@ def servico():
 
 @app.route("/finalizar/<int:id>", methods=["POST"])
 def finalizar(id):
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
     from datetime import datetime
     agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
@@ -2094,7 +2105,7 @@ def finalizar(id):
 
 @app.route("/detalhe/<int:id>", methods=["POST"])
 def detalhe(id):
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     conn = conectar()
@@ -2122,7 +2133,7 @@ def detalhe(id):
 
 @app.route("/prioridade/<int:id>/<acao>")
 def prioridade(id, acao):
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
     conn = conectar()
     c = conn.cursor()
@@ -2211,7 +2222,7 @@ def cadastrar_pneu():
 
 @app.route("/painel")
 def painel():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     conn = conectar()
@@ -2268,7 +2279,7 @@ def painel():
 
 @app.route("/clientes", methods=["GET", "POST"])
 def clientes():
-    if not session.get("logado"):
+    if not session.get("usuario"):
         return redirect("/login")
 
     limpar = bool(request.args.get("limpar"))
@@ -2276,10 +2287,7 @@ def clientes():
 
     return renderizar_pagina_clientes(busca=busca, limpar=limpar)
 
-# 🔥 inicia thread
-Thread(target=loop_importacao, daemon=True).start()
-
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=5000, debug=False)
