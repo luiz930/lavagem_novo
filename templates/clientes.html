@@ -2,15 +2,15 @@
 
 {% block title %}Clientes{% endblock %}
 {% block titulo %}Clientes{% endblock %}
-{% block subtitulo %}Gestão e sincronização{% endblock %}
-
-<button style="position:fixed;bottom:20px;left:20px;z-index:9999;background:red;color:white;">
-    🚪 TESTE SAIR
-</button>
+{% block subtitulo %}Gestao de clientes e sincronizacao{% endblock %}
 
 {% block actions %}
 <a href="/" class="button-link">
     <button type="button">Voltar</button>
+</a>
+
+<a href="/base_dados" class="button-link">
+    <button type="button">Base de dados</button>
 </a>
 
 <a href="/clientes?limpar=1" class="button-link">
@@ -22,37 +22,166 @@
 
 <div class="page-card">
     <form method="POST" class="inline-form">
-        <input name="busca" placeholder="Buscar placa, modelo ou cliente" value="{{busca}}">
+        <input name="busca" placeholder="Buscar placa, modelo ou cliente" value="{{ busca }}">
         <button>Buscar</button>
     </form>
 </div>
 
 {% if feedback %}
-<div class="page-card top-spacing">
-    <p>{{feedback.mensagem}}</p>
+<div class="page-card top-spacing {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
 </div>
 {% endif %}
 
 <div class="page-card top-spacing">
-    <h2 class="section-title">Nova sincronização</h2>
+    <h2 class="section-title">Nova sincronizacao</h2>
+    <p class="muted-text">Cole o link da planilha para analisar as colunas antes de ativar a rotina automatica.</p>
 
-    <form action="/clientes/sincronizacao/adicionar" method="POST" class="stack-form stack-form--wide">
-
-        <input name="nome" placeholder="Nome da fonte">
-
-        <input name="url" placeholder="Link da planilha" required>
-
-        <select name="intervalo_minutos">
-            {% for intervalo in intervalos_sync %}
-            <option value="{{intervalo.value}}">
-                {{intervalo.label}}
-            </option>
-            {% endfor %}
-        </select>
-
-        <button>Adicionar</button>
-
+    <form action="/clientes/sincronizacao/preview" method="POST" class="stack-form stack-form--wide">
+        <div class="field-grid">
+            <input name="nome" placeholder="Nome da fonte" value="{{ preview_sync.nome if preview_sync else '' }}">
+            <input name="url" placeholder="Link da planilha" value="{{ preview_sync.url if preview_sync else '' }}" required>
+            <select name="intervalo_minutos">
+                {% for intervalo in intervalos_sync %}
+                <option value="{{ intervalo.value }}" {% if preview_sync and preview_sync.intervalo_minutos == intervalo.value %}selected{% endif %}>
+                    {{ intervalo.label }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <button>Analisar link</button>
     </form>
+</div>
+
+{% if preview_sync %}
+<div class="page-card top-spacing">
+    <h2 class="section-title">Preview da sincronizacao</h2>
+    <div class="field-grid">
+        <div>
+            <p class="pill-label">Fonte</p>
+            <p><a href="{{ preview_sync.url }}" target="_blank" rel="noreferrer">{{ preview_sync.url }}</a></p>
+        </div>
+        <div>
+            <p class="pill-label">Intervalo</p>
+            <p>{{ preview_sync.intervalo_label }}</p>
+        </div>
+        <div>
+            <p class="pill-label">Proxima execucao</p>
+            <p>{{ preview_sync.proximo_sync_previsto_fmt }}</p>
+            <p class="muted-text">{{ preview_sync.proximo_sync_previsto_relativo }}</p>
+        </div>
+        <div>
+            <p class="pill-label">Linhas encontradas</p>
+            <p>{{ preview_sync.total_linhas }}</p>
+        </div>
+    </div>
+
+    <form action="/clientes/sincronizacao/salvar" method="POST" class="stack-form stack-form--wide top-spacing">
+        <input type="hidden" name="nome" value="{{ preview_sync.nome }}">
+        <input type="hidden" name="url" value="{{ preview_sync.url }}">
+        <input type="hidden" name="intervalo_minutos" value="{{ preview_sync.intervalo_minutos }}">
+
+        <div class="field-grid">
+            {% for campo in campos_sync %}
+            <div>
+                <label for="campo_{{ campo.key }}">{{ campo.label }}{% if campo.required %} *{% endif %}</label>
+                <select id="campo_{{ campo.key }}" name="campo_{{ campo.key }}">
+                    <option value="">Nao usar</option>
+                    {% for coluna in preview_sync.colunas %}
+                    <option value="{{ coluna }}" {% if preview_sync.mapeamento_sugerido.get(campo.key) == coluna %}selected{% endif %}>
+                        {{ coluna }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="actions-row actions-row--left">
+            <button>Salvar sincronizacao</button>
+        </div>
+    </form>
+
+    <form action="/clientes/sincronizacao/cancelar_preview" method="POST" class="top-spacing">
+        <button type="submit" class="button-danger">Cancelar preview</button>
+    </form>
+
+    <div class="table-wrap top-spacing">
+        <table>
+            <thead>
+                <tr>
+                    {% for coluna in preview_sync.colunas %}
+                    <th>{{ coluna }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for linha in preview_sync.amostra %}
+                <tr>
+                    {% for coluna in preview_sync.colunas %}
+                    <td>{{ linha.get(coluna, '') }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<div class="top-spacing">
+    <h2 class="section-title">Sincronizacoes ativas</h2>
+
+    <div class="list-grid">
+        {% for sync in sincronizacoes %}
+        <div class="page-card">
+            <div class="actions-row actions-row--left">
+                <span class="pill-label">{{ sync.ultimo_status or "SEM STATUS" }}</span>
+                <span class="pill-label">{{ sync.intervalo_label }}</span>
+                {% if sync.ativo %}
+                <span class="pill-label">Ativa</span>
+                {% else %}
+                <span class="pill-label">Pausada</span>
+                {% endif %}
+            </div>
+
+            <h3>{{ sync.nome or "Fonte sem nome" }}</h3>
+            <p><a href="{{ sync.url }}" target="_blank" rel="noreferrer">{{ sync.url }}</a></p>
+            <p><b>Ultima sincronizacao:</b> {{ sync.ultimo_sync_em_fmt }}</p>
+            <p><b>Proxima sincronizacao:</b> {{ sync.proximo_sync_em_fmt }}</p>
+            <p class="muted-text">{{ sync.tempo_restante }}</p>
+
+            {% if sync.ultima_mensagem %}
+            <p>{{ sync.ultima_mensagem }}</p>
+            {% endif %}
+
+            {% if sync.campos %}
+            <div class="top-spacing">
+                <p class="pill-label">Mapeamento</p>
+                {% for campo in sync.campos %}
+                <p class="muted-text">{{ campo.label }}: {{ campo.coluna }}</p>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <div class="actions-row top-spacing">
+                <form action="/clientes/sincronizacao/{{ sync.id }}/executar" method="POST">
+                    <button type="submit">Executar agora</button>
+                </form>
+                <form action="/clientes/sincronizacao/{{ sync.id }}/alternar" method="POST">
+                    <button type="submit">{% if sync.ativo %}Pausar{% else %}Ativar{% endif %}</button>
+                </form>
+                <form action="/clientes/sincronizacao/{{ sync.id }}/excluir" method="POST">
+                    <button type="submit" class="button-danger">Excluir</button>
+                </form>
+            </div>
+        </div>
+        {% else %}
+        <div class="page-card">
+            <p class="muted-text">Nenhuma sincronizacao cadastrada ainda.</p>
+        </div>
+        {% endfor %}
+    </div>
 </div>
 
 <div class="top-spacing">
@@ -61,8 +190,38 @@
     <div class="list-grid">
         {% for c in clientes %}
         <div class="page-card">
-            <p><b>{{c.nome}}</b></p>
-            <p>{{c.telefone}}</p>
+            <p><b>{{ c.nome or "Cliente nao informado" }}</b></p>
+            <p>{{ c.telefone or "Telefone nao informado" }}</p>
+            <p class="muted-text">
+                Placa: {{ c.placa }}
+                {% if c.modelo %} | Modelo: {{ c.modelo }}{% endif %}
+                {% if c.cor %} | Cor: {{ c.cor }}{% endif %}
+            </p>
+
+            <details class="top-spacing">
+                <summary>Editar cliente</summary>
+
+                <form action="/editar_cliente" method="POST" class="stack-form stack-form--wide top-spacing">
+                    <input type="hidden" name="placa_original" value="{{ c.placa_original or c.placa }}">
+                    <input type="hidden" name="redirect_to" value="/clientes">
+
+                    <div class="field-grid">
+                        <input name="placa" value="{{ c.placa }}" placeholder="Placa" required>
+                        <input name="nome" value="{{ c.nome }}" placeholder="Nome">
+                        <input name="telefone" value="{{ c.telefone }}" placeholder="Telefone">
+                        <input name="modelo" value="{{ c.modelo }}" placeholder="Modelo">
+                        <input name="cor" value="{{ c.cor }}" placeholder="Cor">
+                    </div>
+
+                    <div class="actions-row actions-row--left">
+                        <button type="submit">Salvar</button>
+                    </div>
+                </form>
+            </details>
+        </div>
+        {% else %}
+        <div class="page-card">
+            <p class="muted-text">Nenhum cliente encontrado com os filtros atuais.</p>
         </div>
         {% endfor %}
     </div>

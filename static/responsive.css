@@ -308,6 +308,34 @@ body.responsive-page {
     padding: 14px 16px;
 }
 
+.error-banner {
+    background: rgba(239, 68, 68, 0.16);
+    border: 1px solid rgba(239, 68, 68, 0.34);
+    color: #fee2e2;
+    border-radius: 14px;
+    padding: 14px 16px;
+}
+
+.success-text {
+    color: #bbf7d0;
+}
+
+.error-text {
+    color: #fecaca;
+}
+
+details summary {
+    cursor: pointer;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--muted);
+}
+
 .table-wrap {
     overflow-x: auto;
     border-radius: 18px;

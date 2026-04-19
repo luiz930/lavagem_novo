@@ -134,9 +134,16 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # 🔐 SEGURANÇA UPLOAD
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg"}
+ALLOWED_SPREADSHEET_EXTENSIONS = {"csv", "tsv", "xls", "xlsx"}
 
 def arquivo_permitido(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def arquivo_planilha_permitido(filename):
+    return (
+        "." in filename and
+        filename.rsplit(".", 1)[1].lower() in ALLOWED_SPREADSHEET_EXTENSIONS
+    )
 
 app = Flask(__name__)
 app.config["SESSION_PERMANENT"] = True
@@ -164,6 +171,10 @@ INTERVALOS_SINCRONIZACAO = [
     {"value": 720, "label": "12 horas"},
     {"value": 1440, "label": "24 horas"},
 ]
+
+MAPA_INTERVALOS_SINCRONIZACAO = {
+    item["value"]: item["label"] for item in INTERVALOS_SINCRONIZACAO
+}
 
 MAPA_LABEL_CAMPOS_SYNC = {
     item["key"]: item["label"] for item in CAMPOS_SINCRONIZACAO_CLIENTES
@@ -431,8 +442,45 @@ def formatar_datahora(valor_iso):
 def definir_feedback_clientes(tipo, mensagem):
     session["clientes_feedback"] = {"tipo": tipo, "mensagem": mensagem}
 
+def definir_feedback_base_dados(tipo, mensagem):
+    session["base_dados_feedback"] = {"tipo": tipo, "mensagem": mensagem}
+
 def limpar_preview_sincronizacao():
     session.pop("clientes_sync_preview", None)
+
+def limpar_feedback_base_dados():
+    session.pop("base_dados_feedback", None)
+
+def obter_label_intervalo_sincronizacao(minutos):
+    return MAPA_INTERVALOS_SINCRONIZACAO.get(minutos, f"{minutos} min")
+
+def formatar_tempo_restante(valor_iso):
+    if not valor_iso:
+        return "Sem agendamento"
+
+    try:
+        diferenca = int((datetime.fromisoformat(valor_iso) - agora()).total_seconds())
+    except Exception:
+        return "Horario invalido"
+
+    if diferenca <= 0:
+        return "Executando agora"
+
+    dias, resto = divmod(diferenca, 86400)
+    horas, resto = divmod(resto, 3600)
+    minutos, segundos = divmod(resto, 60)
+    partes = []
+
+    if dias:
+        partes.append(f"{dias}d")
+    if horas:
+        partes.append(f"{horas}h")
+    if minutos:
+        partes.append(f"{minutos}min")
+    if not partes:
+        partes.append(f"{segundos}s")
+
+    return "Falta " + " ".join(partes[:3])
 
 def detectar_novas_colunas(colunas_atuais, colunas_antigas_str):
     if not colunas_antigas_str:
@@ -996,6 +1044,229 @@ def importar_planilha_local():
         salvar_notificacao(mensagem, "erro")
         return False, mensagem
 
+def listar_registros_clientes(busca=""):
+    conn = conectar()
+    c = conn.cursor()
+
+    if busca:
+        termo = f"%{busca}%"
+        c.execute("""
+            SELECT
+                veiculos.id AS veiculo_id,
+                veiculos.placa,
+                veiculos.modelo,
+                veiculos.cor,
+                clientes.id AS cliente_id,
+                clientes.nome,
+                clientes.telefone
+            FROM veiculos
+            LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
+            WHERE veiculos.placa LIKE ? OR veiculos.modelo LIKE ? OR clientes.nome LIKE ?
+            ORDER BY veiculos.id DESC
+        """, (termo, termo, termo))
+    else:
+        c.execute("""
+            SELECT
+                veiculos.id AS veiculo_id,
+                veiculos.placa,
+                veiculos.modelo,
+                veiculos.cor,
+                clientes.id AS cliente_id,
+                clientes.nome,
+                clientes.telefone
+            FROM veiculos
+            LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
+            ORDER BY veiculos.id DESC
+        """)
+
+    registros = []
+
+    for row in c.fetchall():
+        item = dict(row)
+        item["nome"] = item.get("nome") or ""
+        item["telefone"] = item.get("telefone") or ""
+        item["modelo"] = item.get("modelo") or ""
+        item["cor"] = item.get("cor") or ""
+        item["placa_original"] = item.get("placa") or ""
+        registros.append(item)
+
+    conn.close()
+    return registros
+
+def montar_resumo_base_dados(registros):
+    clientes_unicos = set()
+
+    for item in registros:
+        if item.get("cliente_id"):
+            clientes_unicos.add(f"id:{item['cliente_id']}")
+        elif item.get("nome") or item.get("telefone"):
+            clientes_unicos.add(f"manual:{item.get('nome','')}|{item.get('telefone','')}")
+
+    return {
+        "total_registros": len(registros),
+        "total_clientes": len(clientes_unicos),
+        "com_telefone": sum(1 for item in registros if item.get("telefone")),
+        "com_modelo": sum(1 for item in registros if item.get("modelo")),
+    }
+
+def ler_dataframe_arquivo_planilha(arquivo):
+    filename = secure_filename(arquivo.filename or "")
+
+    if not filename:
+        raise ValueError("Selecione um arquivo para importar.")
+
+    if not arquivo_planilha_permitido(filename):
+        raise ValueError("Use um arquivo CSV, TSV, XLS ou XLSX.")
+
+    conteudo = arquivo.read()
+
+    if not conteudo:
+        raise ValueError("O arquivo enviado esta vazio.")
+
+    nome_lower = filename.lower()
+    buffer = BytesIO(conteudo)
+
+    try:
+        if nome_lower.endswith(".csv") or nome_lower.endswith(".tsv"):
+            df = ler_csv_flexivel(conteudo)
+        else:
+            df = pd.read_excel(buffer)
+    except Exception:
+        buffer.seek(0)
+        df = ler_csv_flexivel(conteudo)
+
+    df = df.fillna("")
+    df.columns = [str(coluna).strip().lower() for coluna in df.columns]
+    return df, filename
+
+def salvar_cliente_veiculo(placa, nome="", telefone="", modelo="", cor="", placa_original=None):
+    placa_nova = limpar_valor_planilha(placa).upper()
+    placa_referencia = limpar_valor_planilha(placa_original).upper() or placa_nova
+    nome = limpar_valor_planilha(nome)
+    telefone = limpar_valor_planilha(telefone)
+    modelo = limpar_valor_planilha(modelo)
+    cor = limpar_valor_planilha(cor)
+
+    if not placa_nova:
+        raise ValueError("Informe a placa do veiculo.")
+
+    conn = conectar()
+    c = conn.cursor()
+
+    try:
+        c.execute("""
+            SELECT id, placa, modelo, cor, cliente_id
+            FROM veiculos
+            WHERE placa=?
+        """, (placa_referencia,))
+        veiculo_existente = c.fetchone()
+
+        if placa_referencia != placa_nova:
+            c.execute("SELECT id FROM veiculos WHERE placa=?", (placa_nova,))
+            conflito = c.fetchone()
+
+            if conflito and (not veiculo_existente or conflito["id"] != veiculo_existente["id"]):
+                raise ValueError("Ja existe um veiculo cadastrado com essa placa.")
+
+        cliente_existente = None
+
+        if veiculo_existente and veiculo_existente["cliente_id"]:
+            c.execute("SELECT id, nome, telefone FROM clientes WHERE id=?", (veiculo_existente["cliente_id"],))
+            cliente_existente = c.fetchone()
+        elif telefone:
+            c.execute("SELECT id, nome, telefone FROM clientes WHERE telefone=?", (telefone,))
+            cliente_existente = c.fetchone()
+
+        cliente_id = cliente_existente["id"] if cliente_existente else None
+
+        if cliente_existente:
+            c.execute("""
+                UPDATE clientes
+                SET nome=?, telefone=?
+                WHERE id=?
+            """, (nome or "Sem nome", telefone, cliente_id))
+        elif nome or telefone:
+            c.execute("""
+                INSERT INTO clientes (nome, telefone)
+                VALUES (?, ?)
+            """, (nome or "Sem nome", telefone))
+            cliente_id = c.lastrowid
+
+        if veiculo_existente:
+            c.execute("""
+                UPDATE veiculos
+                SET placa=?, modelo=?, cor=?, cliente_id=?
+                WHERE id=?
+            """, (placa_nova, modelo, cor, cliente_id, veiculo_existente["id"]))
+        else:
+            c.execute("""
+                INSERT INTO veiculos (placa, modelo, cor, cliente_id)
+                VALUES (?, ?, ?, ?)
+            """, (placa_nova, modelo, cor, cliente_id))
+
+        conn.commit()
+
+        return {
+            "placa": placa_nova,
+            "acao": "atualizado" if veiculo_existente else "novo",
+            "cliente_id": cliente_id,
+        }
+    finally:
+        conn.close()
+
+def salvar_linhas_base_dados(linhas):
+    estatisticas = {
+        "linhas_recebidas": len(linhas),
+        "linhas_salvas": 0,
+        "linhas_novas": 0,
+        "linhas_atualizadas": 0,
+        "linhas_ignoradas": 0,
+    }
+
+    for indice, linha in enumerate(linhas, start=1):
+        placa = limpar_valor_planilha(linha.get("placa", ""))
+        nome = limpar_valor_planilha(linha.get("nome", ""))
+        telefone = limpar_valor_planilha(linha.get("telefone", ""))
+        modelo = limpar_valor_planilha(linha.get("modelo", ""))
+        cor = limpar_valor_planilha(linha.get("cor", ""))
+        placa_original = (
+            limpar_valor_planilha(linha.get("placa_original", "")) or
+            limpar_valor_planilha(linha.get("_original_placa", ""))
+        )
+
+        if not any([placa, nome, telefone, modelo, cor]):
+            estatisticas["linhas_ignoradas"] += 1
+            continue
+
+        if not placa:
+            raise ValueError(f"Linha {indice}: informe a placa antes de salvar.")
+
+        resultado = salvar_cliente_veiculo(
+            placa=placa,
+            nome=nome,
+            telefone=telefone,
+            modelo=modelo,
+            cor=cor,
+            placa_original=placa_original,
+        )
+
+        estatisticas["linhas_salvas"] += 1
+
+        if resultado["acao"] == "novo":
+            estatisticas["linhas_novas"] += 1
+        else:
+            estatisticas["linhas_atualizadas"] += 1
+
+    return estatisticas
+
+def resumir_salvamento_base_dados(estatisticas):
+    return (
+        f"{estatisticas['linhas_salvas']} linha(s) salva(s), "
+        f"{estatisticas['linhas_novas']} nova(s), "
+        f"{estatisticas['linhas_atualizadas']} atualizada(s), "
+        f"{estatisticas['linhas_ignoradas']} ignorada(s)"
+    )
+
 def sincronizar_fontes_pendentes():
     if not sync_lock.acquire(blocking=False):
         return
@@ -1047,43 +1318,11 @@ def loop_importacao():
 
 
 def carregar_contexto_clientes(busca="", limpar=False):
+    busca_aplicada = "" if limpar else busca
+    clientes = listar_registros_clientes(busca_aplicada)
+
     conn = conectar()
     c = conn.cursor()
-
-    if limpar:
-        clientes = []
-    else:
-        if busca:
-            c.execute("""
-                SELECT
-                    veiculos.id,
-                    veiculos.placa,
-                    veiculos.modelo,
-                    veiculos.cor,
-                    veiculos.cliente_id,
-                    clientes.nome AS cliente_nome,
-                    clientes.telefone AS cliente_telefone
-                FROM veiculos
-                LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
-                WHERE veiculos.placa LIKE ? OR veiculos.modelo LIKE ? OR clientes.nome LIKE ?
-                ORDER BY veiculos.id DESC
-            """, (f"%{busca}%", f"%{busca}%", f"%{busca}%"))
-        else:
-            c.execute("""
-                SELECT
-                    veiculos.id,
-                    veiculos.placa,
-                    veiculos.modelo,
-                    veiculos.cor,
-                    veiculos.cliente_id,
-                    clientes.nome AS cliente_nome,
-                    clientes.telefone AS cliente_telefone
-                FROM veiculos
-                LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
-                ORDER BY veiculos.id DESC
-            """)
-
-        clientes = c.fetchall()
 
     c.execute("""
         SELECT *
@@ -1098,8 +1337,10 @@ def carregar_contexto_clientes(busca="", limpar=False):
     for sync in sincronizacoes_raw:
         item = dict(sync)
         item["ativo"] = bool(item["ativo"])
+        item["intervalo_label"] = obter_label_intervalo_sincronizacao(item["intervalo_minutos"])
         item["ultimo_sync_em_fmt"] = formatar_datahora(item["ultimo_sync_em"])
         item["proximo_sync_em_fmt"] = formatar_datahora(item["proximo_sync_em"])
+        item["tempo_restante"] = formatar_tempo_restante(item["proximo_sync_em"])
         item["campos"] = descrever_campos_sincronizados(item)
         sincronizacoes.append(item)
 
@@ -1717,19 +1958,25 @@ def preview_sincronizacao_clientes():
     if not session.get("usuario"):
         return redirect("/login")
 
-    nome = (request.form.get("nome") or "").strip()
-    url = (request.form.get("url") or "").strip()
-    intervalo_minutos = normalizar_intervalo_sincronizacao(request.form.get("intervalo_minutos"))
+    preview_sync = session.get("clientes_sync_preview") or {}
+    nome = (request.form.get("nome") or preview_sync.get("nome") or "").strip()
+    url = (request.form.get("url") or preview_sync.get("url") or "").strip()
+    intervalo_minutos = normalizar_intervalo_sincronizacao(
+        request.form.get("intervalo_minutos") or preview_sync.get("intervalo_minutos")
+    )
 
     if not url:
         definir_feedback_clientes("erro", "Informe um link de planilha para continuar.")
         return redirect("/clientes")
 
     try:
-        url = corrigir_link_google_sheets(url)
         df, url_normalizada = ler_dataframe_link_planilha(url)
         colunas = list(df.columns)
         mapeamento_sugerido = sugerir_mapeamento_colunas(colunas)
+        proximo_sync_previsto = somar_minutos_iso(intervalo_minutos)
+
+        if not mapeamento_sugerido.get("placa"):
+            raise ValueError("Nao encontrei uma coluna de placa para configurar a sincronizacao.")
 
         if not colunas:
             raise ValueError("Não encontrei colunas válidas nessa planilha.")
@@ -1748,6 +1995,10 @@ def preview_sincronizacao_clientes():
             "mapeamento_sugerido": mapeamento_sugerido,
             "amostra": amostra_tratada,  # ✅ agora seguro
             "total_linhas": len(df.index),
+            "intervalo_label": obter_label_intervalo_sincronizacao(intervalo_minutos),
+            "proximo_sync_previsto": proximo_sync_previsto,
+            "proximo_sync_previsto_fmt": formatar_datahora(proximo_sync_previsto),
+            "proximo_sync_previsto_relativo": formatar_tempo_restante(proximo_sync_previsto),
         }
 
         definir_feedback_clientes(
@@ -1775,9 +2026,12 @@ def adicionar_sincronizacao_clientes():
     if not session.get("usuario"):
         return redirect("/login")
 
-    nome = (request.form.get("nome") or "").strip()
-    url = (request.form.get("url") or "").strip()
-    intervalo_minutos = normalizar_intervalo_sincronizacao(request.form.get("intervalo_minutos"))
+    preview_sync = session.get("clientes_sync_preview") or {}
+    nome = (request.form.get("nome") or preview_sync.get("nome") or "").strip()
+    url = (request.form.get("url") or preview_sync.get("url") or "").strip()
+    intervalo_minutos = normalizar_intervalo_sincronizacao(
+        request.form.get("intervalo_minutos") or preview_sync.get("intervalo_minutos")
+    )
 
     if not url:
         definir_feedback_clientes("erro", "Informe um link de planilha.")
@@ -1789,7 +2043,34 @@ def adicionar_sincronizacao_clientes():
 
         # 🔥 2. MAPEAR COLUNAS AUTOMATICAMENTE
         colunas = list(df.columns)
-        mapeamento = sugerir_mapeamento_colunas(colunas)
+        mapeamento_sugerido = sugerir_mapeamento_colunas(colunas)
+        mapeamento = {
+            "placa": (
+                request.form.get("campo_placa") or
+                preview_sync.get("mapeamento_sugerido", {}).get("placa") or
+                mapeamento_sugerido.get("placa") or
+                ""
+            ),
+            "nome": (
+                request.form.get("campo_nome") or
+                preview_sync.get("mapeamento_sugerido", {}).get("nome") or
+                mapeamento_sugerido.get("nome") or
+                ""
+            ),
+            "telefone": "",  # você não tem telefone
+            "modelo": (
+                request.form.get("campo_modelo") or
+                preview_sync.get("mapeamento_sugerido", {}).get("modelo") or
+                mapeamento_sugerido.get("modelo") or
+                ""
+            ),
+            "cor": (
+                request.form.get("campo_cor") or
+                preview_sync.get("mapeamento_sugerido", {}).get("cor") or
+                mapeamento_sugerido.get("cor") or
+                ""
+            )
+        }
 
         if not mapeamento.get("placa"):
             raise Exception("Não consegui identificar a coluna de PLACA automaticamente.")
@@ -1836,6 +2117,87 @@ def adicionar_sincronizacao_clientes():
 
     except Exception as e:
         definir_feedback_clientes("erro", f"Erro ao importar: {e}")
+
+    return redirect("/clientes")
+
+@app.route("/clientes/sincronizacao/salvar", methods=["POST"])
+def salvar_sincronizacao_clientes():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    preview_sync = session.get("clientes_sync_preview") or {}
+    nome = (request.form.get("nome") or preview_sync.get("nome") or "").strip()
+    url = (request.form.get("url") or preview_sync.get("url") or "").strip()
+    intervalo_minutos = normalizar_intervalo_sincronizacao(
+        request.form.get("intervalo_minutos") or preview_sync.get("intervalo_minutos")
+    )
+
+    if not url:
+        definir_feedback_clientes("erro", "Informe um link de planilha.")
+        return redirect("/clientes")
+
+    try:
+        df, url_normalizada = ler_dataframe_link_planilha(url)
+        colunas = list(df.columns)
+        mapeamento = obter_mapeamento_sync_por_form(request.form)
+
+        if not any(mapeamento.values()):
+            mapeamento = preview_sync.get("mapeamento_sugerido") or sugerir_mapeamento_colunas(colunas)
+
+        if not mapeamento.get("placa"):
+            raise ValueError("Nao consegui identificar a coluna de placa.")
+
+        for campo in CAMPOS_SINCRONIZACAO_CLIENTES:
+            coluna = mapeamento.get(campo["key"])
+            if coluna and coluna not in colunas:
+                raise ValueError(f"A coluna '{coluna}' nao foi encontrada na planilha.")
+
+        estatisticas = importar_clientes_dataframe(df, mapeamento)
+        mensagem_importacao = resumir_importacao_clientes(estatisticas)
+        agora_atual = agora_iso()
+        proximo_sync_em = somar_minutos_iso(intervalo_minutos)
+        hash_atual = hashlib.md5(df.to_csv(index=False).encode("utf-8")).hexdigest()
+
+        conn = conectar()
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO sincronizacoes_clientes (
+                nome, url, intervalo_minutos,
+                campo_placa, campo_nome, campo_telefone, campo_modelo, campo_cor,
+                ativo, ultimo_sync_em, proximo_sync_em, ultimo_status, ultima_mensagem,
+                criado_em, atualizado_em, ultimo_hash, colunas_ultima_sync
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            nome or "Planilha automatica",
+            url_normalizada,
+            intervalo_minutos,
+            mapeamento.get("placa"),
+            mapeamento.get("nome"),
+            mapeamento.get("telefone"),
+            mapeamento.get("modelo"),
+            mapeamento.get("cor"),
+            1,
+            agora_atual,
+            proximo_sync_em,
+            "OK",
+            mensagem_importacao,
+            agora_atual,
+            agora_atual,
+            hash_atual,
+            ",".join(colunas),
+        ))
+        conn.commit()
+        conn.close()
+
+        limpar_preview_sincronizacao()
+        salvar_notificacao(mensagem_importacao, "sucesso")
+        definir_feedback_clientes(
+            "sucesso",
+            f"Sincronizacao salva. Link: {url_normalizada} | Proxima execucao: {formatar_datahora(proximo_sync_em)} ({formatar_tempo_restante(proximo_sync_em)}) | {mensagem_importacao}"
+        )
+    except Exception as e:
+        definir_feedback_clientes("erro", f"Erro ao salvar sincronizacao: {e}")
 
     return redirect("/clientes")
 
@@ -1960,6 +2322,41 @@ def cadastrar():
         conn.close()
 
     return redirect(f"/?placa={placa}")
+
+@app.route("/editar_cliente", methods=["POST"])
+def editar_cliente():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    placa_original = (request.form.get("placa_original") or request.form.get("placa") or "").strip()
+    placa = (request.form.get("placa") or placa_original).strip()
+    redirect_to = (request.form.get("redirect_to") or "").strip()
+
+    if not redirect_to:
+        redirect_to = f"/?placa={placa.upper()}"
+
+    try:
+        resultado = salvar_cliente_veiculo(
+            placa=placa,
+            nome=request.form.get("nome", ""),
+            telefone=request.form.get("telefone", ""),
+            modelo=request.form.get("modelo", ""),
+            cor=request.form.get("cor", ""),
+            placa_original=placa_original,
+        )
+        mensagem = f"Cadastro da placa {resultado['placa']} salvo com sucesso."
+
+        if redirect_to.startswith("/clientes"):
+            definir_feedback_clientes("sucesso", mensagem)
+        elif redirect_to.startswith("/base_dados"):
+            definir_feedback_base_dados("sucesso", mensagem)
+    except Exception as e:
+        if redirect_to.startswith("/clientes"):
+            definir_feedback_clientes("erro", f"Erro ao salvar cliente: {e}")
+        elif redirect_to.startswith("/base_dados"):
+            definir_feedback_base_dados("erro", f"Erro ao salvar cliente: {e}")
+
+    return redirect(redirect_to)
 
 @app.route("/servico", methods=["POST"])
 def servico():
@@ -2217,6 +2614,83 @@ def cadastrar_pneu():
     conn.close()
 
     return render_template("pneu.html", produtos=lista)
+
+@app.route("/base_dados")
+def base_dados():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    registros = listar_registros_clientes()
+    resumo = montar_resumo_base_dados(registros)
+
+    return render_template(
+        "base_dados.html",
+        registros=registros,
+        resumo=resumo,
+        feedback=session.pop("base_dados_feedback", None),
+    )
+
+@app.route("/base_dados/upload", methods=["POST"])
+def base_dados_upload():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    arquivo = request.files.get("arquivo")
+
+    if not arquivo:
+        definir_feedback_base_dados("erro", "Selecione uma planilha para importar.")
+        return redirect("/base_dados")
+
+    try:
+        df, filename = ler_dataframe_arquivo_planilha(arquivo)
+        mapeamento = sugerir_mapeamento_colunas(list(df.columns))
+
+        if not mapeamento.get("placa"):
+            raise ValueError("Nao encontrei uma coluna de placa na planilha enviada.")
+
+        estatisticas = importar_clientes_dataframe(df, mapeamento)
+        mensagem = f"Upload '{filename}' importado com sucesso. {resumir_importacao_clientes(estatisticas)}"
+        definir_feedback_base_dados("sucesso", mensagem)
+        salvar_notificacao(mensagem, "sucesso")
+    except Exception as e:
+        definir_feedback_base_dados("erro", f"Erro ao importar planilha: {e}")
+
+    return redirect("/base_dados")
+
+@app.route("/api/base_dados")
+def api_base_dados():
+    if not session.get("usuario"):
+        return jsonify({"erro": "nao autorizado"}), 401
+
+    registros = listar_registros_clientes()
+    resumo = montar_resumo_base_dados(registros)
+    return jsonify({"dados": registros, "resumo": resumo})
+
+@app.route("/api/base_dados/salvar", methods=["POST"])
+@app.route("/api/salvar_base", methods=["POST"])
+def api_salvar_base():
+    if not session.get("usuario"):
+        return jsonify({"status": "erro", "mensagem": "nao autorizado"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    linhas = payload.get("linhas") or payload.get("dados") or []
+
+    try:
+        estatisticas = salvar_linhas_base_dados(linhas)
+        mensagem = resumir_salvamento_base_dados(estatisticas)
+        registros = listar_registros_clientes()
+        resumo = montar_resumo_base_dados(registros)
+        return jsonify({
+            "status": "ok",
+            "mensagem": mensagem,
+            "dados": registros,
+            "resumo": resumo,
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "erro",
+            "mensagem": str(e),
+        }), 400
 
 
 

@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+
+{% block title %}Base de Dados{% endblock %}
+{% block titulo %}Base de Dados{% endblock %}
+{% block subtitulo %}Upload, leitura e edicao da base de clientes{% endblock %}
+
+{% block actions %}
+<a href="/clientes" class="button-link">
+    <button type="button">Clientes</button>
+</a>
+
+<a href="/" class="button-link">
+    <button type="button">Inicio</button>
+</a>
+{% endblock %}
+
+{% block content %}
+
+{% if feedback %}
+<div class="page-card {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
+</div>
+{% endif %}
+
+<div class="page-grid top-spacing">
+    <div class="page-card">
+        <p class="pill-label">Registros</p>
+        <div class="metric-value" id="resumo-total">{{ resumo.total_registros }}</div>
+    </div>
+    <div class="page-card">
+        <p class="pill-label">Clientes</p>
+        <div class="metric-value" id="resumo-clientes">{{ resumo.total_clientes }}</div>
+    </div>
+    <div class="page-card">
+        <p class="pill-label">Com telefone</p>
+        <div class="metric-value" id="resumo-telefones">{{ resumo.com_telefone }}</div>
+    </div>
+    <div class="page-card">
+        <p class="pill-label">Com modelo</p>
+        <div class="metric-value" id="resumo-modelos">{{ resumo.com_modelo }}</div>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <h2 class="section-title">Importar planilha</h2>
+    <p class="muted-text">Envie um arquivo CSV, TSV, XLS ou XLSX. O sistema tenta mapear automaticamente os campos placa, nome, telefone, modelo e cor.</p>
+
+    <form action="/base_dados/upload" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide">
+        <div class="field-grid">
+            <input type="file" name="arquivo" accept=".csv,.tsv,.xls,.xlsx" required>
+        </div>
+        <div class="actions-row actions-row--left">
+            <button>Importar planilha</button>
+        </div>
+    </form>
+</div>
+
+<div class="page-card top-spacing">
+    <div class="actions-row actions-row--left">
+        <input id="busca-local" placeholder="Filtrar na tabela por placa, nome, telefone, modelo ou cor">
+        <button type="button" onclick="adicionarLinhaBase()">Adicionar linha</button>
+        <button type="button" onclick="salvarBaseDados()">Salvar alteracoes</button>
+        <button type="button" onclick="recarregarBaseDados()">Recarregar</button>
+    </div>
+
+    <div id="status-base" class="top-spacing muted-text"></div>
+
+    <div class="table-wrap top-spacing">
+        <table>
+            <thead>
+                <tr>
+                    <th>Placa</th>
+                    <th>Nome</th>
+                    <th>Telefone</th>
+                    <th>Modelo</th>
+                    <th>Cor</th>
+                    <th>Acoes</th>
+                </tr>
+            </thead>
+            <tbody id="base-dados-body"></tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+const initialRows = {{ registros|tojson }};
+const initialSummary = {{ resumo|tojson }};
+let linhasBase = initialRows.map(normalizarLinhaBase);
+let filtroBase = "";
+
+function normalizarLinhaBase(linha = {}) {
+    return {
+        placa_original: linha.placa_original || linha.placa || "",
+        placa: linha.placa || "",
+        nome: linha.nome || "",
+        telefone: linha.telefone || "",
+        modelo: linha.modelo || "",
+        cor: linha.cor || ""
+    };
+}
+
+function atualizarResumoBase(resumo) {
+    document.getElementById("resumo-total").textContent = resumo.total_registros ?? 0;
+    document.getElementById("resumo-clientes").textContent = resumo.total_clientes ?? 0;
+    document.getElementById("resumo-telefones").textContent = resumo.com_telefone ?? 0;
+    document.getElementById("resumo-modelos").textContent = resumo.com_modelo ?? 0;
+}
+
+function atualizarStatusBase(mensagem, tipo = "info") {
+    const el = document.getElementById("status-base");
+    el.textContent = mensagem || "";
+    el.className = "top-spacing " + (tipo === "erro" ? "error-text" : tipo === "sucesso" ? "success-text" : "muted-text");
+}
+
+function linhaCombinaFiltro(linha) {
+    if (!filtroBase) {
+        return true;
+    }
+
+    const texto = [linha.placa, linha.nome, linha.telefone, linha.modelo, linha.cor]
+        .join(" ")
+        .toLowerCase();
+
+    return texto.includes(filtroBase);
+}
+
+function escapeHtml(valor) {
+    return String(valor || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
+function criarInputTabela(index, campo, valor, placeholder = "") {
+    return `<input data-index="${index}" data-campo="${campo}" value="${escapeHtml(valor)}" placeholder="${escapeHtml(placeholder)}">`;
+}
+
+function renderizarBaseDados() {
+    const tbody = document.getElementById("base-dados-body");
+    tbody.innerHTML = "";
+
+    let linhasRenderizadas = 0;
+
+    linhasBase.forEach((linha, index) => {
+        if (!linhaCombinaFiltro(linha)) {
+            return;
+        }
+
+        linhasRenderizadas += 1;
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>${criarInputTabela(index, "placa", linha.placa, "Placa")}</td>
+            <td>${criarInputTabela(index, "nome", linha.nome, "Nome")}</td>
+            <td>${criarInputTabela(index, "telefone", linha.telefone, "Telefone")}</td>
+            <td>${criarInputTabela(index, "modelo", linha.modelo, "Modelo")}</td>
+            <td>${criarInputTabela(index, "cor", linha.cor, "Cor")}</td>
+            <td>
+                <button type="button" class="button-danger" onclick="removerLinhaBase(${index})">Descartar</button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    if (!linhasRenderizadas) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="6" class="empty-state">Nenhum registro encontrado para esse filtro.</td>`;
+        tbody.appendChild(tr);
+    }
+
+    tbody.querySelectorAll("input").forEach((input) => {
+        input.addEventListener("input", (event) => {
+            const idx = Number(event.target.dataset.index);
+            const campo = event.target.dataset.campo;
+            linhasBase[idx][campo] = event.target.value;
+        });
+    });
+}
+
+function adicionarLinhaBase() {
+    linhasBase.unshift(normalizarLinhaBase());
+    renderizarBaseDados();
+}
+
+function removerLinhaBase(index) {
+    linhasBase.splice(index, 1);
+    renderizarBaseDados();
+}
+
+async function recarregarBaseDados() {
+    atualizarStatusBase("Recarregando base...");
+
+    const resposta = await fetch("/api/base_dados");
+    const dados = await resposta.json();
+
+    if (!resposta.ok) {
+        atualizarStatusBase(dados.erro || "Nao foi possivel recarregar a base.", "erro");
+        return;
+    }
+
+    linhasBase = (dados.dados || []).map(normalizarLinhaBase);
+    atualizarResumoBase(dados.resumo || {});
+    renderizarBaseDados();
+    atualizarStatusBase("Base recarregada.", "sucesso");
+}
+
+async function salvarBaseDados() {
+    atualizarStatusBase("Salvando alteracoes...");
+
+    const resposta = await fetch("/api/base_dados/salvar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            linhas: linhasBase.map((linha) => ({
+                placa_original: linha.placa_original || linha.placa || "",
+                placa: linha.placa || "",
+                nome: linha.nome || "",
+                telefone: linha.telefone || "",
+                modelo: linha.modelo || "",
+                cor: linha.cor || ""
+            }))
+        })
+    });
+
+    const dados = await resposta.json();
+
+    if (!resposta.ok || dados.status !== "ok") {
+        atualizarStatusBase(dados.mensagem || "Nao foi possivel salvar a base.", "erro");
+        return;
+    }
+
+    linhasBase = (dados.dados || []).map(normalizarLinhaBase);
+    atualizarResumoBase(dados.resumo || {});
+    renderizarBaseDados();
+    atualizarStatusBase(dados.mensagem || "Base salva com sucesso.", "sucesso");
+}
+
+document.getElementById("busca-local").addEventListener("input", (event) => {
+    filtroBase = event.target.value.trim().toLowerCase();
+    renderizarBaseDados();
+});
+
+atualizarResumoBase(initialSummary);
+renderizarBaseDados();
+</script>
+
+{% endblock %}
