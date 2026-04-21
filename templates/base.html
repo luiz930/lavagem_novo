@@ -336,19 +336,7 @@ body.responsive-page.sidebar-open {
 
 {% endif %}
 
-{% block global_voice_controls %}
-{% if session.get("usuario") %}
-<div class="voice-widget">
-    <div class="voice-widget-actions">
-        <button type="button" id="vozToggleButton">Avisos por voz: ativados</button>
-        <button type="button" id="vozTesteButton">Testar voz</button>
-    </div>
-    <p class="muted-text voice-widget-status" id="vozStatusTexto">
-        A cada 10 minutos, o sistema avisa em portugues do Brasil quais veiculos continuam em atendimento e ha quantos minutos estao na operacao.
-    </p>
-</div>
-{% endif %}
-{% endblock %}
+{% block global_voice_controls %}{% endblock %}
 
 <div id="main" class="main-content responsive-main {% if session.get('usuario') %}{% else %}no-sidebar{% endif %}">
 

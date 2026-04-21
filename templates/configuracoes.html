@@ -27,11 +27,30 @@
 <div class="page-grid">
     <div class="page-card">
         <p class="pill-label">Meu acesso</p>
-        <h2 class="section-title top-spacing">{{ usuario_logado.nome }}</h2>
-        <p><b>Login:</b> {{ usuario_logado.usuario }}</p>
-        <p><b>Perfil:</b> {{ "Administrador" if usuario_logado.perfil == "admin" else "Funcionario" }}</p>
+        <div class="profile-user-row top-spacing">
+            <div class="profile-avatar profile-avatar--lg">
+                {% if usuario_logado.foto_url %}
+                <img src="{{ usuario_logado.foto_url }}" alt="Foto de {{ usuario_logado.nome }}">
+                {% else %}
+                <span class="profile-avatar__fallback">{{ usuario_logado.iniciais }}</span>
+                {% endif %}
+            </div>
+            <div class="profile-user-copy">
+                <h2 class="section-title">{{ usuario_logado.nome }}</h2>
+                <p><b>Login:</b> {{ usuario_logado.usuario }}</p>
+                <p><b>Perfil:</b> {{ "Administrador" if usuario_logado.perfil == "admin" else "Funcionario" }}</p>
+            </div>
+        </div>
         <p class="muted-text top-spacing">Use esta area para manter o acesso da equipe organizado e o login principal protegido.</p>
         <p class="muted-text">Padrao minimo: 10+ caracteres, letra maiuscula, minuscula, numero e simbolo.</p>
+
+        <form action="/configuracoes/foto" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide top-spacing">
+            <input type="file" name="foto_perfil" accept="image/*" required>
+            <p class="muted-text profile-upload-note">Envie uma foto para aparecer na tela inicial ao lado do sino e no seu perfil do sistema.</p>
+            <div class="actions-row actions-row--left">
+                <button type="submit">Salvar minha foto</button>
+            </div>
+        </form>
     </div>
 
     <div class="page-card">
@@ -181,7 +200,7 @@
     <h2 class="section-title">Novo login de funcionario</h2>
     <p class="muted-text">Crie acessos individuais para a equipe com senha forte. No primeiro login, a troca de senha sera obrigatoria.</p>
 
-    <form action="/configuracoes/usuarios" method="POST" class="stack-form stack-form--wide top-spacing">
+    <form action="/configuracoes/usuarios" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide top-spacing">
         <div class="field-grid">
             <input name="nome" placeholder="Nome do funcionario" required>
             <input name="usuario" placeholder="Login do funcionario" required>
@@ -191,6 +210,9 @@
                 <option value="admin">Administrador</option>
             </select>
         </div>
+
+        <input type="file" name="foto_perfil" accept="image/*">
+        <p class="muted-text profile-upload-note">Opcional: ja crie o acesso com foto para exibir na tela inicial quando esse usuario estiver logado.</p>
 
         <div class="actions-row actions-row--left">
             <button type="submit">Criar acesso</button>
@@ -217,13 +239,34 @@
                 {% endif %}
             </div>
 
-            <p class="top-spacing"><b>{{ item.nome }}</b></p>
-            <p class="muted-text">Login: {{ item.usuario }}</p>
-            <p class="muted-text">Criado em: {{ item.criado_em_fmt }}</p>
-            <p class="muted-text">Ultimo login: {{ item.ultimo_login_em_fmt or "Ainda nao acessou" }}</p>
+            <div class="profile-user-row top-spacing">
+                <div class="profile-avatar">
+                    {% if item.foto_url %}
+                    <img src="{{ item.foto_url }}" alt="Foto de {{ item.nome }}">
+                    {% else %}
+                    <span class="profile-avatar__fallback">{{ item.iniciais }}</span>
+                    {% endif %}
+                </div>
+                <div class="profile-user-copy">
+                    <p><b>{{ item.nome }}</b></p>
+                    <p class="muted-text">Login: {{ item.usuario }}</p>
+                    <p class="muted-text">Criado em: {{ item.criado_em_fmt }}</p>
+                    <p class="muted-text">Ultimo login: {{ item.ultimo_login_em_fmt or "Ainda nao acessou" }}</p>
+                </div>
+            </div>
             {% if item.bloqueado %}
             <p class="muted-text">Bloqueio ate: {{ item.bloqueado_ate_fmt }} ({{ item.bloqueado_restante }})</p>
             {% endif %}
+
+            <details class="top-spacing">
+                <summary>Atualizar foto</summary>
+                <form action="/configuracoes/usuarios/{{ item.id }}/foto" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide top-spacing">
+                    <input type="file" name="foto_perfil" accept="image/*" required>
+                    <div class="actions-row actions-row--left">
+                        <button type="submit">Salvar foto</button>
+                    </div>
+                </form>
+            </details>
 
             {% if item.usuario != "admin" %}
             <div class="actions-row actions-row--left top-spacing">

@@ -46,6 +46,7 @@ DATABASE_FILE = "database_v2.db"
 UPLOADS_ORFAOS_FOLDER = os.path.join(UPLOAD_FOLDER, "orfaos")
 UPLOADS_THUMBS_FOLDER = os.path.join(UPLOAD_FOLDER, "thumbs")
 UPLOADS_SERVICOS_FOLDER = os.path.join(UPLOAD_FOLDER, "servicos")
+UPLOADS_PERFIS_FOLDER = os.path.join(UPLOAD_FOLDER, "perfis")
 BACKUP_RETENCAO_PADRAO = 15
 FREQUENCIAS_BACKUP = [
     {"value": "diario", "label": "Diario"},
@@ -54,6 +55,8 @@ FREQUENCIAS_BACKUP = [
 ]
 FOTO_MAX_DIMENSAO = 1600
 FOTO_QUALIDADE_JPEG = 82
+FOTO_PERFIL_MAX_DIMENSAO = 640
+FOTO_PERFIL_QUALIDADE_JPEG = 80
 RETENCAO_ORFAOS_DIAS = 30
 RETENCAO_THUMBS_DIAS = 7
 IDADE_MINIMA_ORFAO_SEGUNDOS = 600
@@ -556,6 +559,10 @@ def caminho_uploads_thumbs_absoluto():
     os.makedirs(UPLOADS_THUMBS_FOLDER, exist_ok=True)
     return os.path.abspath(UPLOADS_THUMBS_FOLDER)
 
+def caminho_uploads_perfis_absoluto():
+    os.makedirs(UPLOADS_PERFIS_FOLDER, exist_ok=True)
+    return os.path.abspath(UPLOADS_PERFIS_FOLDER)
+
 def caminho_uploads_servicos_diretorio(datahora=None):
     datahora = datahora or agora()
     pasta = os.path.join(
@@ -607,6 +614,53 @@ def arquivo_dentro_da_pasta(caminho_arquivo, pasta_base):
         return os.path.commonpath([normalizar_caminho_arquivo(caminho_arquivo), os.path.abspath(pasta_base)]) == os.path.abspath(pasta_base)
     except Exception:
         return False
+
+def obter_iniciais_usuario(nome, usuario=""):
+    texto = str(nome or usuario or "").strip()
+    if not texto:
+        return "US"
+
+    partes = [item for item in re.split(r"\s+", texto) if item]
+    if not partes:
+        return "US"
+
+    if len(partes) == 1:
+        return partes[0][:2].upper()
+
+    return (partes[0][:1] + partes[-1][:1]).upper()
+
+def caminho_absoluto_usuario_foto(caminho):
+    texto = str(caminho or "").strip()
+    if not texto:
+        return ""
+
+    if os.path.isabs(texto):
+        return os.path.normpath(texto)
+
+    if texto.startswith("/static/"):
+        texto = texto.lstrip("/")
+
+    if texto.startswith("static/"):
+        relativo = texto[len("static/"):].replace("/", os.sep)
+        return os.path.normpath(os.path.join(caminho_static_absoluto(), relativo))
+
+    return os.path.normpath(os.path.join(caminho_uploads_perfis_absoluto(), os.path.basename(texto)))
+
+def url_foto_usuario(caminho):
+    return caminho_foto_para_url(caminho) if str(caminho or "").strip() else ""
+
+def remover_foto_perfil_antiga(caminho):
+    caminho_abs = caminho_absoluto_usuario_foto(caminho)
+    if not caminho_abs or not os.path.exists(caminho_abs):
+        return
+
+    if not arquivo_dentro_da_pasta(caminho_abs, caminho_uploads_perfis_absoluto()):
+        return
+
+    try:
+        os.remove(caminho_abs)
+    except Exception:
+        pass
 
 def coletar_metricas_diretorio(pasta, ignorar_subpastas=None):
     base = os.path.abspath(pasta)
@@ -1163,7 +1217,7 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = False
 app.secret_key = "wagen_super_segura_123"
 
-APP_VERSION = "Versão: 0.5.0-alpha(Em Desenvolvimento)"
+APP_VERSION = "Versão: 0.7.5-alpha (Em Desenvolvimento)"
 MESES_CURTOS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 PERIODOS_FINANCEIRO = [
     {"value": "hoje", "label": "Hoje"},
@@ -1187,6 +1241,7 @@ ACOES_AUDITORIA_LABELS = {
     "abriu_checklist_finalizacao": "Abriu checklist de finalizacao",
     "adicionou_fotos_detalhe": "Adicionou fotos de detalhe",
     "alterou_propria_senha": "Alterou a propria senha",
+    "atualizou_foto_perfil": "Atualizou foto de perfil",
     "atualizou_emitente_fiscal": "Atualizou emitente fiscal",
     "atualizou_integracao_fiscal": "Atualizou integracao fiscal",
     "configurou_backup": "Configurou rotina de backup",
@@ -1363,6 +1418,7 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "usuarios", "ultimo_login_em TEXT")
     adicionar_coluna_se_preciso(c, "usuarios", "senha_alteracao_obrigatoria INTEGER")
     adicionar_coluna_se_preciso(c, "usuarios", "senha_atualizada_em TEXT")
+    adicionar_coluna_se_preciso(c, "usuarios", "foto_perfil TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "frequencia TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "retencao_arquivos INTEGER")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "atualizado_em TEXT")
@@ -1611,7 +1667,8 @@ def criar_todas_tabelas():
         bloqueado_ate TEXT,
         ultimo_login_em TEXT,
         senha_alteracao_obrigatoria INTEGER DEFAULT 0,
-        senha_atualizada_em TEXT
+        senha_atualizada_em TEXT,
+        foto_perfil TEXT
     )
     """)
 
@@ -2149,6 +2206,12 @@ def preencher_sessao_usuario(usuario_row, limpar=True):
     session["usuario"] = usuario_row["usuario"]
     session["usuario_id"] = usuario_row["id"]
     session["usuario_nome"] = (usuario_row["nome"] or usuario_row["usuario"])
+    session["usuario_iniciais"] = obter_iniciais_usuario(
+        usuario_row["nome"],
+        usuario_row["usuario"],
+    )
+    session["usuario_foto"] = str(usuario_row["foto_perfil"] or "").strip()
+    session["usuario_foto_url"] = url_foto_usuario(usuario_row["foto_perfil"])
     session["usuario_perfil"] = (
         usuario_row["perfil"] or
         ("admin" if usuario_row["usuario"] == "admin" else "funcionario")
@@ -2164,6 +2227,8 @@ def sincronizar_sessao_usuario():
         session.get("usuario_id") and
         session.get("usuario_nome") and
         session.get("usuario_perfil") and
+        "usuario_iniciais" in session and
+        "usuario_foto_url" in session and
         "senha_alteracao_obrigatoria" in session
     ):
         return
@@ -3482,6 +3547,62 @@ def obter_resample_lanczos():
         return Image.Resampling.LANCZOS
 
     return getattr(Image, "LANCZOS", Image.BICUBIC)
+
+def salvar_foto_perfil_usuario(foto, identificador="usuario"):
+    if not foto or not str(getattr(foto, "filename", "") or "").strip():
+        raise ValueError("Selecione uma foto para o perfil.")
+
+    if not arquivo_permitido(foto.filename):
+        raise ValueError("Envie uma imagem em JPG, PNG, WEBP, HEIC ou HEIF.")
+
+    pasta_destino = caminho_uploads_perfis_absoluto()
+    nome_seguro = secure_filename(foto.filename or "") or "perfil"
+    nome_base, ext_original = os.path.splitext(nome_seguro)
+    nome_base = re.sub(r"[^A-Za-z0-9_-]+", "_", nome_base or "perfil").strip("_") or "perfil"
+    prefixo = re.sub(r"[^A-Za-z0-9_-]+", "_", str(identificador or "usuario")).strip("_") or "usuario"
+    ext_original = (ext_original or ".jpg").lower()
+
+    if PILLOW_DISPONIVEL:
+        try:
+            foto.stream.seek(0)
+            imagem = Image.open(foto.stream)
+            imagem = ImageOps.exif_transpose(imagem)
+
+            largura_original, altura_original = imagem.size
+            if max(largura_original, altura_original) > FOTO_PERFIL_MAX_DIMENSAO:
+                imagem.thumbnail(
+                    (FOTO_PERFIL_MAX_DIMENSAO, FOTO_PERFIL_MAX_DIMENSAO),
+                    obter_resample_lanczos(),
+                )
+
+            if imagem.mode != "RGB":
+                imagem = imagem.convert("RGB")
+
+            destino = os.path.join(
+                pasta_destino,
+                f"{time.time_ns()}_{prefixo}_{nome_base}.jpg",
+            )
+            imagem.save(
+                destino,
+                format="JPEG",
+                quality=FOTO_PERFIL_QUALIDADE_JPEG,
+                optimize=True,
+                progressive=True,
+            )
+            return destino
+        except (UnidentifiedImageError, OSError, ValueError):
+            raise ValueError("Nao consegui processar a foto enviada. Tente outra imagem.")
+        except Exception:
+            raise ValueError("Nao consegui salvar a foto do perfil agora.")
+
+    ext_fallback = ext_original if ext_original in {".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"} else ".jpg"
+    destino = os.path.join(
+        pasta_destino,
+        f"{time.time_ns()}_{prefixo}_{nome_base}{ext_fallback}",
+    )
+    foto.stream.seek(0)
+    foto.save(destino)
+    return destino
 
 def salvar_arquivo_imagem_otimizado(foto):
     pasta_destino = caminho_uploads_servicos_diretorio()
@@ -5617,6 +5738,11 @@ def api_hud():
         "versao": APP_VERSION,
         "usuario": session.get("usuario") or "",
         "usuario_nome": session.get("usuario_nome") or session.get("usuario") or "",
+        "usuario_iniciais": session.get("usuario_iniciais") or obter_iniciais_usuario(
+            session.get("usuario_nome"),
+            session.get("usuario"),
+        ),
+        "usuario_foto_url": session.get("usuario_foto_url") or "",
     }
 
 @app.route("/status_sync")
@@ -5790,7 +5916,8 @@ def carregar_usuarios_configuracao():
     c = conn.cursor()
     c.execute("""
         SELECT id, usuario, nome, perfil, ativo, criado_em,
-               tentativas_login, bloqueado_ate, ultimo_login_em, senha_alteracao_obrigatoria
+               tentativas_login, bloqueado_ate, ultimo_login_em,
+               senha_alteracao_obrigatoria, foto_perfil
         FROM usuarios
         ORDER BY
             CASE WHEN perfil='admin' THEN 0 ELSE 1 END,
@@ -5808,6 +5935,8 @@ def carregar_usuarios_configuracao():
         item["ultimo_login_em_fmt"] = formatar_datahora(item.get("ultimo_login_em"))
         item["tentativas_login"] = int(item.get("tentativas_login") or 0)
         item["troca_senha_obrigatoria"] = bool(int(item.get("senha_alteracao_obrigatoria") or 0))
+        item["iniciais"] = obter_iniciais_usuario(item.get("nome"), item.get("usuario"))
+        item["foto_url"] = url_foto_usuario(item.get("foto_perfil"))
         bloqueado_ate = usuario_bloqueado_ate(item)
         item["bloqueado"] = bool(bloqueado_ate)
         item["bloqueado_ate_fmt"] = formatar_datahora(item.get("bloqueado_ate"))
@@ -5925,6 +6054,11 @@ def configuracoes():
             "id": session.get("usuario_id"),
             "usuario": session.get("usuario"),
             "nome": session.get("usuario_nome") or session.get("usuario"),
+            "iniciais": session.get("usuario_iniciais") or obter_iniciais_usuario(
+                session.get("usuario_nome"),
+                session.get("usuario"),
+            ),
+            "foto_url": session.get("usuario_foto_url") or "",
             "perfil": session.get("usuario_perfil") or (
                 "admin" if session.get("usuario") == "admin" else "funcionario"
             ),
@@ -6034,8 +6168,65 @@ def executar_manutencao_arquivos_configuracoes():
             force=True,
             registrar_log=True,
             usuario=resumo_usuario_logado(),
-        )
+    )
     definir_feedback_configuracoes("sucesso" if sucesso else "erro", mensagem)
+    return redirect("/configuracoes")
+
+@app.route("/configuracoes/foto", methods=["POST"])
+def atualizar_minha_foto():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    foto = request.files.get("foto_perfil")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT * FROM usuarios WHERE id=?", (session.get("usuario_id"),))
+    usuario = c.fetchone()
+
+    if not usuario:
+        conn.close()
+        definir_feedback_configuracoes("erro", "Usuario nao encontrado.")
+        return redirect("/configuracoes")
+
+    antiga_foto = usuario["foto_perfil"]
+    nova_foto = ""
+
+    try:
+        nova_foto = salvar_foto_perfil_usuario(
+            foto,
+            identificador=f"{usuario['usuario']}_{usuario['id']}",
+        )
+        c.execute("UPDATE usuarios SET foto_perfil=? WHERE id=?", (nova_foto, usuario["id"]))
+        conn.commit()
+        c.execute("SELECT * FROM usuarios WHERE id=?", (usuario["id"],))
+        usuario_atualizado = c.fetchone()
+    except ValueError as erro:
+        conn.rollback()
+        conn.close()
+        if nova_foto:
+            remover_foto_perfil_antiga(nova_foto)
+        definir_feedback_configuracoes("erro", str(erro))
+        return redirect("/configuracoes")
+    except Exception:
+        conn.rollback()
+        conn.close()
+        if nova_foto:
+            remover_foto_perfil_antiga(nova_foto)
+        definir_feedback_configuracoes("erro", "Nao foi possivel atualizar a foto do perfil agora.")
+        return redirect("/configuracoes")
+
+    conn.close()
+    remover_foto_perfil_antiga(antiga_foto)
+    preencher_sessao_usuario(usuario_atualizado, limpar=False)
+    registrar_auditoria(
+        "atualizou_foto_perfil",
+        "usuario",
+        entidade_id=usuario["id"],
+        detalhes={"usuario_alvo": usuario["usuario"]},
+    )
+    definir_feedback_configuracoes("sucesso", "Foto do seu perfil atualizada com sucesso.")
     return redirect("/configuracoes")
 
 @app.route("/configuracoes/senha", methods=["POST"])
@@ -6120,6 +6311,7 @@ def criar_usuario_funcionario():
     usuario = (request.form.get("usuario") or "").strip().lower()
     senha = request.form.get("senha") or ""
     perfil = normalizar_perfil_usuario(request.form.get("perfil"))
+    foto_perfil = request.files.get("foto_perfil")
 
     if not nome or not usuario or not senha:
         definir_feedback_configuracoes("erro", "Informe nome, login e senha para criar o usuario.")
@@ -6140,28 +6332,55 @@ def criar_usuario_funcionario():
         definir_feedback_configuracoes("erro", "Ja existe um acesso com esse login.")
         return redirect("/configuracoes")
 
-    c.execute("""
-        INSERT INTO usuarios (
-            usuario, senha, nome, perfil, ativo, criado_em,
-            tentativas_login, bloqueado_ate, ultimo_login_em,
-            senha_alteracao_obrigatoria, senha_atualizada_em
-        )
-        VALUES (?, ?, ?, ?, 1, ?, 0, NULL, NULL, 1, ?)
-    """, (
-        usuario,
-        senha_hash_bcrypt(senha),
-        nome,
-        perfil,
-        agora_iso(),
-        agora_iso(),
-    ))
-    conn.commit()
+    nova_foto = ""
+
+    try:
+        c.execute("""
+            INSERT INTO usuarios (
+                usuario, senha, nome, perfil, ativo, criado_em,
+                tentativas_login, bloqueado_ate, ultimo_login_em,
+                senha_alteracao_obrigatoria, senha_atualizada_em
+            )
+            VALUES (?, ?, ?, ?, 1, ?, 0, NULL, NULL, 1, ?)
+        """, (
+            usuario,
+            senha_hash_bcrypt(senha),
+            nome,
+            perfil,
+            agora_iso(),
+            agora_iso(),
+        ))
+        usuario_id = c.lastrowid
+
+        if foto_perfil and str(foto_perfil.filename or "").strip():
+            nova_foto = salvar_foto_perfil_usuario(
+                foto_perfil,
+                identificador=f"{usuario}_{usuario_id}",
+            )
+            c.execute("UPDATE usuarios SET foto_perfil=? WHERE id=?", (nova_foto, usuario_id))
+
+        conn.commit()
+    except ValueError as erro:
+        conn.rollback()
+        conn.close()
+        if nova_foto:
+            remover_foto_perfil_antiga(nova_foto)
+        definir_feedback_configuracoes("erro", str(erro))
+        return redirect("/configuracoes")
+    except Exception:
+        conn.rollback()
+        conn.close()
+        if nova_foto:
+            remover_foto_perfil_antiga(nova_foto)
+        definir_feedback_configuracoes("erro", "Nao foi possivel criar o usuario agora.")
+        return redirect("/configuracoes")
+
     conn.close()
 
     registrar_auditoria(
         "criou_usuario",
         "usuario",
-        detalhes={"usuario_alvo": usuario, "perfil": perfil},
+        detalhes={"usuario_alvo": usuario, "perfil": perfil, "com_foto": bool(nova_foto)},
     )
     definir_feedback_configuracoes(
         "sucesso",
@@ -6223,6 +6442,72 @@ def redefinir_senha_usuario(usuario_id):
             f"Senha do usuario {alvo['usuario']} atualizada. "
             "Ele vai precisar trocar a senha no proximo login."
         ),
+    )
+    return redirect("/configuracoes")
+
+@app.route("/configuracoes/usuarios/<int:usuario_id>/foto", methods=["POST"])
+def atualizar_foto_usuario(usuario_id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem atualizar fotos de acessos.")
+        return redirect("/configuracoes")
+
+    foto = request.files.get("foto_perfil")
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT * FROM usuarios WHERE id=?", (usuario_id,))
+    alvo = c.fetchone()
+
+    if not alvo:
+        conn.close()
+        definir_feedback_configuracoes("erro", "Usuario nao encontrado.")
+        return redirect("/configuracoes")
+
+    antiga_foto = alvo["foto_perfil"]
+    nova_foto = ""
+
+    try:
+        nova_foto = salvar_foto_perfil_usuario(
+            foto,
+            identificador=f"{alvo['usuario']}_{alvo['id']}",
+        )
+        c.execute("UPDATE usuarios SET foto_perfil=? WHERE id=?", (nova_foto, usuario_id))
+        conn.commit()
+        c.execute("SELECT * FROM usuarios WHERE id=?", (usuario_id,))
+        alvo_atualizado = c.fetchone()
+    except ValueError as erro:
+        conn.rollback()
+        conn.close()
+        if nova_foto:
+            remover_foto_perfil_antiga(nova_foto)
+        definir_feedback_configuracoes("erro", str(erro))
+        return redirect("/configuracoes")
+    except Exception:
+        conn.rollback()
+        conn.close()
+        if nova_foto:
+            remover_foto_perfil_antiga(nova_foto)
+        definir_feedback_configuracoes("erro", "Nao foi possivel atualizar a foto desse acesso agora.")
+        return redirect("/configuracoes")
+
+    conn.close()
+    remover_foto_perfil_antiga(antiga_foto)
+
+    if int(session.get("usuario_id") or 0) == int(usuario_id):
+        preencher_sessao_usuario(alvo_atualizado, limpar=False)
+
+    registrar_auditoria(
+        "atualizou_foto_perfil",
+        "usuario",
+        entidade_id=usuario_id,
+        detalhes={"usuario_alvo": alvo["usuario"]},
+    )
+    definir_feedback_configuracoes(
+        "sucesso",
+        f"Foto do usuario {alvo['usuario']} atualizada com sucesso."
     )
     return redirect("/configuracoes")
 

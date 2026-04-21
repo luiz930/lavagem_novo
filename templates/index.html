@@ -553,17 +553,17 @@ input[type="file"] {
 
     background: #111827;
     border: 2px solid #facc15;
-    border-radius: 12px;
+    border-radius: 10px;
 
-    padding: 16px;
+    padding: 10px 12px;
 
-    font-size: 15px;
-    line-height: 1.8;
+    font-size: 12px;
+    line-height: 1.45;
 
-    box-shadow: 0 0 20px rgba(250, 204, 21, 0.4);
+    box-shadow: 0 0 12px rgba(250, 204, 21, 0.28);
 
-    width: 380px;
-    max-width: 95%;
+    width: 262px;
+    max-width: min(86vw, 262px);
 
     text-align: left;
     z-index: 9999;
@@ -617,11 +617,13 @@ input[type="file"] {
 
     #relogio {
         position: static;
-        width: 100%;
-        max-width: none;
-        margin: 24px auto 0;
+        width: min(100%, 260px);
+        max-width: 100%;
+        margin: 16px auto 0;
+        padding: 9px 11px;
         text-align: center;
-        line-height: 1.6;
+        line-height: 1.45;
+        font-size: 12px;
     }
 
     #dropdown-notificacoes {
@@ -686,7 +688,35 @@ input[type="file"] {
     position: fixed;
     top: 15px;
     right: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
     z-index: 9999;
+}
+
+#hud-usuario-avatar {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #111827;
+    border: 2px solid #facc15;
+    box-shadow: 0 0 14px rgba(250, 204, 21, 0.28);
+    color: #facc15;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}
+
+#hud-usuario-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
 }
 
 #btn-sino {
@@ -783,11 +813,18 @@ input[type="file"] {
     #sino-container {
         top: 12px;
         right: 12px;
+        gap: 8px;
     }
 
     #btn-sino {
         width: 44px;
         height: 44px;
+    }
+
+    #hud-usuario-avatar {
+        width: 38px;
+        height: 38px;
+        font-size: 11px;
     }
 
     .voice-widget {
@@ -857,16 +894,6 @@ input[type="file"] {
     </button>
 
     <div id="dropdown-notificacoes" class="hidden"></div>
-</div>
-
-<div class="voice-widget">
-    <div class="voice-widget-actions">
-        <button type="button" id="vozToggleButton">Avisos por voz: ativados</button>
-        <button type="button" id="vozTesteButton">Testar voz</button>
-    </div>
-    <p class="voice-widget-status" id="vozStatusTexto">
-        A cada 10 minutos, o sistema avisa em portugues do Brasil quais veiculos continuam em atendimento e ha quantos minutos estao na operacao.
-    </p>
 </div>
 
 <!-- MAIN -->
@@ -1355,11 +1382,50 @@ let hudData = {
     atrasados: 0,
     ticket: 0,
     usuario_nome: "",
+    usuario_iniciais: "",
+    usuario_foto_url: "",
     versao: APP_VERSION
 };
 
 let alertaAtivo = false;
 let audioAlerta = new Audio("https://actions.google.com/sounds/v1/alarms/beep_short.ogg");
+
+function obterIniciaisUsuario(nome) {
+    const texto = String(nome || "").trim();
+    if (!texto) return "US";
+
+    const partes = texto.split(/\s+/).filter(Boolean);
+    if (partes.length === 1) {
+        return partes[0].slice(0, 2).toUpperCase();
+    }
+
+    return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase();
+}
+
+function atualizarAvatarUsuario() {
+    const container = document.getElementById("sino-container");
+    if (!container) return;
+
+    let avatar = document.getElementById("hud-usuario-avatar");
+    if (!avatar) {
+        avatar = document.createElement("div");
+        avatar.id = "hud-usuario-avatar";
+        container.insertBefore(avatar, document.getElementById("btn-sino"));
+    }
+
+    avatar.title = hudData.usuario_nome || "Usuario logado";
+    avatar.innerHTML = "";
+
+    if (hudData.usuario_foto_url) {
+        const img = document.createElement("img");
+        img.src = hudData.usuario_foto_url;
+        img.alt = hudData.usuario_nome || "Usuario logado";
+        avatar.appendChild(img);
+        return;
+    }
+
+    avatar.textContent = hudData.usuario_iniciais || obterIniciaisUsuario(hudData.usuario_nome);
+}
 
 async function atualizarHUD() {
     try {
@@ -1368,6 +1434,7 @@ async function atualizarHUD() {
 
         if (!data.erro) {
             hudData = data;
+            atualizarAvatarUsuario();
         }
     } catch (e) {
         console.log("Erro HUD");

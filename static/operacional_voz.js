@@ -50,35 +50,6 @@
         return Array.from(document.querySelectorAll(".js-servico-card"));
     }
 
-    function garantirControlesVozNoDOM() {
-        const botaoExistente = obterBotaoVoz();
-        const botaoTesteExistente = obterBotaoTesteVoz();
-        const statusExistente = obterStatusVoz();
-
-        if (
-            botaoExistente &&
-            botaoTesteExistente &&
-            statusExistente
-        ) {
-            return;
-        }
-
-        if (!document.body) {
-            return;
-        }
-
-        const widget = document.createElement("div");
-        widget.className = "voice-widget";
-        widget.innerHTML = `
-            <div class="voice-widget-actions">
-                <button type="button" id="vozToggleButton">Avisos por voz: ativados</button>
-                <button type="button" id="vozTesteButton">Testar voz</button>
-            </div>
-            <p class="voice-widget-status" id="vozStatusTexto">${STATUS_PADRAO}</p>
-        `;
-        document.body.appendChild(widget);
-    }
-
     function vozOperacionalAtiva() {
         const salvo = localStorage.getItem(VOZ_ATIVA_KEY);
         return salvo === null ? true : salvo === "1";
@@ -421,7 +392,6 @@
     }
 
     function iniciarAvisosOperacionais() {
-        garantirControlesVozNoDOM();
         conectarControlesVoz();
         atualizarCardsPainel();
         atualizarStatusControlesVoz();

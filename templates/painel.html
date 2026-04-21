@@ -19,7 +19,6 @@
 </div>
 {% endif %}
 
-{% if servicos %}
 <div class="page-card page-card--soft">
     <div class="actions-row actions-row--left">
         <button type="button" id="vozToggleButton">Avisos por voz: ativados</button>
@@ -28,6 +27,7 @@
     <p class="muted-text top-spacing" id="vozStatusTexto">A cada 10 minutos, o sistema avisa em portugues do Brasil quais veiculos continuam em atendimento e ha quantos minutos estao na operacao.</p>
 </div>
 
+{% if servicos %}
 <div class="page-grid top-spacing">
 
 {% for s in servicos %}
