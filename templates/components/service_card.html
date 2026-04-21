@@ -1,0 +1,128 @@
+<article class="page-card service-card {% if servico.atrasado %}service-card--late{% endif %}">
+    <div class="service-card__header">
+        <div>
+            <div class="service-card__badges">
+                <span class="pill-label">OS #{{ servico.id }}</span>
+                <span class="status-badge {{ servico.status_class }}">{{ servico.status_label }}</span>
+                {% if servico.atrasado %}
+                <span class="pill-label pill-label--danger">Atrasado</span>
+                {% endif %}
+            </div>
+            <h3 class="service-card__title">{{ servico.tipo_nome or "Servico sem nome" }}</h3>
+            <p class="muted-text">{{ servico.cliente_nome or "Cliente nao informado" }}{% if servico.placa %} • {{ servico.placa }}{% endif %}</p>
+        </div>
+        <div class="service-card__value">R$ {{ servico.valor|brl }}</div>
+    </div>
+
+    <div class="service-meta-grid">
+        <div>
+            <span class="meta-label">Entrada</span>
+            <strong>{{ servico.entrada_fmt }}</strong>
+        </div>
+        <div>
+            <span class="meta-label">Espera</span>
+            <strong>{{ servico.tempo_espera }}</strong>
+        </div>
+        <div>
+            <span class="meta-label">Custo</span>
+            <strong>R$ {{ servico.custo_total|brl }}</strong>
+        </div>
+        <div>
+            <span class="meta-label">Lucro</span>
+            <strong class="{% if servico.lucro >= 0 %}success-text{% else %}error-text{% endif %}">R$ {{ servico.lucro|brl }}</strong>
+        </div>
+    </div>
+
+    {% if servico.observacoes %}
+    <div class="service-note">{{ servico.observacoes }}</div>
+    {% endif %}
+
+    {% if mostrar_acoes_status %}
+    <div class="service-actions-stack">
+        <form action="/servico/{{ servico.id }}/status" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide">
+            <input type="hidden" name="redirect_to" value="{{ request.full_path if request.query_string else request.path }}">
+            <div class="field-grid">
+                <div>
+                    <label for="status-{{ servico.id }}">Status</label>
+                    <select id="status-{{ servico.id }}" name="status">
+                        {% for status in status_servicos %}
+                        <option value="{{ status.value }}" {% if servico.status == status.value %}selected{% endif %}>{{ status.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="status-fotos-{{ servico.id }}">Fotos de depois</label>
+                    <input id="status-fotos-{{ servico.id }}" type="file" name="fotos_depois" accept="image/*" capture="environment" multiple>
+                </div>
+            </div>
+            <div class="actions-row actions-row--left">
+                <button type="submit">Salvar status</button>
+                {% if servico.aberto %}
+                <a href="/prioridade/{{ servico.id }}/up" class="button-link"><button type="button">Subir</button></a>
+                <a href="/prioridade/{{ servico.id }}/down" class="button-link"><button type="button">Descer</button></a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+    {% endif %}
+
+    {% if mostrar_uploads %}
+    <div class="service-upload-grid">
+        <form action="/servico/{{ servico.id }}/fotos" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide">
+            <input type="hidden" name="tipo" value="antes">
+            <input type="hidden" name="redirect_to" value="{{ request.full_path if request.query_string else request.path }}">
+            <label for="antes-{{ servico.id }}">Adicionar fotos de antes</label>
+            <input id="antes-{{ servico.id }}" type="file" name="fotos" accept="image/*" capture="environment" multiple>
+            <button type="submit">Enviar antes</button>
+        </form>
+
+        <form action="/servico/{{ servico.id }}/fotos" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide">
+            <input type="hidden" name="tipo" value="depois">
+            <input type="hidden" name="redirect_to" value="{{ request.full_path if request.query_string else request.path }}">
+            <label for="depois-{{ servico.id }}">Adicionar fotos de depois</label>
+            <input id="depois-{{ servico.id }}" type="file" name="fotos" accept="image/*" capture="environment" multiple>
+            <button type="submit">Enviar depois</button>
+        </form>
+    </div>
+    {% endif %}
+
+    {% if mostrar_galeria is not defined or mostrar_galeria %}
+    <div class="gallery-sections">
+        <div class="gallery-block">
+            <div class="gallery-block__header">
+                <h4>Antes</h4>
+                <span>{{ servico.fotos["antes"]|length }}</span>
+            </div>
+            {% if servico.fotos["antes"] %}
+            <div class="gallery-grid">
+                {% for foto in servico.fotos["antes"] %}
+                <a href="{{ foto.url }}" target="_blank" rel="noreferrer" class="gallery-item">
+                    <img src="{{ foto.url }}" alt="Foto antes {{ loop.index }}">
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="muted-text">Nenhuma foto de antes enviada.</p>
+            {% endif %}
+        </div>
+
+        <div class="gallery-block">
+            <div class="gallery-block__header">
+                <h4>Depois</h4>
+                <span>{{ servico.fotos["depois"]|length }}</span>
+            </div>
+            {% if servico.fotos["depois"] %}
+            <div class="gallery-grid">
+                {% for foto in servico.fotos["depois"] %}
+                <a href="{{ foto.url }}" target="_blank" rel="noreferrer" class="gallery-item">
+                    <img src="{{ foto.url }}" alt="Foto depois {{ loop.index }}">
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="muted-text">Nenhuma foto de depois enviada.</p>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</article>

@@ -1,31 +1,364 @@
 {% extends "base.html" %}
 
 {% block title %}Financeiro{% endblock %}
-{% block titulo %}Financeiro do Dia{% endblock %}
-{% block subtitulo %}Resumo diário{% endblock %}
+{% block titulo %}Painel Financeiro{% endblock %}
+{% block subtitulo %}Faturamento, ticket medio e servicos que mais rendem{% endblock %}
 
 {% block actions %}
 <a href="/" class="button-link">
-    <button>Voltar</button>
+    <button type="button">Voltar</button>
 </a>
 {% endblock %}
 
 {% block content %}
 
-<div class="page-grid">
+<style>
+.financial-hero {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 16px;
+}
+
+.financial-bars {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+    gap: 12px;
+    align-items: end;
+    min-height: 240px;
+    margin-top: 18px;
+}
+
+.financial-bar-item {
+    display: grid;
+    gap: 8px;
+    justify-items: center;
+}
+
+.financial-bar {
+    width: 100%;
+    min-height: 12px;
+    border-radius: 16px 16px 6px 6px;
+    background: linear-gradient(180deg, rgba(250, 204, 21, 0.96), rgba(245, 158, 11, 0.88));
+    box-shadow: var(--gold-shadow);
+}
+
+.financial-bar-label {
+    color: var(--muted);
+    font-size: 0.82rem;
+}
+
+.financial-bar-value {
+    color: var(--text);
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+
+.progress-list {
+    display: grid;
+    gap: 14px;
+    margin-top: 14px;
+}
+
+.progress-item {
+    display: grid;
+    gap: 8px;
+}
+
+.progress-item header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: baseline;
+}
+
+.progress-track {
+    height: 12px;
+    border-radius: 999px;
+    background: rgba(31, 41, 55, 0.9);
+    border: 1px solid rgba(250, 204, 21, 0.14);
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, rgba(250, 204, 21, 0.98), rgba(245, 158, 11, 0.92));
+}
+
+.financial-note {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 0.88rem;
+}
+
+.financial-highlight {
+    display: grid;
+    gap: 14px;
+}
+
+.financial-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.financial-filter {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 96px;
+    padding: 10px 14px;
+    border-radius: 999px;
+    text-decoration: none;
+    color: var(--text);
+    background: rgba(17, 24, 39, 0.84);
+    border: 1px solid rgba(250, 204, 21, 0.2);
+    transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.financial-filter:hover {
+    transform: translateY(-1px);
+    border-color: rgba(250, 204, 21, 0.5);
+}
+
+.financial-filter.is-active {
+    color: #111827;
+    background: linear-gradient(135deg, rgba(250, 204, 21, 0.98), rgba(245, 158, 11, 0.92));
+    border-color: rgba(250, 204, 21, 0.7);
+    box-shadow: var(--gold-shadow);
+}
+
+.financial-mini-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 12px;
+}
+
+.financial-mini-card {
+    padding: 14px;
+    border-radius: 16px;
+    background: rgba(17, 24, 39, 0.74);
+    border: 1px solid rgba(250, 204, 21, 0.16);
+}
+
+.financial-mini-card strong {
+    display: block;
+    margin-top: 6px;
+    font-size: 1.1rem;
+    color: var(--text);
+}
+
+@media (max-width: 900px) {
+    .financial-hero {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+<div class="page-card page-card--soft">
+    <div class="financial-filters">
+        {% for filtro in periodos_financeiro %}
+        <a href="{{ url_for('financeiro', periodo=filtro.value) }}" class="financial-filter {% if periodo_atual == filtro.value %}is-active{% endif %}">
+            {{ filtro.label }}
+        </a>
+        {% endfor %}
+    </div>
+    <p class="muted-text">Visao atual: <b>{{ periodo_label|capitalize }}</b>. {{ periodo_descricao }}</p>
+</div>
+
+{% if servico_campeao %}
+<div class="financial-hero">
+    <div class="page-card financial-highlight">
+        <div>
+            <p class="pill-label">Servico campeao em {{ referencia_ranking_periodo }}</p>
+            <h2 class="section-title">{{ servico_campeao.nome }}</h2>
+            <p class="muted-text">Esse destaque considera {{ referencia_ranking_periodo }} e ajuda a enxergar o que mais traz receita no periodo filtrado.</p>
+        </div>
+
+        <div class="financial-mini-grid">
+            <div class="financial-mini-card">
+                Receita
+                <strong>R$ {{ servico_campeao.valor_exibicao }}</strong>
+            </div>
+            <div class="financial-mini-card">
+                Atendimentos
+                <strong>{{ servico_campeao.quantidade }}</strong>
+            </div>
+            <div class="financial-mini-card">
+                Ticket medio
+                <strong>R$ {{ servico_campeao.ticket_exibicao }}</strong>
+            </div>
+        </div>
+    </div>
+
+    <div class="page-card page-card--soft">
+        <p class="pill-label">Resumo rapido</p>
+        <div class="financial-mini-grid top-spacing">
+            <div class="financial-mini-card">
+                Em andamento
+                <strong>{{ em_andamento }}</strong>
+            </div>
+            <div class="financial-mini-card">
+                Media no periodo
+                <strong>R$ {{ media_periodo }}</strong>
+            </div>
+            <div class="financial-mini-card">
+                Ticket geral
+                <strong>R$ {{ ticket_geral }}</strong>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="page-card page-card--soft">
+    <p class="muted-text">Ainda nao ha servicos finalizados suficientes em {{ periodo_label }} para montar os rankings desse filtro.</p>
+</div>
+{% endif %}
+
+<div class="page-grid top-spacing">
     <div class="page-card">
-        <p class="pill-label">Total</p>
-        <div class="metric-value metric-value--success">R$ {{total}}</div>
+        <p class="pill-label">Faturamento do periodo</p>
+        <div class="metric-value metric-value--success">R$ {{ total_periodo }}</div>
+        <p class="financial-note">{{ quantidade_periodo }} servico(s) finalizado(s) em {{ periodo_label }}</p>
     </div>
 
     <div class="page-card">
-        <p class="pill-label">Serviços</p>
-        <div class="metric-value">{{quantidade}}</div>
+        <p class="pill-label">Ticket medio do periodo</p>
+        <div class="metric-value">R$ {{ ticket_periodo }}</div>
+        <p class="financial-note">Valor medio por atendimento fechado em {{ periodo_label }}</p>
     </div>
 
     <div class="page-card">
-        <p class="pill-label">Ticket</p>
-        <div class="metric-value">R$ {{ticket}}</div>
+        <p class="pill-label">Media diaria do periodo</p>
+        <div class="metric-value">R$ {{ media_periodo }}</div>
+        <p class="financial-note">Ritmo medio de faturamento dentro do filtro atual</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Faturamento hoje</p>
+        <div class="metric-value metric-value--success">R$ {{ total_hoje }}</div>
+        <p class="financial-note">{{ quantidade_hoje }} servico(s) finalizado(s) hoje</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Faturamento do mes</p>
+        <div class="metric-value metric-value--success">R$ {{ total_mes }}</div>
+        <p class="financial-note">{{ quantidade_mes }} servico(s) finalizado(s) no mes</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Receita acumulada</p>
+        <div class="metric-value">R$ {{ total_geral }}</div>
+        <p class="financial-note">{{ quantidade_geral }} servico(s) finalizado(s) no historico</p>
+    </div>
+</div>
+
+<div class="page-grid top-spacing">
+    <div class="page-card">
+        <h2 class="section-title">Faturamento dos ultimos 7 dias</h2>
+
+        <div class="financial-bars">
+            {% for item in ultimos_7_dias %}
+            <div class="financial-bar-item">
+                <span class="financial-bar-value">R$ {{ item.valor_exibicao }}</span>
+                <div class="financial-bar" style="height: {{ [item.percentual, 8]|max }}%;"></div>
+                <span class="financial-bar-label">{{ item.label }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="page-card">
+        <h2 class="section-title">Faturamento dos ultimos 6 meses</h2>
+
+        <div class="financial-bars">
+            {% for item in ultimos_6_meses %}
+            <div class="financial-bar-item">
+                <span class="financial-bar-value">R$ {{ item.valor_exibicao }}</span>
+                <div class="financial-bar" style="height: {{ [item.percentual, 8]|max }}%;"></div>
+                <span class="financial-bar-label">{{ item.label }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<div class="page-grid top-spacing">
+    <div class="page-card">
+        <h2 class="section-title">Servicos que mais rendem</h2>
+        <p class="financial-note">Base de calculo: {{ referencia_ranking_periodo }}.</p>
+
+        <div class="progress-list">
+            {% for item in ranking_faturamento %}
+            <div class="progress-item">
+                <header>
+                    <strong>{{ item.nome }}</strong>
+                    <span>R$ {{ item.valor_exibicao }}</span>
+                </header>
+                <div class="progress-track">
+                    <div class="progress-fill" style="width: {{ item.percentual }}%;"></div>
+                </div>
+                <span class="muted-text">{{ item.quantidade }} atendimento(s) | ticket medio R$ {{ item.ticket_exibicao }}</span>
+            </div>
+            {% else %}
+            <p class="muted-text">Sem dados suficientes para montar o ranking.</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="page-card">
+        <h2 class="section-title">Servicos com maior volume</h2>
+
+        <div class="progress-list">
+            {% for item in ranking_quantidade %}
+            <div class="progress-item">
+                <header>
+                    <strong>{{ item.nome }}</strong>
+                    <span>{{ item.quantidade }} atendimento(s)</span>
+                </header>
+                <div class="progress-track">
+                    <div class="progress-fill" style="width: {{ item.percentual }}%;"></div>
+                </div>
+                <span class="muted-text">Receita gerada: R$ {{ item.valor_exibicao }}</span>
+            </div>
+            {% else %}
+            <p class="muted-text">Sem dados suficientes para montar o ranking.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <h2 class="section-title">Ultimos atendimentos em {{ periodo_label }}</h2>
+
+    <div class="table-wrap top-spacing">
+        <table>
+            <thead>
+                <tr>
+                    <th>Entrega</th>
+                    <th>Cliente</th>
+                    <th>Placa</th>
+                    <th>Servico</th>
+                    <th>Valor</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in ultimos_finalizados %}
+                <tr>
+                    <td>{{ item.entrega_exibicao }}</td>
+                    <td>{{ item.cliente_nome }}</td>
+                    <td>{{ item.placa }}</td>
+                    <td>{{ item.tipo_nome }}</td>
+                    <td>R$ {{ item.valor_exibicao }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="empty-state">Nenhum atendimento finalizado encontrado para {{ periodo_label }}.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </div>
 </div>
 

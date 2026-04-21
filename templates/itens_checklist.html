@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Itens{% endblock %}
+{% block titulo %}Itens de Checklist{% endblock %}
+{% block subtitulo %}Gerencie os itens obrigatorios da finalizacao{% endblock %}
+
+{% block actions %}
+<a href="/painel" class="button-link">
+    <button type="button">Painel</button>
+</a>
+{% endblock %}
+
+{% block content %}
+
+{% if feedback %}
+<div class="page-card {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
+</div>
+{% endif %}
+
+<div class="page-card">
+    <h2 class="section-title">Novo item</h2>
+
+    <form method="POST" class="stack-form stack-form--wide">
+        <input name="nome" placeholder="Ex: Aspiracao do interior concluida">
+        <div class="actions-row actions-row--left">
+            <button>Adicionar item</button>
+        </div>
+    </form>
+</div>
+
+<div class="top-spacing">
+    <h2 class="section-title">Itens cadastrados</h2>
+
+    <div class="list-grid">
+        {% for item in itens %}
+        <div class="page-card">
+            <div class="actions-row actions-row--left">
+                <span class="status-badge {% if item.ativo %}status-badge--success{% else %}status-badge--muted{% endif %}">
+                    {% if item.ativo %}Ativo{% else %}Pausado{% endif %}
+                </span>
+            </div>
+
+            <p><b>{{ item.nome }}</b></p>
+
+            <div class="actions-row actions-row--left">
+                <form action="/itens/{{ item.id }}/alternar" method="POST">
+                    <button type="submit">{% if item.ativo %}Pausar{% else %}Ativar{% endif %}</button>
+                </form>
+
+                <form action="/itens/{{ item.id }}/excluir" method="POST">
+                    <button type="submit" class="button-danger">Excluir</button>
+                </form>
+            </div>
+        </div>
+        {% else %}
+        <div class="page-card page-card--soft">
+            <p class="muted-text">Nenhum item cadastrado ainda. Adicione os primeiros pontos do checklist.</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+{% endblock %}

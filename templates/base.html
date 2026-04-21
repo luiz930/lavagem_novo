@@ -164,15 +164,18 @@ if ("serviceWorker" in navigator) {
 <div id="sidebar" class="sidebar">
 
     <h2>Wagen</h2>
+<a href="{{ url_for('pagina_nota_fiscal') }}"><button>Nota Fiscal</button></a>
 
 <a href="{{ url_for('index') }}"><button>🏠 Início</button></a>
 <a href="{{ url_for('clientes') }}"><button>👥 Clientes</button></a>
 <a href="{{ url_for('cadastrar_servico') }}"><button>🛠 Serviços</button></a>
+<a href="{{ url_for('itens_checklist') }}"><button>☑️ Itens</button></a>
 <a href="{{ url_for('painel') }}"><button>📊 Painel</button></a>
 <a href="{{ url_for('financeiro') }}"><button>💰 Financeiro</button></a>
 <a href="{{ url_for('pagina_orcamento') }}"><button>🧾 Orçamento</button></a>
 <a href="{{ url_for('cadastrar_pneu') }}"><button>🛞 Pneus</button></a>
 <a href="{{ url_for('clima') }}"><button>🌦 Clima</button></a>
+<a href="{{ url_for('configuracoes') }}"><button>⚙ Configurações</button></a>
 
 <a href="{{ url_for('logout') }}">
     <button style="background:#dc2626;color:white;width:100%;">🚪 Sair</button>
@@ -209,6 +212,10 @@ if ("serviceWorker" in navigator) {
     {% block content %}{% endblock %}
 
 </div>
+
+<footer class="site-footer">
+    Desenvolvido por Luiz Henrique | Wagen Estetica Automotiva | Direitos Reservados.
+</footer>
 
 </div>
 

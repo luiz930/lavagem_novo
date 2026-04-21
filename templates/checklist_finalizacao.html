@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Checklist{% endblock %}
+{% block titulo %}Checklist de Finalizacao{% endblock %}
+{% block subtitulo %}Confirme todos os itens antes de concluir o atendimento{% endblock %}
+
+{% block actions %}
+<a href="/painel" class="button-link">
+    <button type="button">Voltar ao Painel</button>
+</a>
+{% endblock %}
+
+{% block content %}
+
+{% if feedback %}
+<div class="page-card {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
+</div>
+{% endif %}
+
+<div class="page-card">
+    <p class="pill-label">Placa {{ servico.placa }}</p>
+    <h2 class="section-title">{{ servico.tipo_nome }}</h2>
+    <p><b>Cliente:</b> {{ servico.cliente_nome }}</p>
+    <p><b>Veiculo:</b> {{ servico.placa }}{% if servico.modelo %} - {{ servico.modelo }}{% endif %}{% if servico.cor %} / {{ servico.cor }}{% endif %}</p>
+    <p><b>Entrada:</b> {{ servico.entrada_exibicao }}</p>
+    <p><b>Valor:</b> R$ {{ servico.valor_exibicao }}</p>
+
+    {% if servico.origem or servico.guarita %}
+    <p class="muted-text">
+        {% if servico.origem %}Origem: {{ servico.origem }}{% endif %}
+        {% if servico.origem and servico.guarita %} | {% endif %}
+        {% if servico.guarita %}Guarita: {{ servico.guarita }}{% endif %}
+    </p>
+    {% endif %}
+
+    {% if servico.observacoes %}
+    <p class="muted-text">{{ servico.observacoes }}</p>
+    {% endif %}
+</div>
+
+<div class="page-card top-spacing">
+    <h2 class="section-title">Checklist obrigatorio</h2>
+
+    {% if itens %}
+    <form method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide" id="checklist-form">
+        <div class="checklist-list">
+            {% for item in itens %}
+            <label class="checklist-item">
+                <input type="checkbox" name="item_ids" value="{{ item.id }}" data-checklist-item {% if item.id in checked_ids %}checked{% endif %}>
+                <span>{{ item.nome }}</span>
+            </label>
+            {% endfor %}
+        </div>
+
+        <div>
+            <label>Fotos de finalizacao</label>
+            <input type="file" name="foto_saida" multiple accept="image/*" required>
+            <p class="muted-text">Obrigatorio para concluir o atendimento. No celular, esse campo abre a galeria ou a camera do aparelho, o que ajuda a evitar erro de memoria no Android.</p>
+        </div>
+
+        <div class="actions-row actions-row--left">
+            <button type="submit">Finalizar com checklist</button>
+        </div>
+    </form>
+    {% else %}
+    <p class="muted-text">Nao ha itens ativos no checklist. Cadastre os itens obrigatorios antes de finalizar atendimentos.</p>
+    <div class="actions-row actions-row--left top-spacing">
+        <a href="/itens" class="button-link">
+            <button type="button">Abrir Itens</button>
+        </a>
+    </div>
+    {% endif %}
+</div>
+
+{% if itens %}
+<script>
+const checklistForm = document.getElementById("checklist-form");
+
+if (checklistForm) {
+    checklistForm.addEventListener("submit", (event) => {
+        const itens = [...checklistForm.querySelectorAll("[data-checklist-item]")];
+        const todosMarcados = itens.every((item) => item.checked);
+
+        if (!todosMarcados) {
+            event.preventDefault();
+            alert("Marque todos os itens do checklist antes de finalizar.");
+        }
+    });
+}
+</script>
+{% endif %}
+
+{% endblock %}

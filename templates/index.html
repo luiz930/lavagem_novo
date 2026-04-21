@@ -24,6 +24,7 @@ if ("serviceWorker" in navigator) {
     position: fixed;
     bottom: 20px;
     right: 20px;
+    width: min(92vw, 380px);
     background: #111;
     color: #fff;
     padding: 15px 20px;
@@ -233,8 +234,9 @@ input, select {
 
 .main h1 {
     margin: 0 0 24px;
-    padding: 0 48px 0 56px;
+    padding: 0 72px 0 56px;
     font-size: clamp(1.8rem, 4vw, 2.6rem);
+    line-height: 1.15;
 }
 
 .search-panel {
@@ -340,6 +342,7 @@ input[type="file"] {
     color: #e5e7eb;
     padding: 12px;
     border-radius: 10px;
+    min-height: 52px;
 }
 
 .novo-cliente-wrap {
@@ -376,6 +379,111 @@ input[type="file"] {
 .historico-card {
     text-align: left;
     height: 100%;
+}
+
+.historico-summary {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(17, 24, 39, 0.72);
+    border: 1px solid rgba(250, 204, 21, 0.12);
+    color: #d1d5db;
+    font-size: 0.92rem;
+}
+
+.historico-details {
+    margin-top: 14px;
+    border-top: 1px solid rgba(250, 204, 21, 0.12);
+    padding-top: 8px;
+}
+
+.historico-details summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 0;
+    color: #facc15;
+    font-weight: 700;
+}
+
+.historico-details summary::-webkit-details-marker {
+    display: none;
+}
+
+.historico-details summary::after {
+    content: "+";
+    font-size: 1.2rem;
+    line-height: 1;
+}
+
+.historico-details[open] summary::after {
+    content: "-";
+}
+
+.historico-meta-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.historico-meta-item {
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(17, 24, 39, 0.78);
+    border: 1px solid rgba(250, 204, 21, 0.08);
+}
+
+.historico-meta-item strong {
+    display: block;
+    margin-bottom: 5px;
+    color: #facc15;
+    font-size: 0.82rem;
+    letter-spacing: 0.02em;
+}
+
+.historico-meta-item--wide {
+    grid-column: 1 / -1;
+}
+
+.lavagem-alerta {
+    width: min(100%, 980px);
+    margin: 16px auto 0;
+    border-left: 4px solid #22c55e;
+}
+
+.lavagem-alerta--aviso {
+    border-left-color: #f59e0b;
+}
+
+.lavagem-alerta h2 {
+    color: #facc15;
+}
+
+.lavagem-recomendacoes {
+    margin: 14px 0 0;
+    padding-left: 18px;
+    color: #e5e7eb;
+}
+
+.lavagem-recomendacoes li + li {
+    margin-top: 8px;
+}
+
+.site-footer {
+    width: min(100%, 980px);
+    margin: 28px auto 0;
+    padding: 18px 22px;
+    border-radius: 18px;
+    border: 1px solid rgba(250, 204, 21, 0.18);
+    background: linear-gradient(180deg, rgba(17, 24, 39, 0.9), rgba(15, 23, 42, 0.94));
+    color: #9ca3af;
+    text-align: center;
+    font-size: 0.92rem;
+    line-height: 1.6;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
 }
 
 /* ================= FLEX ================= */
@@ -447,6 +555,28 @@ input[type="file"] {
     .main.shift {
         margin-left: 0;
     }
+
+    .main {
+        padding: 84px 16px 36px;
+    }
+
+    .main h1 {
+        padding-right: 72px;
+    }
+
+    #relogio {
+        position: static;
+        width: 100%;
+        max-width: none;
+        margin: 24px auto 0;
+        text-align: center;
+        line-height: 1.6;
+    }
+
+    #dropdown-notificacoes {
+        width: min(92vw, 320px);
+        max-height: 60vh;
+    }
 }
 
 @media (max-width: 640px) {
@@ -462,8 +592,8 @@ input[type="file"] {
     }
 
     .main h1 {
-        padding: 0 16px 0 52px;
-        font-size: 1.7rem;
+        padding: 0 56px 0 52px;
+        font-size: clamp(1.45rem, 6vw, 1.7rem);
     }
 
     .busca-form {
@@ -485,13 +615,19 @@ input[type="file"] {
         height: auto;
     }
 
-    #relogio {
-        position: static;
-        width: 100%;
-        max-width: none;
-        margin: 24px auto 0;
-        text-align: center;
-        line-height: 1.6;
+    .container-cliente,
+    .historico-list,
+    .historico-meta-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .lavagem-alerta,
+    .site-footer {
+        margin-top: 18px;
+    }
+
+    .lavagem-recomendacoes {
+        text-align: left;
     }
 }
 
@@ -507,7 +643,13 @@ input[type="file"] {
     color: #ffd700;
     border: none;
     outline: none;
-    padding: 10px 15px;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 46px;
+    padding: 0;
     border-radius: 50%;
     cursor: pointer;
     font-size: 18px;
@@ -519,14 +661,17 @@ input[type="file"] {
     border-radius: 50%;
     padding: 2px 6px;
     font-size: 12px;
-    margin-left: 5px;
+    margin-left: 0;
+    position: absolute;
+    top: -4px;
+    right: -4px;
 }
 
 #dropdown-notificacoes {
     position: absolute;
     right: 0;
     top: 50px;
-    width: 300px;
+    width: min(92vw, 300px);
     max-height: 400px;
     overflow-y: auto;
     background: #111;
@@ -549,6 +694,18 @@ input[type="file"] {
     display: none;
 }
 
+@media (max-width: 640px) {
+    #sino-container {
+        top: 12px;
+        right: 12px;
+    }
+
+    #btn-sino {
+        width: 44px;
+        height: 44px;
+    }
+}
+
 </style>
 </head>
 
@@ -566,13 +723,16 @@ input[type="file"] {
 </div>
 
 <div class="sidebar-nav">
+<a href="/nota_fiscal"><button><span>&#128220;</span> Nota Fiscal</button></a>
 <a href="/painel"><button><span>&#128202;</span> Painel</button></a>
 <a href="/clientes"><button><span>&#128100;</span> Clientes</button></a>
 <a href="/cadastrar_servico"><button><span>&#129532;</span> Servicos</button></a>
+<a href="/itens"><button><span>&#9745;</span> Itens Checklist</button></a>
 <a href="/orcamento"><button><span>&#128196;</span> Orçamentos</button></a>
 <a href="/financeiro"><button><span>&#128176;</span> Financeiro</button></a>
 <a href="/pneu"><button><span>&#128736;</span> Pneus</button></a>
 <a href="/clima"><button><span>&#9729;</span> Clima</button></a>
+<a href="/configuracoes"><button><span>&#9881;</span> Configurações</button></a>
 <a href="/logout">
     <button style="
         background: linear-gradient(135deg, #dc2626, #b91c1c);
@@ -592,11 +752,7 @@ input[type="file"] {
         🔔 <span id="badge">0</span>
     </button>
 
-    <div id="dropdown-notificacoes" class="hidden">
-    <button onclick="limparNotificacoes()" style="width:100%; margin-bottom:10px;">
-        🧹 Limpar notificações
-    </button>
-</div>
+    <div id="dropdown-notificacoes" class="hidden"></div>
 </div>
 
 <!-- MAIN -->
@@ -622,6 +778,24 @@ input[type="file"] {
     <div class="card destaque">
         <h3>🔎 Digite uma placa para começar</h3>
     </div>
+</div>
+{% endif %}
+
+{% if lavagem_info %}
+<div class="card destaque lavagem-alerta {% if lavagem_info.tipo_alerta == 'aviso' %}lavagem-alerta--aviso{% endif %}">
+    <h2>Notificacao de lavagem</h2>
+    <p><strong>Ultima lavagem:</strong> {{ lavagem_info.data_exibicao }}{% if lavagem_info.dias_desde is not none %} (ha {{ lavagem_info.dias_desde }} dia(s)){% endif %}</p>
+    <p><strong>Servico anterior:</strong> {{ lavagem_info.servico_anterior }}</p>
+    <p><strong>Fonte:</strong> {{ lavagem_info.origem }}</p>
+    {% if lavagem_info.carro or lavagem_info.cor %}
+    <p><strong>Referencia:</strong> {{ lavagem_info.carro or "Carro nao informado" }}{% if lavagem_info.cor %} / {{ lavagem_info.cor }}{% endif %}</p>
+    {% endif %}
+
+    <ul class="lavagem-recomendacoes">
+        {% for recomendacao in lavagem_info.recomendacoes %}
+        <li>{{ recomendacao }}</li>
+        {% endfor %}
+    </ul>
 </div>
 {% endif %}
 
@@ -685,7 +859,7 @@ input[type="file"] {
 
         <form action="/cadastrar" method="POST" class="novo-cliente-form">
 
-            <input name="placa" placeholder="Placa" required>
+            <input name="placa" placeholder="Placa" value="{{placa}}" required>
             <input name="nome" placeholder="Nome">
             <input name="telefone" placeholder="Telefone">
             <input name="modelo" placeholder="Modelo">
@@ -713,10 +887,7 @@ input[type="file"] {
 <form id="formServico" class="hidden" action="/servico" method="POST" enctype="multipart/form-data">
 
 <p>📸 Fotos de entrada</p>
-<input type="file" name="foto_entrada" multiple required>
-
-<p>📸 Fotos de detalhes</p>
-<input type="file" name="foto_detalhe" multiple required>
+<input type="file" name="foto_entrada" multiple accept="image/*" required>
 
 <input name="placa" value="{{dados.placa}}" readonly><br>
 
@@ -730,22 +901,9 @@ input[type="file"] {
 
 <input type="hidden" name="valor" id="valorServico">
 
-<input name="origem" placeholder="Origem"><br>
-<input name="guarita" placeholder="Guarita"><br>
-<input name="observacoes" placeholder="Observações"><br>
+<p class="muted-text">No celular, esse campo abre o seletor de imagens para voce usar a galeria ou a camera do aparelho. Os detalhes operacionais, produtos aplicados e a finalizacao agora sao preenchidos no painel operacional.</p>
 
-<select name="pneu">
-<option value="">Nenhum</option>
-{% for p in produtos_pneu %}
-<option value="{{p[1]}}">{{p[1]}}</option>
-{% endfor %}
-</select>
-
-<select name="cera"><option>Não</option><option>Sim</option></select>
-<select name="hidro_lataria"><option>Não</option><option>Sim</option></select>
-<select name="hidro_vidros"><option>Não</option><option>Sim</option></select>
-
-<button type="submit">Salvar Atendimento</button>
+<button type="submit">Iniciar Atendimento</button>
 
 </form>
 </div>
@@ -757,20 +915,76 @@ input[type="file"] {
 <h2 class="section-heading">Historico</h2>
 <div class="historico-list">
 {% for item in historico %}
-{% set s = item[0] %}
+{% set s = item.servico %}
 
 <div class="card historico-card">
 
-<b>{{s[2]}}</b>
+<b>{{s.tipo_nome or "Servico"}}</b>
 
-<p>💰 R${{s[3]}}</p>
-<p>Entrada: {{s[4]}}</p>
+<p>💰 R$ {{s.valor_exibicao}}</p>
+<p>Entrada: {{s.entrada_exibicao}}</p>
+{% if s.entrega_exibicao %}
+<p>Entrega: {{s.entrega_exibicao}}</p>
+{% endif %}
+<p>Status: {{s.status}}</p>
+<p>Tempo: {{item.tempo_str}}</p>
 
-{% if s[13] == "EM ANDAMENTO" %}
-<form action="/finalizar/{{s[0]}}" method="POST" enctype="multipart/form-data">
-<input type="file" name="foto_saida">
-<button type="submit">Finalizar</button>
-</form>
+<div class="historico-summary">
+Operacional:
+Pneu {{ s.pneu or "Nao aplicado" }} |
+Cera {{ "Sim" if s.cera == "Sim" else "Nao" }} |
+Hidro lataria {{ "Sim" if s.hidro_lataria == "Sim" else "Nao" }} |
+Hidro vidros {{ "Sim" if s.hidro_vidros == "Sim" else "Nao" }}
+</div>
+
+<details class="historico-details">
+<summary>Mostrar mais detalhes</summary>
+
+<div class="historico-meta-grid">
+    <div class="historico-meta-item">
+        <strong>Origem</strong>
+        {{ s.origem or "Nao informada" }}
+    </div>
+
+    <div class="historico-meta-item">
+        <strong>Guarita</strong>
+        {{ s.guarita or "Nao informada" }}
+    </div>
+
+    <div class="historico-meta-item">
+        <strong>Produto pneu</strong>
+        {{ s.pneu or "Nao aplicado" }}
+    </div>
+
+    <div class="historico-meta-item">
+        <strong>Cera</strong>
+        {{ "Sim" if s.cera == "Sim" else "Nao" }}
+    </div>
+
+    <div class="historico-meta-item">
+        <strong>Hidro lataria</strong>
+        {{ "Sim" if s.hidro_lataria == "Sim" else "Nao" }}
+    </div>
+
+    <div class="historico-meta-item">
+        <strong>Hidro vidros</strong>
+        {{ "Sim" if s.hidro_vidros == "Sim" else "Nao" }}
+    </div>
+
+    <div class="historico-meta-item historico-meta-item--wide">
+        <strong>Checklist</strong>
+        {{ s.checklist_resumo or "Sem checklist salvo" }}
+    </div>
+
+    <div class="historico-meta-item historico-meta-item--wide">
+        <strong>Observacoes</strong>
+        {{ s.observacoes or "Sem observacoes registradas" }}
+    </div>
+</div>
+</details>
+
+{% if s.status == "EM ANDAMENTO" %}
+<p class="muted-text">Finalize este atendimento no painel operacional.</p>
 {% endif %}
 
 </div>
@@ -782,6 +996,10 @@ input[type="file"] {
 <div id="relogio"></div>
 
 </div>
+
+<footer class="site-footer">
+Desenvolvido por Luiz Henrique | Wagen Estetica Automotiva | Direitos Reservados.
+</footer>
 
 <script>
 window.toggleSidebar = function () {
@@ -894,9 +1112,35 @@ function mostrarPopup(texto, tipo) {
 
     }, 4000);
 }
+
+{% if feedback_index %}
+setTimeout(() => {
+    mostrarPopup({{ feedback_index.mensagem|tojson }}, {{ feedback_index.tipo|tojson }});
+}, 150);
+{% endif %}
 </script>
 
 <script>
+function montarAcoesNotificacoes(dropdown, total) {
+    const wrapper = document.createElement("div");
+    wrapper.style.marginBottom = "10px";
+
+    const button = document.createElement("button");
+    button.style.width = "100%";
+    button.textContent = total ? "🧹 Limpar notificações" : "Sem notificações";
+    button.disabled = total === 0;
+
+    if (total) {
+        button.onclick = limparNotificacoes;
+    } else {
+        button.style.opacity = "0.65";
+        button.style.cursor = "default";
+    }
+
+    wrapper.appendChild(button);
+    dropdown.appendChild(wrapper);
+}
+
 async function carregarNotificacoes() {
     const res = await fetch("/api/notificacoes");
     const dados = await res.json();
@@ -905,10 +1149,11 @@ async function carregarNotificacoes() {
     const badge = document.getElementById("badge");
 
     dropdown.innerHTML = "";
+    montarAcoesNotificacoes(dropdown, dados.length);
 
     let naoLidas = 0;
 
-    dados.slice(0, 2).forEach(n => {
+    dados.slice(0, 6).forEach(n => {
         if (n.lida === 0) naoLidas++;
 
         const div = document.createElement("div");
@@ -923,6 +1168,13 @@ async function carregarNotificacoes() {
 
         dropdown.appendChild(div);
     });
+
+    if (!dados.length) {
+        const vazio = document.createElement("div");
+        vazio.className = "notificacao";
+        vazio.innerText = "Nenhuma notificação registrada.";
+        dropdown.appendChild(vazio);
+    }
 
     badge.innerText = naoLidas;
 }
@@ -1054,9 +1306,14 @@ atualizarRelogio();
 async function limparNotificacoes() {
     if (!confirm("Deseja limpar todas as notificações?")) return;
 
-    await fetch("/api/notificacoes/limpar", {
+    const resposta = await fetch("/api/notificacoes/limpar", {
         method: "POST"
     });
+
+    if (!resposta.ok) {
+        alert("Nao foi possivel limpar as notificacoes agora.");
+        return;
+    }
 
     carregarNotificacoes();
 }

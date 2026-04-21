@@ -1,10 +1,12 @@
 from flask import Flask, render_template, request, redirect, session, jsonify
 import csv
+import json
 import sqlite3
 from zoneinfo import ZoneInfo
 import os
 import time
 import hashlib
+import re
 from threading import Thread
 from io import BytesIO
 from threading import Lock, Thread
@@ -20,6 +22,7 @@ from flask import send_file
 from reportlab.lib.units import cm
 from reportlab.platypus import Flowable
 from reportlab.lib.utils import ImageReader
+from xml.sax.saxutils import escape as xml_escape
 
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -49,7 +52,60 @@ class ImagemRedonda(Flowable):
 
         c.restoreState()
 
-def ler_planilha_sheety(url):
+class FontePlanilhaError(Exception):
+    def __init__(self, mensagem, fatal=False):
+        super().__init__(mensagem)
+        self.fatal = fatal
+
+def estimar_requisicoes_mensais(intervalo_minutos):
+    try:
+        intervalo = max(1, int(intervalo_minutos))
+    except Exception:
+        return None
+
+    return int((30 * 24 * 60) / intervalo)
+
+def montar_mensagem_sheety_bloqueado(status_code=None, intervalo_minutos=None):
+    partes = []
+
+    if status_code == 402:
+        partes.append(
+            "O Sheety recusou a leitura com 402 Payment Required. "
+            "Isso indica bloqueio de plano ou limite de uso do Sheety, nao erro de login do sistema."
+        )
+    elif status_code in {401, 403}:
+        partes.append(
+            "O Sheety recusou a leitura por autenticacao/permissao. "
+            "Se a API estiver protegida, sera preciso ajustar as credenciais no Sheety."
+        )
+    elif status_code == 404:
+        partes.append(
+            "O endpoint do Sheety nao foi encontrado. Verifique se a URL da API continua valida."
+        )
+    else:
+        partes.append(
+            "O Sheety bloqueou a leitura da planilha."
+        )
+
+    estimativa = estimar_requisicoes_mensais(intervalo_minutos)
+    if estimativa:
+        partes.append(
+            f"No intervalo atual de {intervalo_minutos} minutos, a sincronizacao tenta cerca de {estimativa} leituras por mes."
+        )
+
+        if estimativa > 200:
+            partes.append(
+                "No plano gratis do Sheety, a pagina de precos informa 200 requests por mes. "
+                "Para uso continuo, use um link direto da planilha (Google Sheets/OneDrive/SharePoint) ou aumente o plano do Sheety."
+            )
+
+    partes.append(
+        "Para parar de dar erro recorrente, a melhor opcao e trocar o link do Sheety pelo link direto/exportavel da planilha."
+    )
+
+    return " ".join(partes)
+
+def ler_planilha_sheety(url, intervalo_minutos=None):
     try:
         response = requests.get(url, timeout=15)
         response.raise_for_status()
@@ -67,8 +123,21 @@ def ler_planilha_sheety(url):
 
         return df
 
+    except requests.HTTPError as e:
+        status_code = getattr(getattr(e, "response", None), "status_code", None)
+
+        if status_code in {401, 402, 403, 404}:
+            raise FontePlanilhaError(
+                montar_mensagem_sheety_bloqueado(status_code, intervalo_minutos),
+                fatal=True,
+            )
+
+        raise FontePlanilhaError(f"Erro ao ler Sheety: {e}")
     except Exception as e:
-        raise Exception(f"Erro ao ler Sheety: {e}")
+        if isinstance(e, FontePlanilhaError):
+            raise
+
+        raise FontePlanilhaError(f"Erro ao ler Sheety: {e}")
 
 def sanitizar_para_json(obj):
     if isinstance(obj, datetime):
@@ -128,12 +197,34 @@ def calcular_prioridade(entrada_iso, valor, tipo_nome):
 
     return prioridade
 
+def calcular_prioridade_inteligente(servico):
+    if not servico:
+        return 0
+
+    prioridade = calcular_prioridade(
+        servico.get("entrada"),
+        servico.get("valor", 0),
+        servico.get("tipo_nome", ""),
+    )
+
+    try:
+        prioridade += int(servico.get("prioridade") or 0)
+    except Exception:
+        pass
+
+    observacoes = normalizar_texto_comparacao(servico.get("observacoes", ""))
+
+    if "urgente" in observacoes or "prioridade" in observacoes:
+        prioridade += 2
+
+    return prioridade
+
 # 📁 CONFIG UPLOAD
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # 🔐 SEGURANÇA UPLOAD
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg"}
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "heic", "heif"}
 ALLOWED_SPREADSHEET_EXTENSIONS = {"csv", "tsv", "xls", "xlsx"}
 
 def arquivo_permitido(filename):
@@ -145,6 +236,12 @@ def arquivo_planilha_permitido(filename):
         filename.rsplit(".", 1)[1].lower() in ALLOWED_SPREADSHEET_EXTENSIONS
     )
 
+def adicionar_coluna_se_preciso(cursor, tabela, definicao_coluna):
+    try:
+        cursor.execute(f"ALTER TABLE {tabela} ADD COLUMN {definicao_coluna}")
+    except Exception:
+        pass
+
 app = Flask(__name__)
 app.config["SESSION_PERMANENT"] = True
 app.config["SESSION_TYPE"] = "filesystem"
@@ -152,14 +249,35 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = False
 app.secret_key = "wagen_super_segura_123"
 
-APP_VERSION = "Versão: 0.2.5-alpha"
+APP_VERSION = "Versão: 0.5.0-alpha(Em Desenvolvimento)"
+MESES_CURTOS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+PERIODOS_FINANCEIRO = [
+    {"value": "hoje", "label": "Hoje"},
+    {"value": "7dias", "label": "7 dias"},
+    {"value": "30dias", "label": "30 dias"},
+    {"value": "mes", "label": "Mes atual"},
+]
+MAPA_PERIODOS_FINANCEIRO = {
+    "hoje": "hoje",
+    "7dias": "ultimos 7 dias",
+    "30dias": "ultimos 30 dias",
+    "mes": "mes atual",
+}
+
+ITENS_CHECKLIST_PADRAO = [
+    "Aspiracao do interior concluida",
+    "Painel e console conferidos",
+    "Vidros revisados e sem marcas",
+    "Rodas verificadas e limpas",
+    "Tapetes posicionados corretamente",
+]
 
 CAMPOS_SINCRONIZACAO_CLIENTES = [
-    {"key": "placa", "label": "Placa", "required": True},
-    {"key": "nome", "label": "Nome", "required": False},
-    {"key": "telefone", "label": "Telefone", "required": False},
-    {"key": "modelo", "label": "Modelo", "required": False},
+    {"key": "nome", "label": "Cliente", "required": False},
+    {"key": "modelo", "label": "Carro", "required": False},
     {"key": "cor", "label": "Cor", "required": False},
+    {"key": "placa", "label": "Placa", "required": True},
+    {"key": "servico", "label": "Servico", "required": False},
 ]
 
 INTERVALOS_SINCRONIZACAO = [
@@ -183,9 +301,10 @@ MAPA_LABEL_CAMPOS_SYNC = {
 ALIASES_CAMPOS_SYNC = {
     "placa": ["placa"],
     "nome": ["nome", "cliente"],
-    "telefone": ["telefone", "fone", "celular", "whatsapp", "contato"],
     "modelo": ["modelo", "carro", "veiculo", "veículo"],
     "cor": ["cor"],
+    "servico": ["servico", "serviço", "servi?o", "servi o", "tipo servico", "tipo", "lavagem"],
+    "data": ["data", "data lavagem", "dia", "data servico"],
 }
 
 sync_lock = Lock()
@@ -221,22 +340,170 @@ def atualizar_banco():
     conn = conectar()
     c = conn.cursor()
 
-    try:
-        c.execute("ALTER TABLE sincronizacoes_clientes ADD COLUMN ultimo_hash TEXT")
-    except:
-        pass
+    adicionar_coluna_se_preciso(c, "sincronizacoes_clientes", "ultimo_hash TEXT")
+    adicionar_coluna_se_preciso(c, "sincronizacoes_clientes", "colunas_ultima_sync TEXT")
+    adicionar_coluna_se_preciso(c, "sincronizacoes_clientes", "campo_servico TEXT")
+    adicionar_coluna_se_preciso(c, "sincronizacoes_clientes", "campo_data TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "origem TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "guarita TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "pneu TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "cera TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "hidro_lataria TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "hidro_vidros TEXT")
+    adicionar_coluna_se_preciso(c, "usuarios", "nome TEXT")
+    adicionar_coluna_se_preciso(c, "usuarios", "perfil TEXT")
+    adicionar_coluna_se_preciso(c, "usuarios", "ativo INTEGER")
+    adicionar_coluna_se_preciso(c, "usuarios", "criado_em TEXT")
 
-    try:
-        c.execute("ALTER TABLE sincronizacoes_clientes ADD COLUMN colunas_ultima_sync TEXT")
-    except:
-        pass
+    c.execute("""
+        UPDATE usuarios
+        SET nome=COALESCE(NULLIF(nome, ''), usuario)
+    """)
+    c.execute("""
+        UPDATE usuarios
+        SET perfil=COALESCE(NULLIF(perfil, ''), CASE WHEN usuario='admin' THEN 'admin' ELSE 'funcionario' END)
+    """)
+    c.execute("""
+        UPDATE usuarios
+        SET ativo=COALESCE(ativo, 1)
+    """)
+    c.execute("""
+        UPDATE usuarios
+        SET criado_em=COALESCE(criado_em, ?)
+    """, (agora().isoformat(timespec="seconds"),))
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS historico_lavagens_sync (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sync_id INTEGER NOT NULL,
+        placa TEXT NOT NULL,
+        cliente TEXT,
+        carro TEXT,
+        cor TEXT,
+        servico TEXT,
+        data_lavagem TEXT,
+        data_original TEXT,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(sync_id) REFERENCES sincronizacoes_clientes(id)
+    )
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS configuracao_empresa (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        razao_social TEXT,
+        nome_fantasia TEXT,
+        cnpj TEXT,
+        inscricao_municipal TEXT,
+        inscricao_estadual TEXT,
+        regime_tributario TEXT,
+        email TEXT,
+        telefone TEXT,
+        endereco TEXT,
+        numero TEXT,
+        complemento TEXT,
+        bairro TEXT,
+        cidade TEXT,
+        uf TEXT,
+        cep TEXT,
+        codigo_servico_padrao TEXT,
+        aliquota_padrao REAL DEFAULT 0,
+        atualizado_em TEXT
+    )
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS orcamentos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        numero INTEGER UNIQUE,
+        cliente_nome TEXT NOT NULL,
+        cliente_documento TEXT,
+        email TEXT,
+        telefone TEXT,
+        placa TEXT,
+        modelo TEXT,
+        validade_dias INTEGER DEFAULT 7,
+        forma_pagamento TEXT,
+        observacoes TEXT,
+        subtotal REAL DEFAULT 0,
+        desconto REAL DEFAULT 0,
+        total REAL DEFAULT 0,
+        status TEXT DEFAULT 'GERADO',
+        empresa_snapshot TEXT,
+        criado_em TEXT,
+        atualizado_em TEXT,
+        usuario TEXT
+    )
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS orcamento_itens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        orcamento_id INTEGER NOT NULL,
+        descricao TEXT NOT NULL,
+        quantidade REAL DEFAULT 1,
+        valor_unitario REAL DEFAULT 0,
+        valor_total REAL DEFAULT 0,
+        ordem INTEGER DEFAULT 0,
+        FOREIGN KEY(orcamento_id) REFERENCES orcamentos(id)
+    )
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS notas_fiscais (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rps_numero INTEGER UNIQUE,
+        numero_nota TEXT,
+        serie TEXT,
+        ambiente TEXT,
+        tipo_documento TEXT DEFAULT 'NFS-e',
+        status TEXT DEFAULT 'RASCUNHO',
+        cliente_nome TEXT NOT NULL,
+        cliente_documento TEXT,
+        email TEXT,
+        telefone TEXT,
+        placa TEXT,
+        modelo TEXT,
+        endereco TEXT,
+        numero_endereco TEXT,
+        complemento TEXT,
+        bairro TEXT,
+        cidade TEXT,
+        uf TEXT,
+        cep TEXT,
+        codigo_servico TEXT,
+        discriminacao TEXT,
+        observacoes TEXT,
+        aliquota_iss REAL DEFAULT 0,
+        valor_servicos REAL DEFAULT 0,
+        desconto REAL DEFAULT 0,
+        valor_iss REAL DEFAULT 0,
+        valor_total REAL DEFAULT 0,
+        empresa_snapshot TEXT,
+        criado_em TEXT,
+        atualizado_em TEXT,
+        usuario TEXT,
+        origem_orcamento_id INTEGER,
+        FOREIGN KEY(origem_orcamento_id) REFERENCES orcamentos(id)
+    )
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS nota_fiscal_itens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nota_fiscal_id INTEGER NOT NULL,
+        descricao TEXT NOT NULL,
+        quantidade REAL DEFAULT 1,
+        valor_unitario REAL DEFAULT 0,
+        valor_total REAL DEFAULT 0,
+        ordem INTEGER DEFAULT 0,
+        FOREIGN KEY(nota_fiscal_id) REFERENCES notas_fiscais(id)
+    )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_historico_sync_placa ON historico_lavagens_sync(placa)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_historico_sync_data ON historico_lavagens_sync(data_lavagem)")
 
     conn.commit()
     conn.close()
 
 def init_db():
-    conn = conectar()
-    c = conn.cursor()
+    criar_todas_tabelas()
     atualizar_banco()
 
 def criar_todas_tabelas():
@@ -266,6 +533,8 @@ def criar_todas_tabelas():
         campo_telefone TEXT,
         campo_modelo TEXT,
         campo_cor TEXT,
+        campo_servico TEXT,
+        campo_data TEXT,
         ativo INTEGER NOT NULL DEFAULT 1,
         ultimo_sync_em TEXT,
         proximo_sync_em TEXT,
@@ -276,15 +545,16 @@ def criar_todas_tabelas():
     )
     """)
 
-    conn.commit()
-    conn.close()
-
     # 🔐 USUÁRIOS
     c.execute("""
     CREATE TABLE IF NOT EXISTS usuarios (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         usuario TEXT UNIQUE,
-        senha TEXT
+        senha TEXT,
+        nome TEXT,
+        perfil TEXT,
+        ativo INTEGER DEFAULT 1,
+        criado_em TEXT
     )
     """)
 
@@ -332,6 +602,8 @@ def criar_todas_tabelas():
         campo_telefone TEXT,
         campo_modelo TEXT,
         campo_cor TEXT,
+        campo_servico TEXT,
+        campo_data TEXT,
         ativo INTEGER NOT NULL DEFAULT 1,
         ultimo_sync_em TEXT,
         proximo_sync_em TEXT,
@@ -341,9 +613,6 @@ def criar_todas_tabelas():
         atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
-
-    conn.commit()
-    conn.close()
 
     # 🔥 TIPOS DE SERVIÇO
     c.execute("""
@@ -366,6 +635,12 @@ def criar_todas_tabelas():
         status TEXT,
         prioridade INTEGER DEFAULT 0,
         observacoes TEXT,
+        origem TEXT,
+        guarita TEXT,
+        pneu TEXT,
+        cera TEXT,
+        hidro_lataria TEXT,
+        hidro_vidros TEXT,
         FOREIGN KEY(veiculo_id) REFERENCES veiculos(id),
         FOREIGN KEY(tipo_id) REFERENCES tipos_servico(id)
     )
@@ -409,10 +684,167 @@ def criar_todas_tabelas():
     )
     """)
 
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS checklist_itens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        ativo INTEGER NOT NULL DEFAULT 1,
+        ordem INTEGER NOT NULL DEFAULT 0,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS servico_checklist (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        servico_id INTEGER NOT NULL,
+        item_id INTEGER,
+        item_nome TEXT NOT NULL,
+        marcado INTEGER NOT NULL DEFAULT 1,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(servico_id) REFERENCES servicos(id),
+        FOREIGN KEY(item_id) REFERENCES checklist_itens(id)
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS historico_lavagens_sync (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sync_id INTEGER NOT NULL,
+        placa TEXT NOT NULL,
+        cliente TEXT,
+        carro TEXT,
+        cor TEXT,
+        servico TEXT,
+        data_lavagem TEXT,
+        data_original TEXT,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(sync_id) REFERENCES sincronizacoes_clientes(id)
+    )
+    """)
+
     # ⚡ ÍNDICES (performance)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS configuracao_empresa (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        razao_social TEXT,
+        nome_fantasia TEXT,
+        cnpj TEXT,
+        inscricao_municipal TEXT,
+        inscricao_estadual TEXT,
+        regime_tributario TEXT,
+        email TEXT,
+        telefone TEXT,
+        endereco TEXT,
+        numero TEXT,
+        complemento TEXT,
+        bairro TEXT,
+        cidade TEXT,
+        uf TEXT,
+        cep TEXT,
+        codigo_servico_padrao TEXT,
+        aliquota_padrao REAL DEFAULT 0,
+        atualizado_em TEXT
+    )
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS orcamentos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        numero INTEGER UNIQUE,
+        cliente_nome TEXT NOT NULL,
+        cliente_documento TEXT,
+        email TEXT,
+        telefone TEXT,
+        placa TEXT,
+        modelo TEXT,
+        validade_dias INTEGER DEFAULT 7,
+        forma_pagamento TEXT,
+        observacoes TEXT,
+        subtotal REAL DEFAULT 0,
+        desconto REAL DEFAULT 0,
+        total REAL DEFAULT 0,
+        status TEXT DEFAULT 'GERADO',
+        empresa_snapshot TEXT,
+        criado_em TEXT,
+        atualizado_em TEXT,
+        usuario TEXT
+    )
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS orcamento_itens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        orcamento_id INTEGER NOT NULL,
+        descricao TEXT NOT NULL,
+        quantidade REAL DEFAULT 1,
+        valor_unitario REAL DEFAULT 0,
+        valor_total REAL DEFAULT 0,
+        ordem INTEGER DEFAULT 0,
+        FOREIGN KEY(orcamento_id) REFERENCES orcamentos(id)
+    )
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS notas_fiscais (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rps_numero INTEGER UNIQUE,
+        numero_nota TEXT,
+        serie TEXT,
+        ambiente TEXT,
+        tipo_documento TEXT DEFAULT 'NFS-e',
+        status TEXT DEFAULT 'RASCUNHO',
+        cliente_nome TEXT NOT NULL,
+        cliente_documento TEXT,
+        email TEXT,
+        telefone TEXT,
+        placa TEXT,
+        modelo TEXT,
+        endereco TEXT,
+        numero_endereco TEXT,
+        complemento TEXT,
+        bairro TEXT,
+        cidade TEXT,
+        uf TEXT,
+        cep TEXT,
+        codigo_servico TEXT,
+        discriminacao TEXT,
+        observacoes TEXT,
+        aliquota_iss REAL DEFAULT 0,
+        valor_servicos REAL DEFAULT 0,
+        desconto REAL DEFAULT 0,
+        valor_iss REAL DEFAULT 0,
+        valor_total REAL DEFAULT 0,
+        empresa_snapshot TEXT,
+        criado_em TEXT,
+        atualizado_em TEXT,
+        usuario TEXT,
+        origem_orcamento_id INTEGER,
+        FOREIGN KEY(origem_orcamento_id) REFERENCES orcamentos(id)
+    )
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS nota_fiscal_itens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nota_fiscal_id INTEGER NOT NULL,
+        descricao TEXT NOT NULL,
+        quantidade REAL DEFAULT 1,
+        valor_unitario REAL DEFAULT 0,
+        valor_total REAL DEFAULT 0,
+        ordem INTEGER DEFAULT 0,
+        FOREIGN KEY(nota_fiscal_id) REFERENCES notas_fiscais(id)
+    )
+    """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_servico_status ON servicos(status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_servico_entrada ON servicos(entrada)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_veiculo_placa ON veiculos(placa)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_servico_checklist_servico ON servico_checklist(servico_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_historico_sync_placa ON historico_lavagens_sync(placa)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_historico_sync_data ON historico_lavagens_sync(data_lavagem)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_orcamentos_numero ON orcamentos(numero)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_orcamentos_criado_em ON orcamentos(criado_em)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_orcamento_itens_orcamento ON orcamento_itens(orcamento_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_notas_fiscais_rps ON notas_fiscais(rps_numero)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_notas_fiscais_criado_em ON notas_fiscais(criado_em)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_nota_fiscal_itens_nota ON nota_fiscal_itens(nota_fiscal_id)")
     c.execute("""
         CREATE INDEX IF NOT EXISTS idx_sync_clientes_proximo
         ON sincronizacoes_clientes(ativo, proximo_sync_em)
@@ -445,11 +877,133 @@ def definir_feedback_clientes(tipo, mensagem):
 def definir_feedback_base_dados(tipo, mensagem):
     session["base_dados_feedback"] = {"tipo": tipo, "mensagem": mensagem}
 
+def definir_feedback_index(tipo, mensagem):
+    session["index_feedback"] = {"tipo": tipo, "mensagem": mensagem}
+
+def definir_feedback_painel(tipo, mensagem):
+    session["painel_feedback"] = {"tipo": tipo, "mensagem": mensagem}
+
+def definir_feedback_itens(tipo, mensagem):
+    session["itens_feedback"] = {"tipo": tipo, "mensagem": mensagem}
+
+def definir_feedback_checklist(tipo, mensagem):
+    session["checklist_feedback"] = {"tipo": tipo, "mensagem": mensagem}
+
+def definir_feedback_configuracoes(tipo, mensagem):
+    session["configuracoes_feedback"] = {"tipo": tipo, "mensagem": mensagem}
+
+def definir_feedback_orcamento(tipo, mensagem):
+    session["orcamento_feedback"] = {"tipo": tipo, "mensagem": mensagem}
+
+def definir_feedback_nota_fiscal(tipo, mensagem):
+    session["nota_fiscal_feedback"] = {"tipo": tipo, "mensagem": mensagem}
+
 def limpar_preview_sincronizacao():
     session.pop("clientes_sync_preview", None)
 
 def limpar_feedback_base_dados():
     session.pop("base_dados_feedback", None)
+
+def senha_hash_bcrypt(valor):
+    return bcrypt.hashpw(str(valor or "").encode(), bcrypt.gensalt()).decode()
+
+def senha_usa_bcrypt(valor):
+    texto = str(valor or "")
+    return texto.startswith("$2a$") or texto.startswith("$2b$") or texto.startswith("$2y$")
+
+def verificar_senha_usuario(senha_digitada, senha_salva):
+    senha_digitada = str(senha_digitada or "")
+    senha_salva = str(senha_salva or "")
+
+    if not senha_salva:
+        return False
+
+    if senha_usa_bcrypt(senha_salva):
+        try:
+            return bcrypt.checkpw(senha_digitada.encode(), senha_salva.encode())
+        except Exception:
+            return False
+
+    return senha_digitada == senha_salva
+
+def preencher_sessao_usuario(usuario_row, limpar=True):
+    if limpar:
+        session.clear()
+    session["usuario"] = usuario_row["usuario"]
+    session["usuario_id"] = usuario_row["id"]
+    session["usuario_nome"] = (usuario_row["nome"] or usuario_row["usuario"])
+    session["usuario_perfil"] = (
+        usuario_row["perfil"] or
+        ("admin" if usuario_row["usuario"] == "admin" else "funcionario")
+    )
+    session.permanent = True
+
+def sincronizar_sessao_usuario():
+    if not session.get("usuario"):
+        return
+
+    if session.get("usuario_id") and session.get("usuario_nome") and session.get("usuario_perfil"):
+        return
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT * FROM usuarios WHERE usuario=?", (session.get("usuario"),))
+    usuario = c.fetchone()
+    conn.close()
+
+    if usuario:
+        preencher_sessao_usuario(usuario, limpar=False)
+
+def usuario_admin():
+    return (
+        session.get("usuario_perfil") == "admin" or
+        session.get("usuario") == "admin"
+    )
+
+def normalizar_perfil_usuario(valor):
+    return "admin" if str(valor or "").strip().lower() == "admin" else "funcionario"
+
+def normalizar_periodo_financeiro(valor):
+    periodo = str(valor or "mes").strip().lower()
+    return periodo if periodo in MAPA_PERIODOS_FINANCEIRO else "mes"
+
+def filtrar_servicos_por_periodo(servicos, periodo, data_referencia):
+    if periodo == "hoje":
+        return [
+            item for item in servicos
+            if item["entrega_dt"].date() == data_referencia
+        ]
+
+    if periodo == "7dias":
+        inicio = data_referencia - timedelta(days=6)
+        return [
+            item for item in servicos
+            if inicio <= item["entrega_dt"].date() <= data_referencia
+        ]
+
+    if periodo == "30dias":
+        inicio = data_referencia - timedelta(days=29)
+        return [
+            item for item in servicos
+            if inicio <= item["entrega_dt"].date() <= data_referencia
+        ]
+
+    return [
+        item for item in servicos
+        if (
+            item["entrega_dt"].year == data_referencia.year and
+            item["entrega_dt"].month == data_referencia.month
+        )
+    ]
+
+def dias_do_periodo_financeiro(periodo, data_referencia):
+    if periodo == "hoje":
+        return 1
+    if periodo == "7dias":
+        return 7
+    if periodo == "30dias":
+        return 30
+    return max(1, data_referencia.day)
 
 def obter_label_intervalo_sincronizacao(minutos):
     return MAPA_INTERVALOS_SINCRONIZACAO.get(minutos, f"{minutos} min")
@@ -482,6 +1036,958 @@ def formatar_tempo_restante(valor_iso):
 
     return "Falta " + " ".join(partes[:3])
 
+def interpretar_datahora_sistema(valor):
+    if not valor:
+        return None
+
+    if isinstance(valor, datetime):
+        return valor
+
+    texto = str(valor).strip()
+
+    for parser in (
+        lambda item: datetime.fromisoformat(item),
+        lambda item: datetime.strptime(item, "%d/%m/%Y %H:%M"),
+    ):
+        try:
+            return parser(texto)
+        except Exception:
+            continue
+
+    return None
+
+def formatar_valor_monetario(valor):
+    try:
+        numero = float(str(valor or 0).replace(",", "."))
+    except Exception:
+        numero = 0.0
+
+    return f"{numero:.2f}"
+
+def converter_valor_numerico(valor):
+    try:
+        return float(str(valor or 0).replace(",", "."))
+    except Exception:
+        return 0.0
+
+def converter_inteiro(valor, padrao=0):
+    try:
+        return int(str(valor or "").strip())
+    except Exception:
+        return padrao
+
+def formatar_valor_brl(valor):
+    numero = converter_valor_numerico(valor)
+    texto = f"{numero:,.2f}"
+    return texto.replace(",", "X").replace(".", ",").replace("X", ".")
+
+def normalizar_documento_fiscal(valor):
+    return re.sub(r"\D", "", str(valor or ""))
+
+def formatar_documento_fiscal(valor):
+    documento = normalizar_documento_fiscal(valor)
+
+    if len(documento) == 11:
+        return (
+            f"{documento[:3]}.{documento[3:6]}.{documento[6:9]}-"
+            f"{documento[9:11]}"
+        )
+
+    if len(documento) == 14:
+        return (
+            f"{documento[:2]}.{documento[2:5]}.{documento[5:8]}/"
+            f"{documento[8:12]}-{documento[12:14]}"
+        )
+
+    return str(valor or "").strip()
+
+def formatar_cep(valor):
+    cep = re.sub(r"\D", "", str(valor or ""))
+
+    if len(cep) == 8:
+        return f"{cep[:5]}-{cep[5:]}"
+
+    return str(valor or "").strip()
+
+def formatar_numero_documento(numero, tamanho=6):
+    try:
+        return str(int(numero)).zfill(tamanho)
+    except Exception:
+        return str(numero or "-")
+
+def empresa_snapshot_padrao():
+    return {
+        "razao_social": "",
+        "nome_fantasia": "",
+        "cnpj": "",
+        "inscricao_municipal": "",
+        "inscricao_estadual": "",
+        "regime_tributario": "",
+        "email": "",
+        "telefone": "",
+        "endereco": "",
+        "numero": "",
+        "complemento": "",
+        "bairro": "",
+        "cidade": "",
+        "uf": "",
+        "cep": "",
+        "codigo_servico_padrao": "",
+        "aliquota_padrao": 0.0,
+    }
+
+def obter_configuracao_empresa():
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT * FROM configuracao_empresa WHERE id=1")
+    item = c.fetchone()
+    conn.close()
+
+    dados = empresa_snapshot_padrao()
+
+    if item:
+        dados.update(dict(item))
+
+    dados["cnpj_formatado"] = formatar_documento_fiscal(dados.get("cnpj"))
+    dados["cep_formatado"] = formatar_cep(dados.get("cep"))
+    dados["aliquota_padrao"] = converter_valor_numerico(dados.get("aliquota_padrao"))
+    return dados
+
+def salvar_configuracao_empresa_form(form):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO configuracao_empresa (
+            id, razao_social, nome_fantasia, cnpj, inscricao_municipal, inscricao_estadual,
+            regime_tributario, email, telefone, endereco, numero, complemento, bairro,
+            cidade, uf, cep, codigo_servico_padrao, aliquota_padrao, atualizado_em
+        )
+        VALUES (
+            1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+        ON CONFLICT(id) DO UPDATE SET
+            razao_social=excluded.razao_social,
+            nome_fantasia=excluded.nome_fantasia,
+            cnpj=excluded.cnpj,
+            inscricao_municipal=excluded.inscricao_municipal,
+            inscricao_estadual=excluded.inscricao_estadual,
+            regime_tributario=excluded.regime_tributario,
+            email=excluded.email,
+            telefone=excluded.telefone,
+            endereco=excluded.endereco,
+            numero=excluded.numero,
+            complemento=excluded.complemento,
+            bairro=excluded.bairro,
+            cidade=excluded.cidade,
+            uf=excluded.uf,
+            cep=excluded.cep,
+            codigo_servico_padrao=excluded.codigo_servico_padrao,
+            aliquota_padrao=excluded.aliquota_padrao,
+            atualizado_em=excluded.atualizado_em
+    """, (
+        normalizar_texto_campo(form.get("razao_social")),
+        normalizar_texto_campo(form.get("nome_fantasia")),
+        normalizar_documento_fiscal(form.get("cnpj")),
+        normalizar_texto_campo(form.get("inscricao_municipal")),
+        normalizar_texto_campo(form.get("inscricao_estadual")),
+        normalizar_texto_campo(form.get("regime_tributario")),
+        normalizar_texto_campo(form.get("email")),
+        normalizar_texto_campo(form.get("telefone")),
+        normalizar_texto_campo(form.get("endereco")),
+        normalizar_texto_campo(form.get("numero")),
+        normalizar_texto_campo(form.get("complemento")),
+        normalizar_texto_campo(form.get("bairro")),
+        normalizar_texto_campo(form.get("cidade")),
+        normalizar_texto_campo(form.get("uf")).upper()[:2],
+        re.sub(r"\D", "", str(form.get("cep") or "")),
+        normalizar_texto_campo(form.get("codigo_servico_padrao")),
+        converter_valor_numerico(form.get("aliquota_padrao")),
+        agora_iso(),
+    ))
+    conn.commit()
+    conn.close()
+
+def serializar_empresa_snapshot(empresa):
+    return json.dumps(empresa or empresa_snapshot_padrao(), ensure_ascii=True)
+
+def desserializar_empresa_snapshot(valor):
+    dados = empresa_snapshot_padrao()
+
+    if not valor:
+        return dados
+
+    try:
+        carregado = json.loads(valor)
+        if isinstance(carregado, dict):
+            dados.update(carregado)
+    except Exception:
+        pass
+
+    dados["cnpj_formatado"] = formatar_documento_fiscal(dados.get("cnpj"))
+    dados["cep_formatado"] = formatar_cep(dados.get("cep"))
+    dados["aliquota_padrao"] = converter_valor_numerico(dados.get("aliquota_padrao"))
+    return dados
+
+def montar_empresa_snapshot(empresa):
+    base = empresa_snapshot_padrao()
+    base.update(empresa or {})
+    base["cnpj"] = normalizar_documento_fiscal(base.get("cnpj"))
+    base["cep"] = re.sub(r"\D", "", str(base.get("cep") or ""))
+    base["aliquota_padrao"] = converter_valor_numerico(base.get("aliquota_padrao"))
+    return base
+
+def empresa_possui_dados_fiscais(empresa):
+    return bool(normalizar_texto_campo((empresa or {}).get("razao_social"))) and bool(
+        normalizar_documento_fiscal((empresa or {}).get("cnpj"))
+    )
+
+def montar_endereco_empresa(empresa):
+    empresa = empresa or {}
+    primeira_linha = " ".join(
+        parte for parte in [
+            normalizar_texto_campo(empresa.get("endereco")),
+            normalizar_texto_campo(empresa.get("numero")),
+        ]
+        if parte
+    )
+
+    if empresa.get("complemento"):
+        primeira_linha = (
+            f"{primeira_linha} - {empresa['complemento']}"
+            if primeira_linha else empresa["complemento"]
+        )
+
+    segunda_linha = " - ".join(
+        parte for parte in [
+            normalizar_texto_campo(empresa.get("bairro")),
+            " ".join(
+                parte
+                for parte in [
+                    normalizar_texto_campo(empresa.get("cidade")),
+                    normalizar_texto_campo(empresa.get("uf")).upper(),
+                ]
+                if parte
+            ).strip(),
+            formatar_cep(empresa.get("cep")),
+        ]
+        if parte
+    )
+
+    return [linha for linha in [primeira_linha, segunda_linha] if linha]
+
+def proximo_numero_documento_sql(cursor, tabela, campo):
+    cursor.execute(f"SELECT MAX({campo}) FROM {tabela}")
+    atual = cursor.fetchone()[0]
+    return int(atual or 0) + 1
+
+def extrair_itens_formulario(form, prefixo="item"):
+    descricoes = form.getlist(f"{prefixo}_descricao[]")
+    quantidades = form.getlist(f"{prefixo}_quantidade[]")
+    valores_unitarios = form.getlist(f"{prefixo}_valor_unitario[]")
+    tamanho = max(len(descricoes), len(quantidades), len(valores_unitarios), 0)
+    itens = []
+
+    for indice in range(tamanho):
+        descricao = normalizar_texto_campo(descricoes[indice] if indice < len(descricoes) else "")
+        quantidade = converter_valor_numerico(quantidades[indice] if indice < len(quantidades) else 1)
+        valor_unitario = converter_valor_numerico(
+            valores_unitarios[indice] if indice < len(valores_unitarios) else 0
+        )
+
+        if not descricao and quantidade <= 0 and valor_unitario <= 0:
+            continue
+
+        quantidade = quantidade if quantidade > 0 else 1
+        descricao = descricao or "Servico"
+        valor_total = round(quantidade * valor_unitario, 2)
+        itens.append({
+            "ordem": indice + 1,
+            "descricao": descricao,
+            "quantidade": quantidade,
+            "valor_unitario": valor_unitario,
+            "valor_total": valor_total,
+            "quantidade_exibicao": (
+                str(int(quantidade)) if float(quantidade).is_integer() else str(quantidade).replace(".", ",")
+            ),
+            "valor_unitario_exibicao": formatar_valor_brl(valor_unitario),
+            "valor_total_exibicao": formatar_valor_brl(valor_total),
+        })
+
+    return itens
+
+def enriquecer_itens_documento(itens):
+    resultado = []
+
+    for indice, item in enumerate(itens or [], start=1):
+        quantidade = converter_valor_numerico(item.get("quantidade"))
+        valor_unitario = converter_valor_numerico(item.get("valor_unitario"))
+        valor_total = converter_valor_numerico(item.get("valor_total") or (quantidade * valor_unitario))
+        item_dict = dict(item)
+        item_dict["ordem"] = item.get("ordem") or indice
+        item_dict["descricao"] = normalizar_texto_campo(item.get("descricao")) or "Servico"
+        item_dict["quantidade"] = quantidade if quantidade > 0 else 1
+        item_dict["valor_unitario"] = valor_unitario
+        item_dict["valor_total"] = valor_total
+        item_dict["quantidade_exibicao"] = (
+            str(int(item_dict["quantidade"]))
+            if float(item_dict["quantidade"]).is_integer()
+            else str(item_dict["quantidade"]).replace(".", ",")
+        )
+        item_dict["valor_unitario_exibicao"] = formatar_valor_brl(item_dict["valor_unitario"])
+        item_dict["valor_total_exibicao"] = formatar_valor_brl(item_dict["valor_total"])
+        resultado.append(item_dict)
+
+    return resultado
+
+def listar_orcamentos_recentes(limit=8):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, numero, cliente_nome, placa, modelo, total, status, criado_em
+        FROM orcamentos
+        ORDER BY numero DESC
+        LIMIT ?
+    """, (limit,))
+    registros = [dict(item) for item in c.fetchall()]
+    conn.close()
+
+    for item in registros:
+        item["numero_formatado"] = formatar_numero_documento(item.get("numero"))
+        item["total_exibicao"] = formatar_valor_brl(item.get("total"))
+        item["criado_em_fmt"] = formatar_datahora(item.get("criado_em"))
+
+    return registros
+
+def buscar_orcamento_completo(orcamento_id):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT * FROM orcamentos WHERE id=?", (orcamento_id,))
+    orcamento = c.fetchone()
+
+    if not orcamento:
+        conn.close()
+        return None
+
+    c.execute("""
+        SELECT descricao, quantidade, valor_unitario, valor_total, ordem
+        FROM orcamento_itens
+        WHERE orcamento_id=?
+        ORDER BY ordem ASC, id ASC
+    """, (orcamento_id,))
+    itens = [dict(item) for item in c.fetchall()]
+    conn.close()
+
+    dados = dict(orcamento)
+    dados["itens"] = enriquecer_itens_documento(itens)
+    dados["empresa"] = desserializar_empresa_snapshot(dados.get("empresa_snapshot"))
+    dados["numero_formatado"] = formatar_numero_documento(dados.get("numero"))
+    dados["cliente_documento_formatado"] = formatar_documento_fiscal(dados.get("cliente_documento"))
+    dados["subtotal_exibicao"] = formatar_valor_brl(dados.get("subtotal"))
+    dados["desconto_exibicao"] = formatar_valor_brl(dados.get("desconto"))
+    dados["total_exibicao"] = formatar_valor_brl(dados.get("total"))
+    dados["criado_em_fmt"] = formatar_datahora(dados.get("criado_em"))
+    return dados
+
+def salvar_orcamento(dados, itens, empresa):
+    conn = conectar()
+    c = conn.cursor()
+    numero = proximo_numero_documento_sql(c, "orcamentos", "numero")
+    criado_em = agora_iso()
+    subtotal = round(sum(item["valor_total"] for item in itens), 2)
+    desconto = max(0.0, converter_valor_numerico(dados.get("desconto")))
+    total = max(subtotal - desconto, 0.0)
+    empresa_snapshot = serializar_empresa_snapshot(montar_empresa_snapshot(empresa))
+
+    c.execute("""
+        INSERT INTO orcamentos (
+            numero, cliente_nome, cliente_documento, email, telefone, placa, modelo,
+            validade_dias, forma_pagamento, observacoes, subtotal, desconto, total,
+            status, empresa_snapshot, criado_em, atualizado_em, usuario
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'GERADO', ?, ?, ?, ?)
+    """, (
+        numero,
+        normalizar_texto_campo(dados.get("cliente_nome")) or "Cliente sem nome",
+        normalizar_documento_fiscal(dados.get("cliente_documento")),
+        normalizar_texto_campo(dados.get("email")),
+        normalizar_texto_campo(dados.get("telefone")),
+        normalizar_texto_campo(dados.get("placa")).upper(),
+        normalizar_texto_campo(dados.get("modelo")),
+        max(1, converter_inteiro(dados.get("validade_dias"), 7)),
+        normalizar_texto_campo(dados.get("forma_pagamento")),
+        normalizar_texto_campo(dados.get("observacoes")),
+        subtotal,
+        desconto,
+        total,
+        empresa_snapshot,
+        criado_em,
+        criado_em,
+        session.get("usuario_nome") or session.get("usuario") or "",
+    ))
+    orcamento_id = c.lastrowid
+
+    for item in itens:
+        c.execute("""
+            INSERT INTO orcamento_itens (
+                orcamento_id, descricao, quantidade, valor_unitario, valor_total, ordem
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            orcamento_id,
+            item["descricao"],
+            item["quantidade"],
+            item["valor_unitario"],
+            item["valor_total"],
+            item["ordem"],
+        ))
+
+    conn.commit()
+    conn.close()
+    return buscar_orcamento_completo(orcamento_id)
+
+def listar_notas_fiscais_recentes(limit=8):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, rps_numero, numero_nota, serie, ambiente, status, cliente_nome, valor_total, criado_em
+        FROM notas_fiscais
+        ORDER BY rps_numero DESC
+        LIMIT ?
+    """, (limit,))
+    registros = [dict(item) for item in c.fetchall()]
+    conn.close()
+
+    for item in registros:
+        item["rps_formatado"] = formatar_numero_documento(item.get("rps_numero"))
+        item["valor_total_exibicao"] = formatar_valor_brl(item.get("valor_total"))
+        item["criado_em_fmt"] = formatar_datahora(item.get("criado_em"))
+
+    return registros
+
+def buscar_nota_fiscal_completa(nota_id):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT * FROM notas_fiscais WHERE id=?", (nota_id,))
+    nota = c.fetchone()
+
+    if not nota:
+        conn.close()
+        return None
+
+    c.execute("""
+        SELECT descricao, quantidade, valor_unitario, valor_total, ordem
+        FROM nota_fiscal_itens
+        WHERE nota_fiscal_id=?
+        ORDER BY ordem ASC, id ASC
+    """, (nota_id,))
+    itens = [dict(item) for item in c.fetchall()]
+    conn.close()
+
+    dados = dict(nota)
+    dados["itens"] = enriquecer_itens_documento(itens)
+    dados["empresa"] = desserializar_empresa_snapshot(dados.get("empresa_snapshot"))
+    dados["rps_formatado"] = formatar_numero_documento(dados.get("rps_numero"))
+    dados["cliente_documento_formatado"] = formatar_documento_fiscal(dados.get("cliente_documento"))
+    dados["valor_servicos_exibicao"] = formatar_valor_brl(dados.get("valor_servicos"))
+    dados["desconto_exibicao"] = formatar_valor_brl(dados.get("desconto"))
+    dados["valor_iss_exibicao"] = formatar_valor_brl(dados.get("valor_iss"))
+    dados["valor_total_exibicao"] = formatar_valor_brl(dados.get("valor_total"))
+    dados["criado_em_fmt"] = formatar_datahora(dados.get("criado_em"))
+    return dados
+
+def salvar_nota_fiscal(dados, itens, empresa):
+    conn = conectar()
+    c = conn.cursor()
+    rps_numero = proximo_numero_documento_sql(c, "notas_fiscais", "rps_numero")
+    criado_em = agora_iso()
+    valor_servicos = round(sum(item["valor_total"] for item in itens), 2)
+    desconto = max(0.0, converter_valor_numerico(dados.get("desconto")))
+    base_calculo = max(valor_servicos - desconto, 0.0)
+    aliquota_iss = max(0.0, converter_valor_numerico(dados.get("aliquota_iss")))
+    valor_iss = round((base_calculo * aliquota_iss) / 100, 2)
+    valor_total = base_calculo
+    numero_nota = normalizar_texto_campo(dados.get("numero_nota"))
+    empresa_snapshot = serializar_empresa_snapshot(montar_empresa_snapshot(empresa))
+
+    c.execute("""
+        INSERT INTO notas_fiscais (
+            rps_numero, numero_nota, serie, ambiente, tipo_documento, status,
+            cliente_nome, cliente_documento, email, telefone, placa, modelo,
+            endereco, numero_endereco, complemento, bairro, cidade, uf, cep,
+            codigo_servico, discriminacao, observacoes, aliquota_iss, valor_servicos,
+            desconto, valor_iss, valor_total, empresa_snapshot, criado_em, atualizado_em,
+            usuario, origem_orcamento_id
+        )
+        VALUES (?, ?, ?, ?, 'NFS-e', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        rps_numero,
+        numero_nota,
+        normalizar_texto_campo(dados.get("serie")),
+        normalizar_texto_campo(dados.get("ambiente")) or "Emissao manual",
+        "EMITIDA MANUALMENTE" if numero_nota else "RASCUNHO",
+        normalizar_texto_campo(dados.get("cliente_nome")) or "Cliente sem nome",
+        normalizar_documento_fiscal(dados.get("cliente_documento")),
+        normalizar_texto_campo(dados.get("email")),
+        normalizar_texto_campo(dados.get("telefone")),
+        normalizar_texto_campo(dados.get("placa")).upper(),
+        normalizar_texto_campo(dados.get("modelo")),
+        normalizar_texto_campo(dados.get("endereco")),
+        normalizar_texto_campo(dados.get("numero_endereco")),
+        normalizar_texto_campo(dados.get("complemento")),
+        normalizar_texto_campo(dados.get("bairro")),
+        normalizar_texto_campo(dados.get("cidade")),
+        normalizar_texto_campo(dados.get("uf")).upper()[:2],
+        re.sub(r"\D", "", str(dados.get("cep") or "")),
+        normalizar_texto_campo(dados.get("codigo_servico")),
+        normalizar_texto_campo(dados.get("discriminacao")),
+        normalizar_texto_campo(dados.get("observacoes")),
+        aliquota_iss,
+        valor_servicos,
+        desconto,
+        valor_iss,
+        valor_total,
+        empresa_snapshot,
+        criado_em,
+        criado_em,
+        session.get("usuario_nome") or session.get("usuario") or "",
+        converter_inteiro(dados.get("origem_orcamento_id"), None),
+    ))
+    nota_id = c.lastrowid
+
+    for item in itens:
+        c.execute("""
+            INSERT INTO nota_fiscal_itens (
+                nota_fiscal_id, descricao, quantidade, valor_unitario, valor_total, ordem
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            nota_id,
+            item["descricao"],
+            item["quantidade"],
+            item["valor_unitario"],
+            item["valor_total"],
+            item["ordem"],
+        ))
+
+    conn.commit()
+    conn.close()
+    return buscar_nota_fiscal_completa(nota_id)
+
+def montar_prefill_nota_por_orcamento(orcamento):
+    if not orcamento:
+        return None
+
+    empresa = obter_configuracao_empresa()
+    discriminacao = "; ".join(item["descricao"] for item in orcamento.get("itens", []))
+    return {
+        "origem_orcamento_id": orcamento["id"],
+        "cliente_nome": orcamento.get("cliente_nome", ""),
+        "cliente_documento": orcamento.get("cliente_documento", ""),
+        "email": orcamento.get("email", ""),
+        "telefone": orcamento.get("telefone", ""),
+        "placa": orcamento.get("placa", ""),
+        "modelo": orcamento.get("modelo", ""),
+        "codigo_servico": empresa.get("codigo_servico_padrao", ""),
+        "aliquota_iss": empresa.get("aliquota_padrao", 0),
+        "discriminacao": discriminacao,
+        "desconto": orcamento.get("desconto", 0),
+        "itens": orcamento.get("itens", []),
+    }
+
+def montar_tabela_itens_pdf(itens):
+    from reportlab.platypus import Table, TableStyle
+    from reportlab.lib import colors
+
+    dados_tabela = [["Descricao", "Qtd", "Unitario", "Total"]]
+
+    for item in itens:
+        dados_tabela.append([
+            item["descricao"],
+            item["quantidade_exibicao"],
+            f"R$ {item['valor_unitario_exibicao']}",
+            f"R$ {item['valor_total_exibicao']}",
+        ])
+
+    tabela = Table(dados_tabela, colWidths=[250, 60, 90, 90])
+    tabela.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#111827")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.7, colors.HexColor("#d1d5db")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
+        ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 8),
+    ]))
+    return tabela
+
+def gerar_pdf_orcamento_buffer(orcamento):
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    empresa = orcamento.get("empresa") or empresa_snapshot_padrao()
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=28, bottomMargin=28)
+    styles = getSampleStyleSheet()
+    titulo_style = ParagraphStyle(
+        "DocTitulo",
+        parent=styles["Heading1"],
+        alignment=TA_CENTER,
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        textColor=colors.HexColor("#111827"),
+        spaceAfter=6,
+    )
+    subtitulo_style = ParagraphStyle(
+        "DocSubtitulo",
+        parent=styles["BodyText"],
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#4b5563"),
+        spaceAfter=12,
+    )
+    normal = styles["BodyText"]
+    elementos = []
+
+    try:
+        logo = ImagemRedonda("static/logo.jpg", size=72)
+        tabela_logo = Table([[logo]], colWidths=[523])
+        tabela_logo.setStyle([("ALIGN", (0, 0), (-1, -1), "CENTER")])
+        elementos.append(tabela_logo)
+        elementos.append(Spacer(1, 10))
+    except Exception:
+        pass
+
+    nome_empresa = empresa.get("nome_fantasia") or empresa.get("razao_social") or "Wagen Estetica Automotiva"
+    elementos.append(Paragraph(xml_escape(nome_empresa), titulo_style))
+
+    linhas_empresa = []
+    if empresa.get("razao_social"):
+        linhas_empresa.append(f"Razao social: {empresa['razao_social']}")
+    if empresa.get("cnpj"):
+        linhas_empresa.append(f"CNPJ: {formatar_documento_fiscal(empresa['cnpj'])}")
+    linhas_empresa.extend(montar_endereco_empresa(empresa))
+    if empresa.get("telefone") or empresa.get("email"):
+        linhas_empresa.append(
+            " | ".join(
+                parte for parte in [
+                    normalizar_texto_campo(empresa.get("telefone")),
+                    normalizar_texto_campo(empresa.get("email")),
+                ]
+                if parte
+            )
+        )
+
+    if linhas_empresa:
+        elementos.append(Paragraph(xml_escape(" | ".join(linhas_empresa)), subtitulo_style))
+
+    elementos.append(Paragraph(
+        xml_escape(
+            f"Orcamento #{orcamento['numero_formatado']} - Emitido em {orcamento['criado_em_fmt']}"
+        ),
+        subtitulo_style
+    ))
+
+    cliente_tabela = Table([
+        ["Cliente", orcamento.get("cliente_nome") or "-"],
+        ["Documento", orcamento.get("cliente_documento_formatado") or "-"],
+        ["Telefone", orcamento.get("telefone") or "-"],
+        ["Email", orcamento.get("email") or "-"],
+        ["Veiculo", " / ".join(parte for parte in [orcamento.get("modelo"), orcamento.get("placa")] if parte) or "-"],
+        ["Validade", f"{max(1, converter_inteiro(orcamento.get('validade_dias'), 7))} dia(s)"],
+        ["Pagamento", orcamento.get("forma_pagamento") or "-"],
+    ], colWidths=[120, 403])
+    cliente_tabela.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f3f4f6")),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#d1d5db")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    elementos.append(cliente_tabela)
+    elementos.append(Spacer(1, 14))
+    elementos.append(montar_tabela_itens_pdf(orcamento.get("itens", [])))
+    elementos.append(Spacer(1, 14))
+
+    totais = Table([
+        ["Subtotal", f"R$ {orcamento['subtotal_exibicao']}"],
+        ["Desconto", f"R$ {orcamento['desconto_exibicao']}"],
+        ["Total", f"R$ {orcamento['total_exibicao']}"],
+    ], colWidths=[120, 130], hAlign="RIGHT")
+    totais.setStyle(TableStyle([
+        ("BACKGROUND", (0, 2), (-1, 2), colors.HexColor("#facc15")),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#d1d5db")),
+        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+    ]))
+    elementos.append(totais)
+
+    if orcamento.get("observacoes"):
+        elementos.append(Spacer(1, 16))
+        elementos.append(Paragraph("<b>Observacoes</b>", normal))
+        elementos.append(Paragraph(xml_escape(orcamento["observacoes"]).replace("\n", "<br/>"), normal))
+
+    doc.build(elementos)
+    buffer.seek(0)
+    return buffer
+
+def gerar_pdf_nota_fiscal_buffer(nota):
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    empresa = nota.get("empresa") or empresa_snapshot_padrao()
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=28, bottomMargin=28)
+    styles = getSampleStyleSheet()
+    titulo_style = ParagraphStyle(
+        "FiscalTitulo",
+        parent=styles["Heading1"],
+        alignment=TA_CENTER,
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        textColor=colors.HexColor("#111827"),
+        spaceAfter=6,
+    )
+    subtitulo_style = ParagraphStyle(
+        "FiscalSubtitulo",
+        parent=styles["BodyText"],
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#4b5563"),
+        spaceAfter=10,
+    )
+    normal = styles["BodyText"]
+    elementos = []
+
+    elementos.append(Paragraph("Espelho Fiscal de Servico", titulo_style))
+    elementos.append(Paragraph(
+        xml_escape(
+            f"RPS #{nota['rps_formatado']} - Status: {nota.get('status') or 'RASCUNHO'}"
+        ),
+        subtitulo_style
+    ))
+
+    if nota.get("numero_nota"):
+        elementos.append(Paragraph(
+            xml_escape(
+                f"Numero da nota: {nota['numero_nota']} | Serie: {nota.get('serie') or '-'} | Ambiente: {nota.get('ambiente') or '-'}"
+            ),
+            subtitulo_style
+        ))
+
+    emitente_tabela = Table([
+        ["Emitente", empresa.get("razao_social") or empresa.get("nome_fantasia") or "-"],
+        ["CNPJ", formatar_documento_fiscal(empresa.get("cnpj")) or "-"],
+        ["IM / IE", " / ".join(
+            parte for parte in [
+                normalizar_texto_campo(empresa.get("inscricao_municipal")),
+                normalizar_texto_campo(empresa.get("inscricao_estadual")),
+            ] if parte
+        ) or "-"],
+        ["Endereco", " | ".join(montar_endereco_empresa(empresa)) or "-"],
+        ["Contato", " | ".join(
+            parte for parte in [
+                normalizar_texto_campo(empresa.get("telefone")),
+                normalizar_texto_campo(empresa.get("email")),
+            ] if parte
+        ) or "-"],
+    ], colWidths=[120, 403])
+    emitente_tabela.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f3f4f6")),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#d1d5db")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    elementos.append(emitente_tabela)
+    elementos.append(Spacer(1, 12))
+
+    tomador_tabela = Table([
+        ["Tomador", nota.get("cliente_nome") or "-"],
+        ["Documento", nota.get("cliente_documento_formatado") or "-"],
+        ["Contato", " | ".join(
+            parte for parte in [nota.get("telefone"), nota.get("email")] if parte
+        ) or "-"],
+        ["Veiculo", " / ".join(parte for parte in [nota.get("modelo"), nota.get("placa")] if parte) or "-"],
+        ["Endereco", " - ".join(
+            parte for parte in [
+                " ".join(parte for parte in [nota.get("endereco"), nota.get("numero_endereco")] if parte).strip(),
+                normalizar_texto_campo(nota.get("complemento")),
+                " / ".join(parte for parte in [nota.get("bairro"), " ".join(parte for parte in [nota.get("cidade"), nota.get("uf")] if parte).strip()] if parte),
+                formatar_cep(nota.get("cep")),
+            ]
+            if parte
+        ) or "-"],
+    ], colWidths=[120, 403])
+    tomador_tabela.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f9fafb")),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#d1d5db")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    elementos.append(tomador_tabela)
+    elementos.append(Spacer(1, 12))
+    elementos.append(montar_tabela_itens_pdf(nota.get("itens", [])))
+    elementos.append(Spacer(1, 14))
+
+    fiscal_tabela = Table([
+        ["Codigo servico", nota.get("codigo_servico") or "-"],
+        ["Aliquota ISS", f"{converter_valor_numerico(nota.get('aliquota_iss')):.2f}%"],
+        ["Valor servicos", f"R$ {nota['valor_servicos_exibicao']}"],
+        ["Desconto", f"R$ {nota['desconto_exibicao']}"],
+        ["ISS estimado", f"R$ {nota['valor_iss_exibicao']}"],
+        ["Valor total", f"R$ {nota['valor_total_exibicao']}"],
+    ], colWidths=[150, 120], hAlign="RIGHT")
+    fiscal_tabela.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#d1d5db")),
+        ("BACKGROUND", (0, 5), (-1, 5), colors.HexColor("#facc15")),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+    ]))
+    elementos.append(fiscal_tabela)
+
+    if nota.get("discriminacao"):
+        elementos.append(Spacer(1, 16))
+        elementos.append(Paragraph("<b>Discriminacao do servico</b>", normal))
+        elementos.append(Paragraph(xml_escape(nota["discriminacao"]).replace("\n", "<br/>"), normal))
+
+    if nota.get("observacoes"):
+        elementos.append(Spacer(1, 12))
+        elementos.append(Paragraph("<b>Observacoes fiscais</b>", normal))
+        elementos.append(Paragraph(xml_escape(nota["observacoes"]).replace("\n", "<br/>"), normal))
+
+    elementos.append(Spacer(1, 12))
+    elementos.append(Paragraph(
+        "Este PDF e um espelho de apoio para emissao e conferencia. A emissao oficial da NFS-e/NF-e depende do portal ou integracao fiscal habilitada para o seu CNPJ.",
+        normal,
+    ))
+
+    doc.build(elementos)
+    buffer.seek(0)
+    return buffer
+
+def criar_itens_checklist_padrao():
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM checklist_itens")
+    total = c.fetchone()[0]
+
+    if total == 0:
+        for ordem, nome in enumerate(ITENS_CHECKLIST_PADRAO, start=1):
+            c.execute(
+                "INSERT INTO checklist_itens (nome, ativo, ordem) VALUES (?, 1, ?)",
+                (nome, ordem)
+            )
+        conn.commit()
+
+    conn.close()
+
+def listar_itens_checklist(apenas_ativos=False):
+    conn = conectar()
+    c = conn.cursor()
+
+    query = "SELECT * FROM checklist_itens"
+    params = ()
+
+    if apenas_ativos:
+        query += " WHERE ativo=1"
+
+    query += " ORDER BY ordem ASC, id ASC"
+    c.execute(query, params)
+    itens = [dict(item) for item in c.fetchall()]
+    conn.close()
+    return itens
+
+criar_itens_checklist_padrao()
+
+def normalizar_texto_campo(valor):
+    return str(valor or "").strip()
+
+def normalizar_flag_sim_nao(valor):
+    return "Sim" if normalizar_texto_comparacao(valor) == "sim" else "Nao"
+
+def salvar_fotos_servico(cursor, servico_id, fotos, tipo):
+    total_salvas = 0
+
+    for foto in fotos or []:
+        if not foto or not foto.filename or not arquivo_permitido(foto.filename):
+            continue
+
+        nome = f"{time.time_ns()}_{secure_filename(foto.filename)}"
+        caminho = os.path.join(UPLOAD_FOLDER, nome)
+        foto.save(caminho)
+
+        cursor.execute(
+            "INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
+            (servico_id, tipo, caminho)
+        )
+        total_salvas += 1
+
+    return total_salvas
+
+def contar_fotos_validas(fotos):
+    return sum(
+        1
+        for foto in (fotos or [])
+        if foto and foto.filename and arquivo_permitido(foto.filename)
+    )
+
+def atualizar_campos_operacionais_servico(cursor, servico_id, form):
+    cursor.execute("""
+        UPDATE servicos
+        SET origem=?, guarita=?, observacoes=?, pneu=?, cera=?, hidro_lataria=?, hidro_vidros=?
+        WHERE id=?
+    """, (
+        normalizar_texto_campo(form.get("origem")),
+        normalizar_texto_campo(form.get("guarita")),
+        normalizar_texto_campo(form.get("observacoes")),
+        normalizar_texto_campo(form.get("pneu")),
+        normalizar_flag_sim_nao(form.get("cera")),
+        normalizar_flag_sim_nao(form.get("hidro_lataria")),
+        normalizar_flag_sim_nao(form.get("hidro_vidros")),
+        servico_id,
+    ))
+
+def listar_checklist_servico(servico_id):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT item_id, item_nome, marcado
+        FROM servico_checklist
+        WHERE servico_id=?
+        ORDER BY id ASC
+    """, (servico_id,))
+    itens = [dict(item) for item in c.fetchall()]
+    conn.close()
+    return itens
+
+def buscar_servico_operacional(servico_id):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT
+            servicos.*,
+            tipos_servico.nome AS tipo_nome,
+            veiculos.placa,
+            veiculos.modelo,
+            veiculos.cor,
+            clientes.nome AS cliente_nome,
+            clientes.telefone AS cliente_telefone
+        FROM servicos
+        LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
+        LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
+        LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
+        WHERE servicos.id=?
+    """, (servico_id,))
+    servico = c.fetchone()
+    conn.close()
+    return dict(servico) if servico else None
+
 def detectar_novas_colunas(colunas_atuais, colunas_antigas_str):
     if not colunas_antigas_str:
         return []
@@ -496,58 +2002,79 @@ def normalizar_texto_comparacao(valor):
     valor = unicodedata.normalize("NFKD", valor)
     return "".join(ch for ch in valor if not unicodedata.combining(ch))
 
-def normalizar_link_planilha(url):
-    url = (url or "").strip()
-
-    if "docs.google.com/spreadsheets" not in url or "export?format=" in url:
-        return url
-
-    if "/d/" not in url:
-        return url
-
-    sheet_id = url.split("/d/")[1].split("/")[0]
+def extrair_gid_url(url):
     parsed = urlparse(url)
     query = parse_qs(parsed.query)
     fragment = parse_qs(parsed.fragment)
-    gid = query.get("gid", fragment.get("gid", ["0"]))[0]
+    return query.get("gid", fragment.get("gid", ["0"]))[0]
 
-    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+def montar_url_google_sheets_csv(sheet_id, gid="0"):
+    sheet_id = (sheet_id or "").strip()
+    gid = str(gid or "0").strip() or "0"
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid}"
+
+def extrair_sheet_id_google(url):
+    url = (url or "").strip()
+
+    if "/d/" in url:
+        try:
+            return url.split("/d/")[1].split("/")[0]
+        except Exception:
+            return ""
+
+    parsed = urlparse(url)
+    partes = [parte for parte in parsed.path.split("/") if parte]
+
+    for parte in reversed(partes):
+        if len(parte) >= 20 and all(ch.isalnum() or ch in "-_" for ch in parte):
+            return parte
+
+    return ""
+
+def normalizar_link_planilha(url):
+    url = (url or "").strip()
+
+    if "docs.google.com/spreadsheets" in url:
+        sheet_id = extrair_sheet_id_google(url)
+        if not sheet_id:
+            return url
+
+        gid = extrair_gid_url(url)
+        return montar_url_google_sheets_csv(sheet_id, gid)
+
+    if "googleusercontent.com" in url:
+        sheet_id = extrair_sheet_id_google(url)
+        if not sheet_id:
+            return url
+
+        gid = extrair_gid_url(url)
+        return montar_url_google_sheets_csv(sheet_id, gid)
+
+    if "export?format=" in url:
+        return url
+
+    return url
 
 def corrigir_link_google_sheets(url):
     try:
-        # ❌ BLOQUEIA LINK ERRADO (googleusercontent)
         if "googleusercontent.com" in url:
-            raise Exception("Link inválido. Use o link original do Google Sheets (docs.google.com).")
+            sheet_id = extrair_sheet_id_google(url)
+            if not sheet_id:
+                raise Exception("Link invalido. Use o link original do Google Sheets (docs.google.com).")
 
-        # ✅ TRATA LINK DO GOOGLE SHEETS
+            return montar_url_google_sheets_csv(sheet_id, extrair_gid_url(url))
+
         if "docs.google.com" in url and "/spreadsheets/d/" in url:
-
-            # extrair ID da planilha
-            partes = url.split("/d/")
-            if len(partes) < 2:
+            sheet_id = extrair_sheet_id_google(url)
+            if not sheet_id:
                 raise Exception("Não foi possível identificar o ID da planilha.")
 
-            resto = partes[1]
-            sheet_id = resto.split("/")[0]
+            return montar_url_google_sheets_csv(sheet_id, extrair_gid_url(url))
 
-            # pegar gid (aba)
-            gid = "0"
-            if "gid=" in url:
-                gid = url.split("gid=")[-1].split("&")[0]
-
-            # montar link final LIMPO
-            novo_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
-
-            return novo_url
-
-        # ❌ NÃO É GOOGLE SHEETS
         raise Exception("Link não suportado. Use uma planilha do Google Sheets.")
 
     except Exception as e:
         raise Exception(f"Erro ao processar link: {e}")
-
-    except Exception:
-        return url
 
 def adicionar_parametros_url(url, **novos_parametros):
     parsed = urlparse(url)
@@ -689,11 +2216,11 @@ def sugerir_mapeamento_colunas(colunas):
 
     return sugestao
 
-def ler_dataframe_link_planilha(url):
+def ler_dataframe_link_planilha(url, intervalo_minutos=None):
 
     # 🔥 DETECTAR SHEETY
     if "sheety.co" in url:
-        df = ler_planilha_sheety(url)
+        df = ler_planilha_sheety(url, intervalo_minutos=intervalo_minutos)
         return df, url
     if not url:
 
@@ -748,6 +2275,255 @@ def limpar_valor_planilha(valor):
 
     texto = str(valor).strip()
     return "" if texto.lower() == "nan" else texto
+
+MAPA_MESES_PT = {
+    "jan": 1,
+    "fev": 2,
+    "mar": 3,
+    "abr": 4,
+    "mai": 5,
+    "jun": 6,
+    "jul": 7,
+    "ago": 8,
+    "set": 9,
+    "out": 10,
+    "nov": 11,
+    "dez": 12,
+}
+
+def interpretar_data_planilha(valor):
+    texto_original = limpar_valor_planilha(valor)
+
+    if not texto_original:
+        return None
+
+    texto = normalizar_texto_comparacao(texto_original).replace(".", "").strip()
+
+    for formato in ("%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d-%m-%y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(texto, formato)
+        except Exception:
+            continue
+
+    match = re.search(r"(\d{1,2})\s*[-/ ]\s*([a-z]{3,9})(?:\s*[-/ ]\s*(\d{2,4}))?", texto)
+    if not match:
+        return None
+
+    dia = int(match.group(1))
+    mes_texto = match.group(2)[:3]
+    mes = MAPA_MESES_PT.get(mes_texto)
+
+    if not mes:
+        return None
+
+    ano_texto = match.group(3)
+    hoje = agora().date()
+
+    if ano_texto:
+        ano = int(ano_texto)
+        if ano < 100:
+            ano += 2000
+    else:
+        ano = hoje.year
+
+    try:
+        data = datetime(ano, mes, dia)
+    except Exception:
+        return None
+
+    if data.date() > hoje + timedelta(days=7):
+        try:
+            data = datetime(ano - 1, mes, dia)
+        except Exception:
+            return None
+
+    return data
+
+def obter_colunas_preview_sync(mapeamento):
+    ordem = ["nome", "modelo", "cor", "placa", "servico"]
+    colunas = []
+
+    for chave in ordem:
+        coluna = (mapeamento or {}).get(chave)
+        if coluna and coluna not in colunas:
+            colunas.append(coluna)
+
+    return colunas
+
+def montar_registros_historico_lavagens(df, mapeamento):
+    registros = []
+    estatisticas = {
+        "historico_linhas": 0,
+        "historico_com_data": 0,
+    }
+
+    for _, row in df.iterrows():
+        placa = limpar_valor_planilha(row.get(mapeamento.get("placa", ""), "")).upper()
+
+        if not placa:
+            continue
+
+        cliente = limpar_valor_planilha(row.get(mapeamento.get("nome", ""), "")) if mapeamento.get("nome") else ""
+        carro = limpar_valor_planilha(row.get(mapeamento.get("modelo", ""), "")) if mapeamento.get("modelo") else ""
+        cor = limpar_valor_planilha(row.get(mapeamento.get("cor", ""), "")) if mapeamento.get("cor") else ""
+        servico = limpar_valor_planilha(row.get(mapeamento.get("servico", ""), "")) if mapeamento.get("servico") else ""
+        data_original = limpar_valor_planilha(row.get(mapeamento.get("data", ""), "")) if mapeamento.get("data") else ""
+        data_lavagem = interpretar_data_planilha(data_original)
+
+        if not any([cliente, carro, cor, servico]):
+            continue
+
+        registros.append({
+            "placa": placa,
+            "cliente": cliente,
+            "carro": carro,
+            "cor": cor,
+            "servico": servico,
+            "data_original": data_original,
+            "data_lavagem": data_lavagem.date().isoformat() if data_lavagem else None,
+        })
+        estatisticas["historico_linhas"] += 1
+
+        if data_lavagem:
+            estatisticas["historico_com_data"] += 1
+
+    return registros, estatisticas
+
+def salvar_historico_lavagens_sync(sync_id, registros):
+    conn = conectar()
+    c = conn.cursor()
+    agora_atual = agora_iso()
+
+    c.execute("DELETE FROM historico_lavagens_sync WHERE sync_id=?", (sync_id,))
+
+    for item in registros:
+        c.execute("""
+            INSERT INTO historico_lavagens_sync (
+                sync_id, placa, cliente, carro, cor, servico,
+                data_lavagem, data_original, criado_em, atualizado_em
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            sync_id,
+            item.get("placa"),
+            item.get("cliente"),
+            item.get("carro"),
+            item.get("cor"),
+            item.get("servico"),
+            item.get("data_lavagem"),
+            item.get("data_original"),
+            agora_atual,
+            agora_atual,
+        ))
+
+    conn.commit()
+    conn.close()
+
+def buscar_ultima_lavagem_sync_placa(placa):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT *
+        FROM historico_lavagens_sync
+        WHERE placa=?
+        ORDER BY
+            CASE WHEN data_lavagem IS NULL OR data_lavagem='' THEN 1 ELSE 0 END,
+            data_lavagem DESC,
+            id DESC
+        LIMIT 1
+    """, (placa.upper(),))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def buscar_ultima_lavagem_local_placa(placa):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT
+            servicos.entrega,
+            tipos_servico.nome AS servico
+        FROM servicos
+        LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
+        LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
+        WHERE veiculos.placa=?
+          AND servicos.status='FINALIZADO'
+          AND servicos.entrega IS NOT NULL
+        ORDER BY servicos.entrega DESC, servicos.id DESC
+        LIMIT 1
+    """, (placa.upper(),))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def gerar_recomendacoes_servicos_lavagem(dias_desde=None, servico_anterior=""):
+    servico_norm = normalizar_texto_comparacao(servico_anterior)
+    recomendacoes = []
+
+    if dias_desde is None:
+        recomendacoes.append("Sem data valida no historico. Vale confirmar a ultima lavagem com o cliente.")
+    elif dias_desde >= 30:
+        recomendacoes.append("Sugerir lavagem completa com acabamento de pneus e revisao dos vidros.")
+    elif dias_desde >= 15:
+        recomendacoes.append("Boa hora para oferecer lavagem completa e reforco no acabamento externo.")
+    elif dias_desde >= 7:
+        recomendacoes.append("Sugerir lavagem de manutencao ou expressa para manter o carro em dia.")
+    else:
+        recomendacoes.append("Lavagem recente. Oferecer manutencao leve apenas se o carro ja estiver com poeira.")
+
+    if "expressa" in servico_norm:
+        recomendacoes.append("Como a ultima foi expressa, vale apresentar a completa na proxima visita.")
+
+    if "completa" in servico_norm and (dias_desde or 0) >= 15:
+        recomendacoes.append("Oferecer cera para prolongar brilho e protecao da pintura.")
+
+    if "cera" not in servico_norm and (dias_desde or 0) >= 20:
+        recomendacoes.append("Apresentar opcao de cera e hidro vidros para elevar o ticket.")
+
+    unicas = []
+    for item in recomendacoes:
+        if item not in unicas:
+            unicas.append(item)
+
+    return unicas[:3]
+
+def montar_contexto_lavagem_placa(placa):
+    historico_sync = buscar_ultima_lavagem_sync_placa(placa)
+    origem = "historico sincronizado"
+    data_ref = None
+    servico_anterior = ""
+
+    if historico_sync:
+        data_ref = interpretar_datahora_sistema(historico_sync.get("data_lavagem"))
+        servico_anterior = historico_sync.get("servico") or "Servico nao informado"
+        carro = historico_sync.get("carro") or ""
+        cor = historico_sync.get("cor") or ""
+    else:
+        historico_local = buscar_ultima_lavagem_local_placa(placa)
+        if not historico_local:
+            return None
+        origem = "historico interno"
+        data_ref = interpretar_datahora_sistema(historico_local.get("entrega"))
+        servico_anterior = historico_local.get("servico") or "Servico nao informado"
+        carro = ""
+        cor = ""
+
+    dias_desde = None
+    if data_ref:
+        dias_desde = max(0, (agora().date() - data_ref.date()).days)
+
+    recomendacoes = gerar_recomendacoes_servicos_lavagem(dias_desde, servico_anterior)
+
+    return {
+        "origem": origem,
+        "servico_anterior": servico_anterior,
+        "data_exibicao": data_ref.strftime("%d/%m/%Y") if data_ref else "Data nao encontrada",
+        "dias_desde": dias_desde,
+        "recomendacoes": recomendacoes,
+        "carro": carro,
+        "cor": cor,
+        "tipo_alerta": "aviso" if dias_desde is not None and dias_desde >= 15 else "sucesso",
+    }
 
 def obter_mapeamento_sync_por_form(form):
     return {
@@ -865,13 +2641,20 @@ def importar_clientes_dataframe(df, mapeamento):
     return estatisticas
 
 def resumir_importacao_clientes(estatisticas):
-    return (
+    resumo = (
         f"{estatisticas['linhas_processadas']} linha(s) processada(s), "
         f"{estatisticas['veiculos_novos']} veículo(s) novo(s), "
         f"{estatisticas['veiculos_atualizados']} veículo(s) atualizado(s), "
         f"{estatisticas['clientes_novos']} cliente(s) novo(s), "
         f"{estatisticas['clientes_atualizados']} cliente(s) atualizado(s)"
     )
+
+    if "historico_linhas" in estatisticas:
+        resumo += (
+            f", {estatisticas['historico_linhas']} lavagem(ns) no historico"
+        )
+
+    return resumo
 
 def buscar_sincronizacao_cliente(sync_id):
     conn = conectar()
@@ -892,13 +2675,14 @@ def executar_sincronizacao_cliente(sync_id):
 
         # 🔥 SHEETY (FLUXO DIRETO)
         if "sheety.co" in url_base:
-            df = ler_planilha_sheety(url_base)
+            df = ler_planilha_sheety(url_base, intervalo_minutos=sync["intervalo_minutos"])
 
             print("🔥 DADOS SHEETY:")
             print(df.tail(5))
 
-            # força atualização sempre
-            hash_atual = str(time.time())
+            hash_atual = hashlib.md5(
+                df.to_csv(index=False).encode("utf-8")
+            ).hexdigest()
             url_usada = url_base
 
         # 🔽 PLANILHA NORMAL (GOOGLE, CSV, EXCEL)
@@ -934,19 +2718,44 @@ def executar_sincronizacao_cliente(sync_id):
 
             url_usada = url_base
 
-        # 🔥 SE NÃO FOR SHEETY, VERIFICA HASH
-        if "sheety.co" not in sync["url"]:
-            if sync["ultimo_hash"] == hash_atual:
-                return True, "Sem alterações na planilha."
+        if sync["ultimo_hash"] == hash_atual:
+            agora_atual = agora_iso()
+            mensagem = "Sem alterações na planilha."
+            conn = conectar()
+            c = conn.cursor()
+            c.execute("""
+                UPDATE sincronizacoes_clientes
+                SET ultimo_sync_em=?,
+                    proximo_sync_em=?,
+                    ultimo_status=?,
+                    ultima_mensagem=?,
+                    atualizado_em=?
+                WHERE id=?
+            """, (
+                agora_atual,
+                somar_minutos_iso(sync["intervalo_minutos"]),
+                "OK",
+                mensagem,
+                agora_atual,
+                sync_id,
+            ))
+            conn.commit()
+            conn.close()
+            return True, mensagem
 
         # 🔽 MAPEAMENTO
         mapeamento = {
             campo["key"]: sync[f"campo_{campo['key']}"] or ""
             for campo in CAMPOS_SINCRONIZACAO_CLIENTES
         }
+        mapeamento["telefone"] = sync["campo_telefone"] or ""
+        mapeamento["data"] = sync["campo_data"] or ""
 
         # 🔽 IMPORTAÇÃO
         estatisticas = importar_clientes_dataframe(df, mapeamento)
+        registros_historico, estatisticas_historico = montar_registros_historico_lavagens(df, mapeamento)
+        estatisticas.update(estatisticas_historico)
+        salvar_historico_lavagens_sync(sync_id, registros_historico)
         mensagem = resumir_importacao_clientes(estatisticas)
 
         agora_atual = agora_iso()
@@ -984,7 +2793,13 @@ def executar_sincronizacao_cliente(sync_id):
         return True, mensagem
 
     except Exception as e:
-        mensagem = f"Erro ao sincronizar: {e}"
+        fatal = getattr(e, "fatal", False)
+        mensagem_base = str(e)
+        mensagem = (
+            f"Sincronizacao pausada automaticamente: {mensagem_base}"
+            if fatal else
+            f"Erro ao sincronizar: {mensagem_base}"
+        )
 
         conn = conectar()
         c = conn.cursor()
@@ -993,13 +2808,15 @@ def executar_sincronizacao_cliente(sync_id):
             UPDATE sincronizacoes_clientes
             SET ultimo_status=?,
                 ultima_mensagem=?,
+                ativo=?,
                 proximo_sync_em=?,
                 atualizado_em=?
             WHERE id=?
         """, (
-            "ERRO",
+            "PAUSADA" if fatal else "ERRO",
             mensagem,
-            somar_minutos_iso(sync["intervalo_minutos"]),
+            0 if fatal else sync["ativo"],
+            None if fatal else somar_minutos_iso(sync["intervalo_minutos"]),
             agora_iso(),
             sync_id
         ))
@@ -1397,17 +3214,51 @@ def pagina_orcamento():
     conn = conectar()
     c = conn.cursor()
 
-    c.execute("SELECT nome, valor FROM tipos_servico")
-    servicos = c.fetchall()
+    c.execute("SELECT nome, valor FROM tipos_servico ORDER BY nome ASC")
+    servicos = [dict(item) for item in c.fetchall()]
 
     conn.close()
 
-    return render_template("orcamento.html", servicos=servicos)
+    return render_template(
+        "orcamento.html",
+        servicos=servicos,
+        empresa=obter_configuracao_empresa(),
+        orcamentos=listar_orcamentos_recentes(),
+        feedback=session.pop("orcamento_feedback", None),
+    )
 
 @app.route("/gerar_orcamento", methods=["POST"])
 def gerar_orcamento():
     if not session.get("usuario"):
         return redirect("/login")
+
+    itens = extrair_itens_formulario(request.form)
+
+    if not itens:
+        definir_feedback_orcamento("erro", "Adicione pelo menos um item ao orcamento antes de gerar o PDF.")
+        return redirect("/orcamento")
+
+    dados = {
+        "cliente_nome": request.form.get("nome"),
+        "cliente_documento": request.form.get("documento"),
+        "email": request.form.get("email"),
+        "telefone": request.form.get("telefone"),
+        "placa": request.form.get("placa"),
+        "modelo": request.form.get("modelo"),
+        "validade_dias": request.form.get("validade_dias"),
+        "forma_pagamento": request.form.get("forma_pagamento"),
+        "observacoes": request.form.get("observacoes"),
+        "desconto": request.form.get("desconto"),
+    }
+    orcamento = salvar_orcamento(dados, itens, obter_configuracao_empresa())
+    buffer = gerar_pdf_orcamento_buffer(orcamento)
+
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"orcamento_{orcamento['numero_formatado']}.pdf",
+        mimetype="application/pdf",
+    )
 
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
     from reportlab.lib import colors
@@ -1504,6 +3355,182 @@ def gerar_orcamento():
 
     return send_file(buffer, as_attachment=True, download_name="orcamento.pdf", mimetype="application/pdf")
 
+@app.route("/orcamento/<int:id>/pdf")
+def baixar_orcamento_pdf(id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    orcamento = buscar_orcamento_completo(id)
+
+    if not orcamento:
+        definir_feedback_orcamento("erro", "Orcamento nao encontrado.")
+        return redirect("/orcamento")
+
+    buffer = gerar_pdf_orcamento_buffer(orcamento)
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"orcamento_{orcamento['numero_formatado']}.pdf",
+        mimetype="application/pdf",
+    )
+
+@app.route("/nota_fiscal")
+def pagina_nota_fiscal():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT nome, valor FROM tipos_servico ORDER BY nome ASC")
+    servicos = [dict(item) for item in c.fetchall()]
+    conn.close()
+
+    orcamento_origem = None
+    prefill = None
+    orcamento_id = request.args.get("orcamento_id", type=int)
+
+    if orcamento_id:
+        orcamento_origem = buscar_orcamento_completo(orcamento_id)
+        if orcamento_origem:
+            prefill = montar_prefill_nota_por_orcamento(orcamento_origem)
+        else:
+            definir_feedback_nota_fiscal("erro", "Nao encontrei o orcamento informado para montar a nota.")
+
+    return render_template(
+        "nota_fiscal.html",
+        empresa=obter_configuracao_empresa(),
+        notas=listar_notas_fiscais_recentes(),
+        feedback=session.pop("nota_fiscal_feedback", None),
+        servicos=servicos,
+        prefill=prefill,
+        orcamento_origem=orcamento_origem,
+    )
+
+@app.route("/nota_fiscal/empresa", methods=["POST"])
+def salvar_emitente_nota_fiscal():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    salvar_configuracao_empresa_form(request.form)
+    definir_feedback_nota_fiscal("sucesso", "Dados do emitente fiscal salvos com sucesso.")
+
+    origem_id = converter_inteiro(request.form.get("origem_orcamento_id"), 0)
+    if origem_id:
+        return redirect(f"/nota_fiscal?orcamento_id={origem_id}")
+
+    return redirect("/nota_fiscal")
+
+@app.route("/nota_fiscal/gerar", methods=["POST"])
+def gerar_nota_fiscal():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    empresa = obter_configuracao_empresa()
+
+    if not empresa_possui_dados_fiscais(empresa):
+        definir_feedback_nota_fiscal(
+            "erro",
+            "Preencha pelo menos a razao social e o CNPJ do emitente antes de gerar a nota fiscal.",
+        )
+        return redirect("/nota_fiscal")
+
+    itens = extrair_itens_formulario(request.form)
+
+    if not itens:
+        definir_feedback_nota_fiscal("erro", "Adicione pelo menos um item de servico para gerar o espelho fiscal.")
+        return redirect("/nota_fiscal")
+
+    dados = {
+        "origem_orcamento_id": request.form.get("origem_orcamento_id"),
+        "numero_nota": request.form.get("numero_nota"),
+        "serie": request.form.get("serie"),
+        "ambiente": request.form.get("ambiente"),
+        "cliente_nome": request.form.get("cliente_nome"),
+        "cliente_documento": request.form.get("cliente_documento"),
+        "email": request.form.get("email"),
+        "telefone": request.form.get("telefone"),
+        "placa": request.form.get("placa"),
+        "modelo": request.form.get("modelo"),
+        "endereco": request.form.get("endereco"),
+        "numero_endereco": request.form.get("numero_endereco"),
+        "complemento": request.form.get("complemento"),
+        "bairro": request.form.get("bairro"),
+        "cidade": request.form.get("cidade"),
+        "uf": request.form.get("uf"),
+        "cep": request.form.get("cep"),
+        "codigo_servico": request.form.get("codigo_servico"),
+        "discriminacao": request.form.get("discriminacao"),
+        "observacoes": request.form.get("observacoes"),
+        "aliquota_iss": request.form.get("aliquota_iss"),
+        "desconto": request.form.get("desconto"),
+    }
+    nota = salvar_nota_fiscal(dados, itens, empresa)
+    buffer = gerar_pdf_nota_fiscal_buffer(nota)
+
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"nota_fiscal_rps_{nota['rps_formatado']}.pdf",
+        mimetype="application/pdf",
+    )
+
+@app.route("/nota_fiscal/<int:id>/pdf")
+def baixar_nota_fiscal_pdf(id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    nota = buscar_nota_fiscal_completa(id)
+
+    if not nota:
+        definir_feedback_nota_fiscal("erro", "Nota fiscal nao encontrada.")
+        return redirect("/nota_fiscal")
+
+    buffer = gerar_pdf_nota_fiscal_buffer(nota)
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"nota_fiscal_rps_{nota['rps_formatado']}.pdf",
+        mimetype="application/pdf",
+    )
+
+@app.route("/nota_fiscal/<int:id>/registrar", methods=["POST"])
+def registrar_emissao_nota_fiscal(id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    numero_nota = normalizar_texto_campo(request.form.get("numero_nota"))
+
+    if not numero_nota:
+        definir_feedback_nota_fiscal("erro", "Informe o numero oficial da nota para registrar a emissao.")
+        return redirect("/nota_fiscal")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT id FROM notas_fiscais WHERE id=?", (id,))
+    nota = c.fetchone()
+
+    if not nota:
+        conn.close()
+        definir_feedback_nota_fiscal("erro", "Nota fiscal nao encontrada.")
+        return redirect("/nota_fiscal")
+
+    c.execute("""
+        UPDATE notas_fiscais
+        SET numero_nota=?, serie=?, ambiente=?, status='EMITIDA MANUALMENTE', atualizado_em=?
+        WHERE id=?
+    """, (
+        numero_nota,
+        normalizar_texto_campo(request.form.get("serie")),
+        normalizar_texto_campo(request.form.get("ambiente")) or "Emissao manual",
+        agora_iso(),
+        id,
+    ))
+    conn.commit()
+    conn.close()
+
+    definir_feedback_nota_fiscal("sucesso", "Emissao manual registrada com sucesso.")
+    return redirect("/nota_fiscal")
+
 @app.route("/api/clima")
 def api_clima():
     try:
@@ -1580,6 +3607,9 @@ def api_notificacoes():
 
 @app.route("/api/notificacoes/lida/<int:id>", methods=["POST"])
 def marcar_notificacao_lida(id):
+    if not session.get("usuario"):
+        return jsonify({"status": "erro", "mensagem": "nao autorizado"}), 401
+
     conn = conectar()
     c = conn.cursor()
 
@@ -1589,6 +3619,21 @@ def marcar_notificacao_lida(id):
     conn.close()
 
     return jsonify({"status": "ok"})
+
+@app.route("/api/notificacoes/limpar", methods=["POST"])
+def limpar_notificacoes():
+    if not session.get("usuario"):
+        return jsonify({"status": "erro", "mensagem": "nao autorizado"}), 401
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM notificacoes")
+    total = c.fetchone()[0]
+    c.execute("DELETE FROM notificacoes")
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "ok", "removidas": total})
 
 @app.route("/api/hud")
 def api_hud():
@@ -1743,16 +3788,57 @@ def criar_admin():
     conn = conectar()
     c = conn.cursor()
 
-    senha_hash = bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
+    c.execute("SELECT * FROM usuarios WHERE usuario=?", ("admin",))
+    admin = c.fetchone()
 
-    try:
-        c.execute("INSERT INTO usuarios (usuario, senha) VALUES (?, ?)", ("admin", senha_hash))
-        conn.commit()
+    if admin:
+        c.execute("""
+            UPDATE usuarios
+            SET
+                nome=COALESCE(NULLIF(nome, ''), 'Administrador'),
+                perfil=COALESCE(NULLIF(perfil, ''), 'admin'),
+                ativo=COALESCE(ativo, 1),
+                criado_em=COALESCE(criado_em, ?)
+            WHERE usuario='admin'
+        """, (agora_iso(),))
+    else:
+        c.execute("""
+            INSERT INTO usuarios (usuario, senha, nome, perfil, ativo, criado_em)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            "admin",
+            senha_hash_bcrypt("admin123"),
+            "Administrador",
+            "admin",
+            1,
+            agora_iso(),
+        ))
         print("✅ Admin criado: admin / admin123")
-    except:
-        pass
 
+    conn.commit()
     conn.close()
+
+def carregar_usuarios_configuracao():
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, usuario, nome, perfil, ativo, criado_em
+        FROM usuarios
+        ORDER BY
+            CASE WHEN perfil='admin' THEN 0 ELSE 1 END,
+            nome COLLATE NOCASE,
+            usuario COLLATE NOCASE
+    """)
+    usuarios = [dict(row) for row in c.fetchall()]
+    conn.close()
+
+    for item in usuarios:
+        item["nome"] = item.get("nome") or item.get("usuario")
+        item["perfil"] = normalizar_perfil_usuario(item.get("perfil"))
+        item["ativo"] = int(item.get("ativo") or 0)
+        item["criado_em_fmt"] = formatar_datahora(item.get("criado_em"))
+
+    return usuarios
 
 criar_admin()
 
@@ -1763,8 +3849,11 @@ def login():
         return redirect("/")
 
     if request.method == "POST":
-        usuario = request.form.get("usuario")
-        senha = request.form.get("senha")
+        usuario = (request.form.get("usuario") or "").strip()
+        senha = request.form.get("senha") or ""
+
+        if not usuario or not senha:
+            return render_template("login.html", erro="Informe usuario e senha.")
 
         conn = conectar()
         c = conn.cursor()
@@ -1772,24 +3861,226 @@ def login():
         c.execute("SELECT * FROM usuarios WHERE usuario=?", (usuario,))
         user = c.fetchone()
 
+        if not user:
+            conn.close()
+            return render_template("login.html", erro="Usuario ou senha invalidos.")
+
+        if not int(user["ativo"] if user["ativo"] is not None else 1):
+            conn.close()
+            return render_template("login.html", erro="Este acesso esta desativado.")
+
+        if not verificar_senha_usuario(senha, user["senha"]):
+            conn.close()
+            return render_template("login.html", erro="Usuario ou senha invalidos.")
+
+        if not senha_usa_bcrypt(user["senha"]):
+            c.execute(
+                "UPDATE usuarios SET senha=? WHERE id=?",
+                (senha_hash_bcrypt(senha), user["id"])
+            )
+            conn.commit()
+            c.execute("SELECT * FROM usuarios WHERE id=?", (user["id"],))
+            user = c.fetchone()
+
         conn.close()
-
-        if user:
-            session.clear()
-            session["usuario"] = usuario
-            session.permanent = True
-
-            return redirect("/")
-
-        else:
-            return render_template("login.html", erro="Usuário inválido")
+        preencher_sessao_usuario(user)
+        return redirect("/")
 
     return render_template("login.html")
 
 @app.route("/logout")
 def logout():
-    session.pop("usuario", None)
+    session.clear()
     return redirect("/login")
+
+@app.route("/configuracoes")
+def configuracoes():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    usuarios = carregar_usuarios_configuracao() if usuario_admin() else []
+
+    return render_template(
+        "configuracoes.html",
+        feedback=session.pop("configuracoes_feedback", None),
+        usuario_logado={
+            "id": session.get("usuario_id"),
+            "usuario": session.get("usuario"),
+            "nome": session.get("usuario_nome") or session.get("usuario"),
+            "perfil": session.get("usuario_perfil") or (
+                "admin" if session.get("usuario") == "admin" else "funcionario"
+            ),
+        },
+        usuarios=usuarios,
+        admin_logado=usuario_admin(),
+    )
+
+@app.route("/configuracoes/senha", methods=["POST"])
+def atualizar_minha_senha():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    senha_atual = request.form.get("senha_atual") or ""
+    nova_senha = request.form.get("nova_senha") or ""
+    confirmar_senha = request.form.get("confirmar_senha") or ""
+
+    if not senha_atual or not nova_senha or not confirmar_senha:
+        definir_feedback_configuracoes("erro", "Preencha todos os campos para alterar a senha.")
+        return redirect("/configuracoes")
+
+    if nova_senha != confirmar_senha:
+        definir_feedback_configuracoes("erro", "A confirmacao da nova senha nao confere.")
+        return redirect("/configuracoes")
+
+    if len(nova_senha) < 4:
+        definir_feedback_configuracoes("erro", "A nova senha precisa ter pelo menos 4 caracteres.")
+        return redirect("/configuracoes")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT * FROM usuarios WHERE id=?", (session.get("usuario_id"),))
+    usuario = c.fetchone()
+
+    if not usuario or not verificar_senha_usuario(senha_atual, usuario["senha"]):
+        conn.close()
+        definir_feedback_configuracoes("erro", "A senha atual informada esta incorreta.")
+        return redirect("/configuracoes")
+
+    c.execute(
+        "UPDATE usuarios SET senha=? WHERE id=?",
+        (senha_hash_bcrypt(nova_senha), usuario["id"])
+    )
+    conn.commit()
+    c.execute("SELECT * FROM usuarios WHERE id=?", (usuario["id"],))
+    usuario_atualizado = c.fetchone()
+    conn.close()
+
+    preencher_sessao_usuario(usuario_atualizado)
+    definir_feedback_configuracoes("sucesso", "Senha atualizada com sucesso.")
+    return redirect("/configuracoes")
+
+@app.route("/configuracoes/usuarios", methods=["POST"])
+def criar_usuario_funcionario():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem criar novos acessos.")
+        return redirect("/configuracoes")
+
+    nome = (request.form.get("nome") or "").strip()
+    usuario = (request.form.get("usuario") or "").strip().lower()
+    senha = request.form.get("senha") or ""
+    perfil = normalizar_perfil_usuario(request.form.get("perfil"))
+
+    if not nome or not usuario or not senha:
+        definir_feedback_configuracoes("erro", "Informe nome, login e senha para criar o usuario.")
+        return redirect("/configuracoes")
+
+    if len(senha) < 4:
+        definir_feedback_configuracoes("erro", "A senha inicial precisa ter pelo menos 4 caracteres.")
+        return redirect("/configuracoes")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT id FROM usuarios WHERE usuario=?", (usuario,))
+    existente = c.fetchone()
+
+    if existente:
+        conn.close()
+        definir_feedback_configuracoes("erro", "Ja existe um acesso com esse login.")
+        return redirect("/configuracoes")
+
+    c.execute("""
+        INSERT INTO usuarios (usuario, senha, nome, perfil, ativo, criado_em)
+        VALUES (?, ?, ?, ?, 1, ?)
+    """, (
+        usuario,
+        senha_hash_bcrypt(senha),
+        nome,
+        perfil,
+        agora_iso(),
+    ))
+    conn.commit()
+    conn.close()
+
+    definir_feedback_configuracoes("sucesso", f"Usuario {usuario} criado com sucesso.")
+    return redirect("/configuracoes")
+
+@app.route("/configuracoes/usuarios/<int:usuario_id>/senha", methods=["POST"])
+def redefinir_senha_usuario(usuario_id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem redefinir senhas.")
+        return redirect("/configuracoes")
+
+    nova_senha = request.form.get("nova_senha") or ""
+
+    if len(nova_senha) < 4:
+        definir_feedback_configuracoes("erro", "A nova senha precisa ter pelo menos 4 caracteres.")
+        return redirect("/configuracoes")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT id, usuario, perfil FROM usuarios WHERE id=?", (usuario_id,))
+    alvo = c.fetchone()
+
+    if not alvo:
+        conn.close()
+        definir_feedback_configuracoes("erro", "Usuario nao encontrado.")
+        return redirect("/configuracoes")
+
+    c.execute(
+        "UPDATE usuarios SET senha=? WHERE id=?",
+        (senha_hash_bcrypt(nova_senha), usuario_id)
+    )
+    conn.commit()
+    conn.close()
+
+    definir_feedback_configuracoes("sucesso", f"Senha do usuario {alvo['usuario']} atualizada.")
+    return redirect("/configuracoes")
+
+@app.route("/configuracoes/usuarios/<int:usuario_id>/alternar", methods=["POST"])
+def alternar_status_usuario(usuario_id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem alterar o status de acessos.")
+        return redirect("/configuracoes")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT id, usuario, perfil, ativo FROM usuarios WHERE id=?", (usuario_id,))
+    alvo = c.fetchone()
+
+    if not alvo:
+        conn.close()
+        definir_feedback_configuracoes("erro", "Usuario nao encontrado.")
+        return redirect("/configuracoes")
+
+    if alvo["usuario"] == "admin" or normalizar_perfil_usuario(alvo["perfil"]) == "admin":
+        conn.close()
+        definir_feedback_configuracoes("erro", "O acesso administrador principal nao pode ser desativado.")
+        return redirect("/configuracoes")
+
+    novo_status = 0 if int(alvo["ativo"] or 0) else 1
+    c.execute("UPDATE usuarios SET ativo=? WHERE id=?", (novo_status, usuario_id))
+    conn.commit()
+    conn.close()
+
+    definir_feedback_configuracoes(
+        "sucesso",
+        f"Usuario {alvo['usuario']} {'ativado' if novo_status else 'pausado'} com sucesso."
+    )
+    return redirect("/configuracoes")
 
 @app.route("/clima")
 def clima():
@@ -1805,41 +4096,211 @@ def financeiro():
 
     conn = conectar()
     c = conn.cursor()
-
-    from datetime import datetime
-    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y")
-
-    # 💰 TOTAL HOJE
     c.execute("""
-    SELECT SUM(valor) FROM servicos 
-    WHERE status='FINALIZADO' AND entrega LIKE ?
-    """, (hoje + "%",))
-
-    total = c.fetchone()[0]
-    if total is None:
-        total = 0
-
-    # 📦 QUANTIDADE
-    c.execute("""
-    SELECT COUNT(*) FROM servicos 
-    WHERE status='FINALIZADO' AND entrega LIKE ?
-    """, (hoje + "%",))
-
-    quantidade = c.fetchone()[0]
-
-    # 💵 TICKET MÉDIO
-    if quantidade > 0:
-        ticket = total / quantidade
-    else:
-        ticket = 0
-
+        SELECT
+            servicos.*,
+            tipos_servico.nome AS tipo_nome,
+            veiculos.placa,
+            veiculos.modelo,
+            clientes.nome AS cliente_nome
+        FROM servicos
+        LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
+        LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
+        LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
+        ORDER BY servicos.id DESC
+    """)
+    servicos_raw = [dict(row) for row in c.fetchall()]
     conn.close()
+
+    agora_atual = agora()
+    hoje = agora_atual.date()
+    ano_atual = hoje.year
+    mes_atual = hoje.month
+    periodo_atual = normalizar_periodo_financeiro(request.args.get("periodo"))
+    periodo_label = MAPA_PERIODOS_FINANCEIRO[periodo_atual]
+
+    finalizados = []
+    em_andamento = 0
+
+    for item in servicos_raw:
+        if item.get("status") == "EM ANDAMENTO":
+            em_andamento += 1
+
+        if item.get("status") != "FINALIZADO":
+            continue
+
+        entrega = interpretar_datahora_sistema(item.get("entrega"))
+
+        if not entrega:
+            continue
+
+        valor_num = converter_valor_numerico(item.get("valor"))
+        item["entrega_dt"] = entrega
+        item["valor_num"] = valor_num
+        item["valor_exibicao"] = formatar_valor_monetario(valor_num)
+        item["tipo_nome"] = item.get("tipo_nome") or "Servico"
+        item["cliente_nome"] = item.get("cliente_nome") or "Sem cliente"
+        item["placa"] = item.get("placa") or "-"
+        item["modelo"] = item.get("modelo") or ""
+        item["entrega_exibicao"] = entrega.strftime("%d/%m/%Y %H:%M")
+        finalizados.append(item)
+
+    finalizados.sort(key=lambda item: item["entrega_dt"], reverse=True)
+
+    finalizados_hoje = [item for item in finalizados if item["entrega_dt"].date() == hoje]
+    finalizados_mes = [
+        item for item in finalizados
+        if item["entrega_dt"].year == ano_atual and item["entrega_dt"].month == mes_atual
+    ]
+    finalizados_periodo = filtrar_servicos_por_periodo(finalizados, periodo_atual, hoje)
+
+    total_hoje = sum(item["valor_num"] for item in finalizados_hoje)
+    total_mes = sum(item["valor_num"] for item in finalizados_mes)
+    total_geral = sum(item["valor_num"] for item in finalizados)
+    quantidade_hoje = len(finalizados_hoje)
+    quantidade_mes = len(finalizados_mes)
+    quantidade_geral = len(finalizados)
+    quantidade_periodo = len(finalizados_periodo)
+    ticket_hoje = total_hoje / quantidade_hoje if quantidade_hoje else 0
+    ticket_mes = total_mes / quantidade_mes if quantidade_mes else 0
+    ticket_geral = total_geral / quantidade_geral if quantidade_geral else 0
+    media_dia_mes = total_mes / max(1, hoje.day)
+    total_periodo = sum(item["valor_num"] for item in finalizados_periodo)
+    ticket_periodo = total_periodo / quantidade_periodo if quantidade_periodo else 0
+    media_periodo = total_periodo / dias_do_periodo_financeiro(periodo_atual, hoje)
+
+    base_ranking = finalizados_periodo
+    ranking_servicos = {}
+
+    for item in base_ranking:
+        nome_servico = item["tipo_nome"]
+        resumo = ranking_servicos.setdefault(nome_servico, {
+            "nome": nome_servico,
+            "quantidade": 0,
+            "valor_total": 0.0,
+        })
+        resumo["quantidade"] += 1
+        resumo["valor_total"] += item["valor_num"]
+
+    ranking_faturamento = sorted(
+        ranking_servicos.values(),
+        key=lambda item: (item["valor_total"], item["quantidade"]),
+        reverse=True
+    )
+
+    ranking_quantidade = sorted(
+        ranking_servicos.values(),
+        key=lambda item: (item["quantidade"], item["valor_total"]),
+        reverse=True
+    )
+
+    referencia_ranking = ranking_faturamento[0]["valor_total"] if ranking_faturamento else 0
+    referencia_quantidade = ranking_quantidade[0]["quantidade"] if ranking_quantidade else 0
+
+    for item in ranking_faturamento:
+        item["valor_exibicao"] = formatar_valor_monetario(item["valor_total"])
+        item["ticket_exibicao"] = formatar_valor_monetario(
+            item["valor_total"] / item["quantidade"] if item["quantidade"] else 0
+        )
+        item["percentual"] = round(
+            (item["valor_total"] / referencia_ranking) * 100
+        ) if referencia_ranking else 0
+
+    ranking_quantidade_formatado = []
+    for item in ranking_quantidade[:5]:
+        ranking_quantidade_formatado.append({
+            "nome": item["nome"],
+            "quantidade": item["quantidade"],
+            "valor_exibicao": formatar_valor_monetario(item["valor_total"]),
+            "percentual": round((item["quantidade"] / referencia_quantidade) * 100) if referencia_quantidade else 0,
+        })
+
+    ultimos_7_dias = []
+    totais_por_data = {}
+
+    for deslocamento in range(6, -1, -1):
+        dia = hoje - timedelta(days=deslocamento)
+        totais_por_data[dia] = 0.0
+
+    for item in finalizados:
+        data_entrega = item["entrega_dt"].date()
+        if data_entrega in totais_por_data:
+            totais_por_data[data_entrega] += item["valor_num"]
+
+    referencia_7_dias = max(totais_por_data.values(), default=0)
+
+    for data_ref, total_dia in totais_por_data.items():
+        ultimos_7_dias.append({
+            "label": data_ref.strftime("%d/%m"),
+            "valor": total_dia,
+            "valor_exibicao": formatar_valor_monetario(total_dia),
+            "percentual": round((total_dia / referencia_7_dias) * 100) if referencia_7_dias else 0,
+        })
+
+    ultimos_6_meses = []
+    totais_por_mes = []
+
+    for deslocamento in range(5, -1, -1):
+        ano_ref = ano_atual
+        mes_ref = mes_atual - deslocamento
+
+        while mes_ref <= 0:
+            mes_ref += 12
+            ano_ref -= 1
+
+        total_mes_ref = sum(
+            item["valor_num"]
+            for item in finalizados
+            if item["entrega_dt"].year == ano_ref and item["entrega_dt"].month == mes_ref
+        )
+        totais_por_mes.append(total_mes_ref)
+        ultimos_6_meses.append({
+            "label": f"{MESES_CURTOS_PT[mes_ref - 1]}/{str(ano_ref)[-2:]}",
+            "valor": total_mes_ref,
+            "valor_exibicao": formatar_valor_monetario(total_mes_ref),
+        })
+
+    referencia_6_meses = max(totais_por_mes, default=0)
+    for item in ultimos_6_meses:
+        item["percentual"] = round((item["valor"] / referencia_6_meses) * 100) if referencia_6_meses else 0
+
+    ultimos_finalizados = finalizados_periodo[:8]
+    servico_campeao = ranking_faturamento[0] if ranking_faturamento else None
+    periodo_descricao = {
+        "hoje": "Resultados fechados hoje.",
+        "7dias": "Panorama consolidado dos ultimos 7 dias.",
+        "30dias": "Panorama consolidado dos ultimos 30 dias.",
+        "mes": "Fechamentos acumulados no mes atual.",
+    }[periodo_atual]
 
     return render_template(
         "financeiro.html",
-        total=round(total, 2),
-        quantidade=quantidade,
-        ticket=round(ticket, 2)
+        periodo_atual=periodo_atual,
+        periodo_label=periodo_label,
+        periodo_descricao=periodo_descricao,
+        periodos_financeiro=PERIODOS_FINANCEIRO,
+        total_periodo=formatar_valor_monetario(total_periodo),
+        quantidade_periodo=quantidade_periodo,
+        ticket_periodo=formatar_valor_monetario(ticket_periodo),
+        media_periodo=formatar_valor_monetario(media_periodo),
+        total_hoje=formatar_valor_monetario(total_hoje),
+        total_mes=formatar_valor_monetario(total_mes),
+        total_geral=formatar_valor_monetario(total_geral),
+        quantidade_hoje=quantidade_hoje,
+        quantidade_mes=quantidade_mes,
+        quantidade_geral=quantidade_geral,
+        ticket_hoje=formatar_valor_monetario(ticket_hoje),
+        ticket_mes=formatar_valor_monetario(ticket_mes),
+        ticket_geral=formatar_valor_monetario(ticket_geral),
+        media_dia_mes=formatar_valor_monetario(media_dia_mes),
+        em_andamento=em_andamento,
+        ranking_faturamento=ranking_faturamento[:5],
+        ranking_quantidade=ranking_quantidade_formatado,
+        ultimos_7_dias=ultimos_7_dias,
+        ultimos_6_meses=ultimos_6_meses,
+        ultimos_finalizados=ultimos_finalizados,
+        servico_campeao=servico_campeao,
+        referencia_ranking_periodo=periodo_label,
     )
 
 
@@ -1851,6 +4312,7 @@ def index():
     dados = None
     historico = []
     buscou = False
+    lavagem_info = None
 
     conn = conectar()
     c = conn.cursor()
@@ -1872,6 +4334,7 @@ def index():
 
     if placa:
         buscou = True
+        lavagem_info = montar_contexto_lavagem_placa(placa)
 
         # 🔥 CLIENTE
         c.execute("""
@@ -1897,32 +4360,73 @@ def index():
                 veiculo_id = veiculo[0]
 
                 c.execute("""
-                    SELECT * FROM servicos 
-                    WHERE veiculo_id=? 
-                    ORDER BY id DESC
+                    SELECT
+                        servicos.id,
+                        servicos.valor,
+                        servicos.entrada,
+                        servicos.entrega,
+                        servicos.status,
+                        servicos.observacoes,
+                        servicos.origem,
+                        servicos.guarita,
+                        servicos.pneu,
+                        servicos.cera,
+                        servicos.hidro_lataria,
+                        servicos.hidro_vidros,
+                        tipos_servico.nome AS tipo_nome
+                    FROM servicos
+                    LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
+                    WHERE servicos.veiculo_id=?
+                    ORDER BY servicos.id DESC
                 """, (veiculo_id,))
 
                 historico_db = c.fetchall()
 
                 # 🔥 FORMATAR HISTÓRICO
-                from datetime import datetime
                 historico_formatado = []
 
                 for s in historico_db:
-                    try:
-                        entrada = datetime.fromisoformat(s["entrada"])
+                    s_dict = dict(s)
+                    entrada = interpretar_datahora_sistema(s_dict.get("entrada"))
+                    entrega = interpretar_datahora_sistema(s_dict.get("entrega"))
 
-                        if s["entrega"]:
-                            entrega = datetime.fromisoformat(s["entrega"])
+                    try:
+                        if entrada and entrega:
                             tempo = entrega - entrada
                             tempo_str = str(tempo)
-                        else:
+                        elif s_dict.get("status") == "EM ANDAMENTO":
                             tempo_str = "Em andamento"
+                        else:
+                            tempo_str = "Sem registro de entrega"
 
-                    except:
+                    except Exception:
                         tempo_str = "N/A"
 
-                    historico_formatado.append((s, tempo_str))
+                    s_dict["entrada_exibicao"] = (
+                        entrada.strftime("%d/%m/%Y %H:%M")
+                        if entrada else (s_dict.get("entrada") or "-")
+                    )
+                    s_dict["entrega_exibicao"] = (
+                        entrega.strftime("%d/%m/%Y %H:%M")
+                        if entrega else ""
+                    )
+                    s_dict["valor_exibicao"] = formatar_valor_monetario(
+                        s_dict.get("valor")
+                    )
+                    c.execute("""
+                        SELECT item_nome
+                        FROM servico_checklist
+                        WHERE servico_id=?
+                        ORDER BY id ASC
+                    """, (s_dict["id"],))
+                    checklist_itens = [row["item_nome"] for row in c.fetchall()]
+                    s_dict["checklist_itens"] = checklist_itens
+                    s_dict["checklist_resumo"] = ", ".join(checklist_itens)
+
+                    historico_formatado.append({
+                        "servico": s_dict,
+                        "tempo_str": tempo_str,
+                    })
 
                 historico = historico_formatado
 
@@ -1934,7 +4438,9 @@ def index():
         historico=historico,
         buscou=buscou,
         placa=placa,
+        lavagem_info=lavagem_info,
         version=APP_VERSION,
+        feedback_index=session.pop("index_feedback", None),
         servicos_lista=servicos_lista,
         produtos_pneu=produtos_pneu
     )
@@ -1970,9 +4476,13 @@ def preview_sincronizacao_clientes():
         return redirect("/clientes")
 
     try:
-        df, url_normalizada = ler_dataframe_link_planilha(url)
+        df, url_normalizada = ler_dataframe_link_planilha(
+            url,
+            intervalo_minutos=intervalo_minutos,
+        )
         colunas = list(df.columns)
         mapeamento_sugerido = sugerir_mapeamento_colunas(colunas)
+        colunas_exibicao = obter_colunas_preview_sync(mapeamento_sugerido) or colunas[:5]
         proximo_sync_previsto = somar_minutos_iso(intervalo_minutos)
 
         if not mapeamento_sugerido.get("placa"):
@@ -1993,6 +4503,8 @@ def preview_sincronizacao_clientes():
             "intervalo_minutos": intervalo_minutos,
             "colunas": colunas,
             "mapeamento_sugerido": mapeamento_sugerido,
+            "mapeamento_automatico": mapeamento_sugerido,
+            "colunas_exibicao": colunas_exibicao,
             "amostra": amostra_tratada,  # ✅ agora seguro
             "total_linhas": len(df.index),
             "intervalo_label": obter_label_intervalo_sincronizacao(intervalo_minutos),
@@ -2039,25 +4551,21 @@ def adicionar_sincronizacao_clientes():
 
     try:
         # 🔥 1. LER PLANILHA
-        df, url_normalizada = ler_dataframe_link_planilha(url)
+        df, url_normalizada = ler_dataframe_link_planilha(
+            url,
+            intervalo_minutos=intervalo_minutos,
+        )
 
         # 🔥 2. MAPEAR COLUNAS AUTOMATICAMENTE
         colunas = list(df.columns)
         mapeamento_sugerido = sugerir_mapeamento_colunas(colunas)
         mapeamento = {
-            "placa": (
-                request.form.get("campo_placa") or
-                preview_sync.get("mapeamento_sugerido", {}).get("placa") or
-                mapeamento_sugerido.get("placa") or
-                ""
-            ),
             "nome": (
                 request.form.get("campo_nome") or
                 preview_sync.get("mapeamento_sugerido", {}).get("nome") or
                 mapeamento_sugerido.get("nome") or
                 ""
             ),
-            "telefone": "",  # você não tem telefone
             "modelo": (
                 request.form.get("campo_modelo") or
                 preview_sync.get("mapeamento_sugerido", {}).get("modelo") or
@@ -2069,6 +4577,24 @@ def adicionar_sincronizacao_clientes():
                 preview_sync.get("mapeamento_sugerido", {}).get("cor") or
                 mapeamento_sugerido.get("cor") or
                 ""
+            ),
+            "placa": (
+                request.form.get("campo_placa") or
+                preview_sync.get("mapeamento_sugerido", {}).get("placa") or
+                mapeamento_sugerido.get("placa") or
+                ""
+            ),
+            "servico": (
+                request.form.get("campo_servico") or
+                preview_sync.get("mapeamento_sugerido", {}).get("servico") or
+                mapeamento_sugerido.get("servico") or
+                ""
+            ),
+            "telefone": "",
+            "data": (
+                preview_sync.get("mapeamento_automatico", {}).get("data") or
+                mapeamento_sugerido.get("data") or
+                ""
             )
         }
 
@@ -2077,6 +4603,8 @@ def adicionar_sincronizacao_clientes():
 
         # 🔥 3. IMPORTAR DIRETO PRO BANCO
         estatisticas = importar_clientes_dataframe(df, mapeamento)
+        registros_historico, estatisticas_historico = montar_registros_historico_lavagens(df, mapeamento)
+        estatisticas.update(estatisticas_historico)
 
         # 🔥 4. SALVAR CONFIG DE SINCRONIZAÇÃO
         conn = conectar()
@@ -2087,10 +4615,10 @@ def adicionar_sincronizacao_clientes():
         c.execute("""
         INSERT INTO sincronizacoes_clientes (
             nome, url, intervalo_minutos,
-            campo_placa, campo_nome, campo_telefone, campo_modelo, campo_cor,
+            campo_placa, campo_nome, campo_telefone, campo_modelo, campo_cor, campo_servico, campo_data,
             ativo, ultimo_status, proximo_sync_em, criado_em, atualizado_em
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             nome or "Planilha automática",
             url_normalizada,
@@ -2100,15 +4628,20 @@ def adicionar_sincronizacao_clientes():
             mapeamento.get("telefone"),
             mapeamento.get("modelo"),
             mapeamento.get("cor"),
+            mapeamento.get("servico"),
+            mapeamento.get("data"),
             1,
             "OK",
             somar_minutos_iso(intervalo_minutos),
             agora_atual,
             agora_atual,
         ))
+        sync_id = c.lastrowid
 
         conn.commit()
         conn.close()
+
+        salvar_historico_lavagens_sync(sync_id, registros_historico)
 
         definir_feedback_clientes(
             "sucesso",
@@ -2137,12 +4670,22 @@ def salvar_sincronizacao_clientes():
         return redirect("/clientes")
 
     try:
-        df, url_normalizada = ler_dataframe_link_planilha(url)
+        df, url_normalizada = ler_dataframe_link_planilha(
+            url,
+            intervalo_minutos=intervalo_minutos,
+        )
         colunas = list(df.columns)
         mapeamento = obter_mapeamento_sync_por_form(request.form)
 
         if not any(mapeamento.values()):
             mapeamento = preview_sync.get("mapeamento_sugerido") or sugerir_mapeamento_colunas(colunas)
+
+        mapeamento["telefone"] = ""
+        mapeamento["data"] = (
+            preview_sync.get("mapeamento_automatico", {}).get("data") or
+            sugerir_mapeamento_colunas(colunas).get("data") or
+            ""
+        )
 
         if not mapeamento.get("placa"):
             raise ValueError("Nao consegui identificar a coluna de placa.")
@@ -2153,6 +4696,8 @@ def salvar_sincronizacao_clientes():
                 raise ValueError(f"A coluna '{coluna}' nao foi encontrada na planilha.")
 
         estatisticas = importar_clientes_dataframe(df, mapeamento)
+        registros_historico, estatisticas_historico = montar_registros_historico_lavagens(df, mapeamento)
+        estatisticas.update(estatisticas_historico)
         mensagem_importacao = resumir_importacao_clientes(estatisticas)
         agora_atual = agora_iso()
         proximo_sync_em = somar_minutos_iso(intervalo_minutos)
@@ -2163,11 +4708,11 @@ def salvar_sincronizacao_clientes():
         c.execute("""
             INSERT INTO sincronizacoes_clientes (
                 nome, url, intervalo_minutos,
-                campo_placa, campo_nome, campo_telefone, campo_modelo, campo_cor,
+                campo_placa, campo_nome, campo_telefone, campo_modelo, campo_cor, campo_servico, campo_data,
                 ativo, ultimo_sync_em, proximo_sync_em, ultimo_status, ultima_mensagem,
                 criado_em, atualizado_em, ultimo_hash, colunas_ultima_sync
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             nome or "Planilha automatica",
             url_normalizada,
@@ -2177,6 +4722,8 @@ def salvar_sincronizacao_clientes():
             mapeamento.get("telefone"),
             mapeamento.get("modelo"),
             mapeamento.get("cor"),
+            mapeamento.get("servico"),
+            mapeamento.get("data"),
             1,
             agora_atual,
             proximo_sync_em,
@@ -2187,8 +4734,11 @@ def salvar_sincronizacao_clientes():
             hash_atual,
             ",".join(colunas),
         ))
+        sync_id = c.lastrowid
         conn.commit()
         conn.close()
+
+        salvar_historico_lavagens_sync(sync_id, registros_historico)
 
         limpar_preview_sincronizacao()
         salvar_notificacao(mensagem_importacao, "sucesso")
@@ -2263,63 +4813,24 @@ def cadastrar():
     if not session.get("usuario"):
         return redirect("/login")
 
-    data = request.form
-
-    placa = data["placa"].upper()
-    nome = data.get("nome", "")
-    telefone = data.get("telefone", "")
-    modelo = data.get("modelo", "")
-    cor = data.get("cor", "")
-
-    conn = conectar()
-    c = conn.cursor()
+    placa = (request.form.get("placa") or "").strip().upper()
 
     try:
-        # 🔥 1. CLIENTE
-        cliente_id = None
-
-        if telefone:
-            c.execute("SELECT id FROM clientes WHERE telefone=?", (telefone,))
-            cliente = c.fetchone()
-
-            if cliente:
-                cliente_id = cliente["id"]
-
-                c.execute("""
-                    UPDATE clientes 
-                    SET nome=? 
-                    WHERE id=?
-                """, (nome, cliente_id))
-            else:
-                c.execute("""
-                    INSERT INTO clientes (nome, telefone)
-                    VALUES (?, ?)
-                """, (nome, telefone))
-
-                cliente_id = c.lastrowid
-
-        # 🔥 2. VEÍCULO
-        c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
-        veiculo = c.fetchone()
-
-        if veiculo:
-            c.execute("""
-                UPDATE veiculos 
-                SET modelo=?, cor=?, cliente_id=? 
-                WHERE placa=?
-            """, (modelo, cor, cliente_id, placa))
-        else:
-            c.execute("""
-                INSERT INTO veiculos (placa, modelo, cor, cliente_id)
-                VALUES (?, ?, ?, ?)
-            """, (placa, modelo, cor, cliente_id))
-
-        conn.commit()
-
+        resultado = salvar_cliente_veiculo(
+            placa=placa,
+            nome=request.form.get("nome", ""),
+            telefone=request.form.get("telefone", ""),
+            modelo=request.form.get("modelo", ""),
+            cor=request.form.get("cor", ""),
+        )
+        definir_feedback_index(
+            "sucesso",
+            f"Cadastro da placa {resultado['placa']} salvo com sucesso."
+        )
+        placa = resultado["placa"]
     except Exception as e:
         print("ERRO CADASTRO:", e)
-    finally:
-        conn.close()
+        definir_feedback_index("erro", f"Erro ao salvar a placa {placa}: {e}")
 
     return redirect(f"/?placa={placa}")
 
@@ -2412,8 +4923,11 @@ def servico():
     # 🔥 INSERIR SERVIÇO (NOVO MODELO)
     c.execute("""
         INSERT INTO servicos 
-        (veiculo_id, tipo_id, valor, entrada, status, prioridade, observacoes)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (
+            veiculo_id, tipo_id, valor, entrada, status, prioridade,
+            observacoes, origem, guarita, pneu, cera, hidro_lataria, hidro_vidros
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         veiculo_id,
         tipo_id,
@@ -2421,7 +4935,13 @@ def servico():
         agora,
         "EM ANDAMENTO",
         nova_prioridade,
-        data.get("observacoes", "")
+        normalizar_texto_campo(data.get("observacoes")),
+        normalizar_texto_campo(data.get("origem")),
+        normalizar_texto_campo(data.get("guarita")),
+        normalizar_texto_campo(data.get("pneu")),
+        normalizar_flag_sim_nao(data.get("cera")),
+        normalizar_flag_sim_nao(data.get("hidro_lataria")),
+        normalizar_flag_sim_nao(data.get("hidro_vidros")),
     ))
 
     servico_id = c.lastrowid
@@ -2429,76 +4949,165 @@ def servico():
     # 📸 FOTOS
     fotos_entrada = request.files.getlist("foto_entrada")
     fotos_detalhe = request.files.getlist("foto_detalhe")
-
-    import time
-    from werkzeug.utils import secure_filename
-
-    for foto in fotos_entrada:
-        if foto and arquivo_permitido(foto.filename):
-            nome = str(int(time.time())) + "_" + secure_filename(foto.filename)
-            caminho = os.path.join(UPLOAD_FOLDER, nome)
-            foto.save(caminho)
-
-            c.execute(
-                "INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
-                (servico_id, "entrada", caminho)
-            )
-
-    for foto in fotos_detalhe:
-        if foto and arquivo_permitido(foto.filename):
-            nome = str(int(time.time())) + "_" + secure_filename(foto.filename)
-            caminho = os.path.join(UPLOAD_FOLDER, nome)
-            foto.save(caminho)
-
-            c.execute(
-                "INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
-                (servico_id, "detalhe", caminho)
-            )
+    salvar_fotos_servico(c, servico_id, fotos_entrada, "entrada")
+    salvar_fotos_servico(c, servico_id, fotos_detalhe, "detalhe")
 
     conn.commit()
     conn.close()
 
-    return redirect("/")
+    definir_feedback_painel("sucesso", f"Atendimento da placa {placa} iniciado com sucesso.")
+    return redirect("/painel")
+
+@app.route("/painel/servico/<int:id>/operacional", methods=["POST"])
+def salvar_operacional_painel(id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    conn = conectar()
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT servicos.id, veiculos.placa
+        FROM servicos
+        LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
+        WHERE servicos.id=?
+    """, (id,))
+    servico_db = c.fetchone()
+
+    if not servico_db:
+        conn.close()
+        definir_feedback_painel("erro", "Atendimento nao encontrado.")
+        return redirect("/painel")
+
+    atualizar_campos_operacionais_servico(c, id, request.form)
+    fotos_detalhe = request.files.getlist("foto_detalhe")
+    detalhes_salvos = salvar_fotos_servico(c, id, fotos_detalhe, "detalhe")
+
+    acao = (request.form.get("acao") or "salvar").strip().lower()
+    placa = servico_db["placa"] or "-"
+
+    if acao == "finalizar":
+        conn.commit()
+        conn.close()
+        mensagem = f"Checklist aberto para a placa {placa}."
+        if detalhes_salvos:
+            mensagem += f" {detalhes_salvos} foto(s) de detalhe salva(s)."
+        definir_feedback_checklist("sucesso", mensagem)
+        return redirect(f"/painel/servico/{id}/checklist")
+
+    mensagem = f"Dados operacionais da placa {placa} salvos."
+
+    if detalhes_salvos:
+        mensagem += f" {detalhes_salvos} foto(s) de detalhe adicionada(s)."
+
+    conn.commit()
+    conn.close()
+
+    definir_feedback_painel("sucesso", mensagem)
+    return redirect("/painel")
+
+@app.route("/painel/servico/<int:id>/checklist", methods=["GET", "POST"])
+def checklist_servico(id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    servico = buscar_servico_operacional(id)
+
+    if not servico:
+        definir_feedback_painel("erro", "Atendimento nao encontrado.")
+        return redirect("/painel")
+
+    if servico.get("status") == "FINALIZADO":
+        definir_feedback_painel("erro", "Esse atendimento ja foi finalizado.")
+        return redirect("/painel")
+
+    servico["cliente_nome"] = servico.get("cliente_nome") or "Sem cliente"
+    servico["cliente_telefone"] = servico.get("cliente_telefone") or ""
+    servico["placa"] = servico.get("placa") or "-"
+    servico["modelo"] = servico.get("modelo") or ""
+    servico["cor"] = servico.get("cor") or ""
+    servico["tipo_nome"] = servico.get("tipo_nome") or "Servico"
+    servico["valor_exibicao"] = formatar_valor_monetario(servico.get("valor"))
+    entrada = interpretar_datahora_sistema(servico.get("entrada"))
+    servico["entrada_exibicao"] = (
+        entrada.strftime("%d/%m/%Y %H:%M")
+        if entrada else (servico.get("entrada") or "-")
+    )
+
+    itens = listar_itens_checklist(apenas_ativos=True)
+    checked_ids = {
+        item.get("item_id")
+        for item in listar_checklist_servico(id)
+        if item.get("marcado")
+    }
+    checked_ids = {item_id for item_id in checked_ids if item_id is not None}
+    feedback = session.pop("checklist_feedback", None)
+
+    if request.method == "POST":
+        checked_ids = {
+            int(valor)
+            for valor in request.form.getlist("item_ids")
+            if str(valor).isdigit()
+        }
+        ids_ativos = {item["id"] for item in itens}
+        fotos_saida = request.files.getlist("foto_saida")
+
+        if not itens:
+            feedback = {
+                "tipo": "erro",
+                "mensagem": "Cadastre pelo menos um item em Itens para usar o checklist de finalizacao.",
+            }
+        elif checked_ids != ids_ativos:
+            faltantes = [item["nome"] for item in itens if item["id"] not in checked_ids]
+            feedback = {
+                "tipo": "erro",
+                "mensagem": "Marque todos os itens obrigatorios antes de finalizar: " + ", ".join(faltantes),
+            }
+        elif contar_fotos_validas(fotos_saida) == 0:
+            feedback = {
+                "tipo": "erro",
+                "mensagem": "Envie pelo menos uma foto de finalizacao para concluir o atendimento.",
+            }
+        else:
+            conn = conectar()
+            c = conn.cursor()
+            c.execute("DELETE FROM servico_checklist WHERE servico_id=?", (id,))
+
+            for item in itens:
+                c.execute("""
+                    INSERT INTO servico_checklist (servico_id, item_id, item_nome, marcado)
+                    VALUES (?, ?, ?, 1)
+                """, (id, item["id"], item["nome"]))
+
+            salvar_fotos_servico(c, id, fotos_saida, "saida")
+            c.execute("""
+                UPDATE servicos
+                SET status='FINALIZADO', entrega=?
+                WHERE id=?
+            """, (agora_iso(), id))
+            conn.commit()
+            conn.close()
+
+            definir_feedback_painel(
+                "sucesso",
+                f"Atendimento da placa {servico['placa']} finalizado com checklist completo."
+            )
+            return redirect("/painel")
+
+    return render_template(
+        "checklist_finalizacao.html",
+        servico=servico,
+        itens=itens,
+        checked_ids=checked_ids,
+        feedback=feedback,
+    )
 
 @app.route("/finalizar/<int:id>", methods=["POST"])
 def finalizar(id):
     if not session.get("usuario"):
         return redirect("/login")
-    from datetime import datetime
-    agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
-
-    conn = conectar()
-    c = conn.cursor()
-
-    # 📸 PEGAR FOTOS DE SAÍDA
-    foto = request.files.get("foto_saida")
-
-    if foto and foto.filename != "":
-        nome = secure_filename(foto.filename)
-
-        import time
-        nome = str(int(time.time())) + "_" + nome
-
-        caminho = os.path.join(UPLOAD_FOLDER, nome)
-        foto.save(caminho)
-
-        c.execute(
-            "INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
-            (id, "saida", caminho)
-        )
-
-    # 🔥 FINALIZA O SERVIÇO
-    c.execute("""
-    UPDATE servicos 
-    SET status='FINALIZADO', entrega=? 
-    WHERE id=?
-    """, (agora, id))
-
-    conn.commit()
-    conn.close()
-    print(request.files)
-
-    return redirect("/painel")
+    definir_feedback_checklist("erro", "Use o checklist obrigatorio para finalizar o atendimento.")
+    return redirect(f"/painel/servico/{id}/checklist")
 
 @app.route("/detalhe/<int:id>", methods=["POST"])
 def detalhe(id):
@@ -2508,23 +5117,11 @@ def detalhe(id):
     conn = conectar()
     c = conn.cursor()
 
-    fotos = request.files.getlist("foto_detalhe")
-
-    for foto in fotos:
-        if foto and foto.filename != "":
-            import time
-            nome = str(int(time.time())) + "_" + secure_filename(foto.filename)
-
-            caminho = os.path.join(UPLOAD_FOLDER, nome)
-            foto.save(caminho)
-
-            c.execute(
-                "INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
-                (id, "detalhe", caminho)
-            )
+    salvar_fotos_servico(c, id, request.files.getlist("foto_detalhe"), "detalhe")
 
     conn.commit()
     conn.close()
+    definir_feedback_painel("sucesso", "Fotos de detalhe salvas no painel.")
 
     return redirect("/painel")
 
@@ -2615,6 +5212,89 @@ def cadastrar_pneu():
 
     return render_template("pneu.html", produtos=lista)
 
+@app.route("/itens", methods=["GET", "POST"])
+def itens_checklist():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    conn = conectar()
+    c = conn.cursor()
+
+    if request.method == "POST":
+        nome = normalizar_texto_campo(request.form.get("nome"))
+
+        if not nome:
+            definir_feedback_itens("erro", "Informe o nome do item do checklist.")
+            conn.close()
+            return redirect("/itens")
+
+        c.execute("SELECT COALESCE(MAX(ordem), 0) + 1 FROM checklist_itens")
+        ordem = c.fetchone()[0]
+        c.execute(
+            "INSERT INTO checklist_itens (nome, ativo, ordem) VALUES (?, 1, ?)",
+            (nome, ordem)
+        )
+        conn.commit()
+        conn.close()
+        definir_feedback_itens("sucesso", f"Item '{nome}' adicionado ao checklist.")
+        return redirect("/itens")
+
+    conn.close()
+
+    return render_template(
+        "itens_checklist.html",
+        itens=listar_itens_checklist(),
+        feedback=session.pop("itens_feedback", None),
+    )
+
+@app.route("/itens/<int:item_id>/alternar", methods=["POST"])
+def alternar_item_checklist(item_id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT id, nome, ativo FROM checklist_itens WHERE id=?", (item_id,))
+    item = c.fetchone()
+
+    if not item:
+        conn.close()
+        definir_feedback_itens("erro", "Item do checklist nao encontrado.")
+        return redirect("/itens")
+
+    novo_ativo = 0 if item["ativo"] else 1
+    c.execute("UPDATE checklist_itens SET ativo=? WHERE id=?", (novo_ativo, item_id))
+    conn.commit()
+    conn.close()
+
+    definir_feedback_itens(
+        "sucesso",
+        f"Item '{item['nome']}' {'ativado' if novo_ativo else 'pausado'}."
+    )
+    return redirect("/itens")
+
+@app.route("/itens/<int:item_id>/excluir", methods=["POST"])
+def excluir_item_checklist(item_id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT nome FROM checklist_itens WHERE id=?", (item_id,))
+    item = c.fetchone()
+
+    if not item:
+        conn.close()
+        definir_feedback_itens("erro", "Item do checklist nao encontrado.")
+        return redirect("/itens")
+
+    c.execute("DELETE FROM checklist_itens WHERE id=?", (item_id,))
+    conn.commit()
+    conn.close()
+
+    definir_feedback_itens("sucesso", f"Item '{item['nome']}' removido.")
+    return redirect("/itens")
+
 @app.route("/base_dados")
 def base_dados():
     if not session.get("usuario"):
@@ -2703,14 +5383,42 @@ def painel():
     c = conn.cursor()
 
     c.execute("""
-        SELECT servicos.*, tipos_servico.nome as tipo_nome 
+        SELECT
+            servicos.*,
+            tipos_servico.nome AS tipo_nome,
+            veiculos.placa,
+            veiculos.modelo,
+            veiculos.cor,
+            clientes.nome AS cliente_nome,
+            clientes.telefone AS cliente_telefone
         FROM servicos
         LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
+        LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
+        LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
         WHERE status='EM ANDAMENTO'
-        ORDER BY id DESC
+        ORDER BY servicos.id DESC
     """)
 
     servicos_db = c.fetchall()
+    c.execute("SELECT nome FROM produtos_pneu ORDER BY nome")
+    produtos_pneu = [row[0] for row in c.fetchall()]
+
+    fotos_por_servico = {}
+    ids_servicos = [row["id"] for row in servicos_db]
+
+    if ids_servicos:
+        placeholders = ",".join(["?"] * len(ids_servicos))
+        c.execute(f"""
+            SELECT servico_id, tipo, COUNT(*) AS total
+            FROM fotos
+            WHERE servico_id IN ({placeholders})
+            GROUP BY servico_id, tipo
+        """, ids_servicos)
+
+        for foto in c.fetchall():
+            mapa = fotos_por_servico.setdefault(foto["servico_id"], {})
+            mapa[foto["tipo"]] = foto["total"]
+
     conn.close()
 
     servicos = []
@@ -2723,11 +5431,12 @@ def painel():
         s_dict["prioridade_ia"] = prioridade_ia
 
         # 🔥 TEMPO DE ESPERA
-        try:
-            entrada = datetime.fromisoformat(s_dict["entrada"])
-            agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+        entrada = interpretar_datahora_sistema(s_dict.get("entrada"))
 
-            diff = agora - entrada
+        try:
+            agora_atual = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+            diff = agora_atual - entrada
             minutos = int(diff.total_seconds() / 60)
 
             horas = minutos // 60
@@ -2739,16 +5448,44 @@ def painel():
                 tempo_str = f"{mins}min"
 
         except:
+            minutos = 0
             tempo_str = "N/A"
 
         s_dict["tempo_espera"] = tempo_str
+        s_dict["tempo_espera_minutos"] = max(0, minutos)
+        s_dict["entrada_exibicao"] = (
+            entrada.strftime("%d/%m/%Y %H:%M")
+            if entrada else (s_dict.get("entrada") or "-")
+        )
+        s_dict["valor_exibicao"] = formatar_valor_monetario(s_dict.get("valor"))
+        s_dict["cliente_nome"] = s_dict.get("cliente_nome") or "Sem cliente"
+        s_dict["cliente_telefone"] = s_dict.get("cliente_telefone") or ""
+        s_dict["placa"] = s_dict.get("placa") or "-"
+        s_dict["modelo"] = s_dict.get("modelo") or ""
+        s_dict["cor"] = s_dict.get("cor") or ""
+        s_dict["tipo_nome"] = s_dict.get("tipo_nome") or "Servico"
+        s_dict["origem"] = s_dict.get("origem") or ""
+        s_dict["guarita"] = s_dict.get("guarita") or ""
+        s_dict["observacoes"] = s_dict.get("observacoes") or ""
+        s_dict["pneu"] = s_dict.get("pneu") or ""
+        s_dict["cera"] = s_dict.get("cera") or "Nao"
+        s_dict["hidro_lataria"] = s_dict.get("hidro_lataria") or "Nao"
+        s_dict["hidro_vidros"] = s_dict.get("hidro_vidros") or "Nao"
+        s_dict["fotos_entrada"] = fotos_por_servico.get(s_dict["id"], {}).get("entrada", 0)
+        s_dict["fotos_detalhe"] = fotos_por_servico.get(s_dict["id"], {}).get("detalhe", 0)
+        s_dict["fotos_saida"] = fotos_por_servico.get(s_dict["id"], {}).get("saida", 0)
 
         servicos.append(s_dict)
 
     # 🔥 ORDENA PELA IA
     servicos.sort(key=lambda x: x["prioridade_ia"], reverse=True)
 
-    return render_template("painel.html", servicos=servicos)
+    return render_template(
+        "painel.html",
+        servicos=servicos,
+        produtos_pneu=produtos_pneu,
+        feedback=session.pop("painel_feedback", None),
+    )
 
 
 @app.route("/clientes", methods=["GET", "POST"])

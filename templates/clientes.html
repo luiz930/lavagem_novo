@@ -97,6 +97,8 @@
             {% endfor %}
         </div>
 
+        <p class="muted-text">A data da lavagem e detectada automaticamente para calcular quantos dias fazem desde o ultimo atendimento do carro.</p>
+
         <div class="actions-row actions-row--left">
             <button>Salvar sincronizacao</button>
         </div>
@@ -110,7 +112,8 @@
         <table>
             <thead>
                 <tr>
-                    {% for coluna in preview_sync.colunas %}
+                    {% set colunas_preview = preview_sync.colunas_exibicao or preview_sync.colunas %}
+                    {% for coluna in colunas_preview %}
                     <th>{{ coluna }}</th>
                     {% endfor %}
                 </tr>
@@ -118,7 +121,7 @@
             <tbody>
                 {% for linha in preview_sync.amostra %}
                 <tr>
-                    {% for coluna in preview_sync.colunas %}
+                    {% for coluna in colunas_preview %}
                     <td>{{ linha.get(coluna, '') }}</td>
                     {% endfor %}
                 </tr>

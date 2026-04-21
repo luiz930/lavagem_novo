@@ -2,7 +2,7 @@
 
 {% block title %}Painel{% endblock %}
 {% block titulo %}Painel Operacional{% endblock %}
-{% block subtitulo %}Controle dos serviços{% endblock %}
+{% block subtitulo %}Controle dos servicos em andamento{% endblock %}
 
 {% block actions %}
 <a href="/" class="button-link">
@@ -12,33 +12,362 @@
 
 {% block content %}
 
-<div class="page-grid">
+{% if feedback %}
+<div class="page-card {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
+</div>
+{% endif %}
+
+{% if servicos %}
+<div class="page-card page-card--soft">
+    <div class="actions-row actions-row--left">
+        <button type="button" id="vozToggleButton">Avisos por voz: ativados</button>
+        <button type="button" id="vozTesteButton">Testar voz</button>
+    </div>
+    <p class="muted-text top-spacing" id="vozStatusTexto">A cada 10 minutos, o painel avisa em portugues do Brasil quais veiculos continuam em atendimento e ha quantos minutos estao na operacao.</p>
+</div>
+
+<div class="page-grid top-spacing">
 
 {% for s in servicos %}
-<div class="page-card">
+<div
+    class="page-card js-servico-card"
+    data-servico-id="{{ s.id }}"
+    data-placa="{{ s.placa }}"
+    data-modelo="{{ s.modelo }}"
+    data-servico="{{ s.tipo_nome }}"
+    data-base-minutos="{{ s.tempo_espera_minutos }}"
+>
 
-    <p class="pill-label">Fila {{loop.index}}</p>
+    <p class="pill-label">Fila {{ loop.index }}</p>
 
-    <h2>{{s[1]}}</h2>
+    <h2 class="section-title">{{ s.tipo_nome }}</h2>
 
-    <p><b>Cliente:</b> {{s[2]}}</p>
-    <p><b>Valor:</b> R$ {{s[3]}}</p>
+    <p><b>Cliente:</b> {{ s.cliente_nome }}</p>
+    <p><b>Veiculo:</b> {{ s.placa }}{% if s.modelo %} - {{ s.modelo }}{% endif %}{% if s.cor %} / {{ s.cor }}{% endif %}</p>
+    <p><b>Valor:</b> R$ {{ s.valor_exibicao }}</p>
+    <p><b>Entrada:</b> {{ s.entrada_exibicao }}</p>
+    <p><b>Tempo em espera:</b> <span class="js-tempo-espera">{{ s.tempo_espera }}</span></p>
+    <p><b>Prioridade IA:</b> {{ s.prioridade_ia }}</p>
 
-    <p class="muted-text">{{s[13]}}</p>
+    {% if s.cliente_telefone %}
+    <p class="muted-text">Contato: {{ s.cliente_telefone }}</p>
+    {% endif %}
 
-    <div class="actions-row">
-        <a href="/prioridade/{{s[0]}}/up">
-            <button>Subir</button>
+    <p class="muted-text">Fotos: entrada {{ s.fotos_entrada }} | detalhe {{ s.fotos_detalhe }} | saida {{ s.fotos_saida }}</p>
+
+    <div class="actions-row actions-row--left top-spacing">
+        <a href="/prioridade/{{ s.id }}/up" class="button-link">
+            <button type="button">Subir</button>
         </a>
 
-        <a href="/prioridade/{{s[0]}}/down">
-            <button>Descer</button>
+        <a href="/prioridade/{{ s.id }}/down" class="button-link">
+            <button type="button">Descer</button>
         </a>
     </div>
+
+    <form action="/painel/servico/{{ s.id }}/operacional" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide top-spacing">
+        <div class="field-grid">
+            <input name="origem" placeholder="Origem" value="{{ s.origem }}">
+            <input name="guarita" placeholder="Guarita" value="{{ s.guarita }}">
+        </div>
+
+        <div class="field-grid">
+            <select name="pneu">
+                <option value="">Nenhum produto de pneu</option>
+                {% for produto in produtos_pneu %}
+                <option value="{{ produto }}" {% if s.pneu == produto %}selected{% endif %}>{{ produto }}</option>
+                {% endfor %}
+            </select>
+
+            <select name="cera">
+                <option value="Nao" {% if s.cera != "Sim" %}selected{% endif %}>Cera: Nao</option>
+                <option value="Sim" {% if s.cera == "Sim" %}selected{% endif %}>Cera: Sim</option>
+            </select>
+        </div>
+
+        <div class="field-grid">
+            <select name="hidro_lataria">
+                <option value="Nao" {% if s.hidro_lataria != "Sim" %}selected{% endif %}>Hidro lataria: Nao</option>
+                <option value="Sim" {% if s.hidro_lataria == "Sim" %}selected{% endif %}>Hidro lataria: Sim</option>
+            </select>
+
+            <select name="hidro_vidros">
+                <option value="Nao" {% if s.hidro_vidros != "Sim" %}selected{% endif %}>Hidro vidros: Nao</option>
+                <option value="Sim" {% if s.hidro_vidros == "Sim" %}selected{% endif %}>Hidro vidros: Sim</option>
+            </select>
+        </div>
+
+        <textarea name="observacoes" placeholder="Observacoes operacionais">{{ s.observacoes }}</textarea>
+
+        <div class="field-grid">
+            <div>
+                <label>Fotos de detalhe</label>
+                <input type="file" name="foto_detalhe" multiple accept="image/*">
+                <p class="muted-text">No celular, esse campo abre a galeria ou a camera do aparelho para registrar os detalhes sem forcar o modo camera.</p>
+            </div>
+            <div>
+                <label>Checklist de finalizacao</label>
+                <p class="muted-text">Ao clicar em finalizar, o sistema abre a tela obrigatoria de checklist e fotos finais.</p>
+            </div>
+        </div>
+
+        <div class="actions-row actions-row--left">
+            <button type="submit" name="acao" value="salvar">Salvar operacional</button>
+            <button type="submit" name="acao" value="finalizar">Abrir checklist de finalizacao</button>
+        </div>
+    </form>
 
 </div>
 {% endfor %}
 
 </div>
+{% else %}
+<div class="page-card page-card--soft">
+    <p class="muted-text">Nenhum atendimento em andamento no momento.</p>
+</div>
+{% endif %}
+
+<script>
+const PAINEL_VOZ_ATIVA_KEY = "wagenPainelVozAtiva";
+const PAINEL_VOZ_ALERTAS_KEY = "wagenPainelVozAlertas";
+const painelRenderizadoEm = Date.now();
+
+function suportaVozPainel() {
+    return "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+}
+
+function obterCardsServicos() {
+    return Array.from(document.querySelectorAll(".js-servico-card"));
+}
+
+function obterBotaoVoz() {
+    return document.getElementById("vozToggleButton");
+}
+
+function obterBotaoTesteVoz() {
+    return document.getElementById("vozTesteButton");
+}
+
+function obterStatusVoz() {
+    return document.getElementById("vozStatusTexto");
+}
+
+function vozPainelAtiva() {
+    const salvo = localStorage.getItem(PAINEL_VOZ_ATIVA_KEY);
+    return salvo === null ? true : salvo === "1";
+}
+
+function salvarEstadoVozPainel(ativo) {
+    localStorage.setItem(PAINEL_VOZ_ATIVA_KEY, ativo ? "1" : "0");
+}
+
+function obterHistoricoAlertas() {
+    try {
+        return JSON.parse(localStorage.getItem(PAINEL_VOZ_ALERTAS_KEY) || "{}");
+    } catch (e) {
+        return {};
+    }
+}
+
+function salvarHistoricoAlertas(mapa) {
+    localStorage.setItem(PAINEL_VOZ_ALERTAS_KEY, JSON.stringify(mapa));
+}
+
+function limparHistoricoAlertasAntigos(idsAtivos) {
+    const historico = obterHistoricoAlertas();
+    const filtrado = {};
+
+    idsAtivos.forEach((id) => {
+        if (Object.prototype.hasOwnProperty.call(historico, id)) {
+            filtrado[id] = historico[id];
+        }
+    });
+
+    salvarHistoricoAlertas(filtrado);
+    return filtrado;
+}
+
+function formatarTempoPainel(minutosTotais) {
+    const minutos = Math.max(0, Number(minutosTotais) || 0);
+    const horas = Math.floor(minutos / 60);
+    const resto = minutos % 60;
+
+    if (!horas) {
+        return `${minutos}min`;
+    }
+
+    if (!resto) {
+        return `${horas}h`;
+    }
+
+    return `${horas}h ${resto}min`;
+}
+
+function obterMinutosAtuais(card) {
+    const base = Number(card.dataset.baseMinutos || 0);
+    const decorridos = Math.floor((Date.now() - painelRenderizadoEm) / 60000);
+    return Math.max(0, base + decorridos);
+}
+
+function atualizarTemposPainel() {
+    obterCardsServicos().forEach((card) => {
+        const destino = card.querySelector(".js-tempo-espera");
+        if (destino) {
+            destino.textContent = formatarTempoPainel(obterMinutosAtuais(card));
+        }
+    });
+}
+
+function obterVozPtBr() {
+    const vozes = window.speechSynthesis.getVoices();
+    return (
+        vozes.find((voz) => (voz.lang || "").toLowerCase().startsWith("pt-br")) ||
+        vozes.find((voz) => (voz.lang || "").toLowerCase().startsWith("pt")) ||
+        null
+    );
+}
+
+function atualizarStatusControlesVoz() {
+    const botao = obterBotaoVoz();
+    const botaoTeste = obterBotaoTesteVoz();
+    const status = obterStatusVoz();
+
+    if (!botao || !botaoTeste || !status) {
+        return;
+    }
+
+    if (!suportaVozPainel()) {
+        botao.disabled = true;
+        botaoTeste.disabled = true;
+        botao.textContent = "Avisos por voz indisponiveis";
+        status.textContent = "Este navegador nao oferece suporte a voz em portugues pelo recurso nativo.";
+        return;
+    }
+
+    const ativa = vozPainelAtiva();
+    botao.textContent = ativa ? "Avisos por voz: ativados" : "Avisos por voz: pausados";
+    botaoTeste.disabled = false;
+    status.textContent = ativa
+        ? "Os avisos automaticos estao ativos. O painel fala os veiculos em atendimento a cada novo bloco de 10 minutos."
+        : "Os avisos automaticos estao pausados. Clique para reativar quando quiser ouvir os lembretes do painel.";
+}
+
+function montarNomeVeiculo(card) {
+    const modelo = (card.dataset.modelo || "").trim();
+    const placa = (card.dataset.placa || "").trim();
+
+    if (modelo && placa) {
+        return `${modelo}, placa ${placa}`;
+    }
+
+    if (modelo) {
+        return modelo;
+    }
+
+    return `placa ${placa || "sem identificacao"}`;
+}
+
+function falarNoPainel(texto) {
+    if (!suportaVozPainel() || !vozPainelAtiva() || !texto) {
+        return;
+    }
+
+    const mensagem = new SpeechSynthesisUtterance(texto);
+    mensagem.lang = "pt-BR";
+    mensagem.rate = 1;
+    mensagem.pitch = 1;
+    mensagem.volume = 1;
+
+    const voz = obterVozPtBr();
+    if (voz) {
+        mensagem.voice = voz;
+    }
+
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(mensagem);
+}
+
+function verificarAlertasOperacionais() {
+    if (!suportaVozPainel() || !vozPainelAtiva()) {
+        return;
+    }
+
+    const cards = obterCardsServicos();
+    const idsAtivos = cards.map((card) => card.dataset.servicoId);
+    const historico = limparHistoricoAlertasAntigos(idsAtivos);
+    const mensagens = [];
+
+    cards.forEach((card) => {
+        const servicoId = card.dataset.servicoId;
+        const minutos = obterMinutosAtuais(card);
+        const bloco = Math.floor(minutos / 10);
+        const ultimoBloco = Number(historico[servicoId] || 0);
+
+        if (bloco >= 1 && bloco > ultimoBloco) {
+            mensagens.push(`${montarNomeVeiculo(card)} esta em atendimento ha ${minutos} minutos.`);
+            historico[servicoId] = bloco;
+        }
+    });
+
+    salvarHistoricoAlertas(historico);
+
+    if (mensagens.length) {
+        falarNoPainel(`Atencao. ${mensagens.join(" ")}`);
+    }
+}
+
+function alternarAvisosVozPainel() {
+    const novoEstado = !vozPainelAtiva();
+    salvarEstadoVozPainel(novoEstado);
+    atualizarStatusControlesVoz();
+
+    if (novoEstado) {
+        falarNoPainel("Avisos por voz ativados no painel operacional.");
+        verificarAlertasOperacionais();
+    } else if (suportaVozPainel()) {
+        window.speechSynthesis.cancel();
+    }
+}
+
+function testarAvisoVozPainel() {
+    if (!suportaVozPainel()) {
+        return;
+    }
+
+    falarNoPainel("Teste de voz do painel operacional ativado com sucesso.");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    atualizarTemposPainel();
+    atualizarStatusControlesVoz();
+
+    const botao = obterBotaoVoz();
+    const botaoTeste = obterBotaoTesteVoz();
+
+    if (botao) {
+        botao.addEventListener("click", alternarAvisosVozPainel);
+    }
+
+    if (botaoTeste) {
+        botaoTeste.addEventListener("click", testarAvisoVozPainel);
+    }
+
+    limparHistoricoAlertasAntigos(obterCardsServicos().map((card) => card.dataset.servicoId));
+
+    setInterval(() => {
+        atualizarTemposPainel();
+        verificarAlertasOperacionais();
+    }, 30000);
+
+    verificarAlertasOperacionais();
+});
+
+if (suportaVozPainel()) {
+    window.speechSynthesis.onvoiceschanged = () => {
+        atualizarStatusControlesVoz();
+    };
+}
+</script>
 
 {% endblock %}

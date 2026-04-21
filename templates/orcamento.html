@@ -1,10 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}Orçamento{% endblock %}
-{% block titulo %}Orçamento{% endblock %}
-{% block subtitulo %}Gerar orçamento{% endblock %}
+{% block title %}Orcamento{% endblock %}
+{% block titulo %}Orcamentos{% endblock %}
+{% block subtitulo %}Monte, salve e gere PDFs mais completos para os clientes{% endblock %}
 
 {% block actions %}
+<a href="/nota_fiscal" class="button-link">
+    <button type="button">Nota Fiscal</button>
+</a>
 <a href="/" class="button-link">
     <button type="button">Voltar</button>
 </a>
@@ -12,47 +15,293 @@
 
 {% block content %}
 
-<div class="page-card">
-
-<form action="/gerar_orcamento" method="POST" class="stack-form stack-form--wide">
-
-<input id="placa" name="placa" placeholder="Placa" onblur="buscarCliente()">
-<input id="nome" name="nome" placeholder="Nome">
-<input id="telefone" name="telefone" placeholder="Telefone">
-<input id="modelo" name="modelo" placeholder="Modelo">
-
-<h3>Serviços</h3>
-
-<select id="selectServico">
-<option value="">Selecione</option>
-{% for s in servicos %}
-<option value="{{s[0]}}" data-valor="{{s[1]}}">
-{{s[0]}} - R${{s[1]}}
-</option>
-{% endfor %}
-</select>
-
-<button type="button" onclick="addServico()">Adicionar</button>
-
-<hr>
-
-<input id="manualNome" placeholder="Serviço manual">
-<input id="manualValor" placeholder="Valor">
-
-<button type="button" onclick="addManual()">Adicionar manual</button>
-
-<hr>
-
-<div id="lista"></div>
-
-<h3 id="total">Total: R$ 0.00</h3>
-
-<textarea name="observacoes" placeholder="Observações"></textarea>
-
-<button type="submit">Gerar PDF</button>
-
-</form>
-
+{% if feedback %}
+<div class="page-card {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
 </div>
+{% endif %}
+
+<div class="page-grid">
+    <div class="page-card">
+        <p class="pill-label">Novo orcamento</p>
+        <h2 class="section-title top-spacing">Dados do cliente e itens</h2>
+
+        <form action="/gerar_orcamento" method="POST" class="stack-form stack-form--wide" id="orcamento-form">
+            <div class="field-grid">
+                <div>
+                    <label for="placa">Placa</label>
+                    <input id="placa" name="placa" placeholder="ABC1D23">
+                </div>
+                <div>
+                    <label>&nbsp;</label>
+                    <button type="button" id="buscar-cliente-btn">Buscar cliente pela placa</button>
+                </div>
+            </div>
+
+            <div class="field-grid">
+                <div>
+                    <label for="nome">Nome do cliente</label>
+                    <input id="nome" name="nome" placeholder="Nome do cliente" required>
+                </div>
+                <div>
+                    <label for="telefone">Telefone</label>
+                    <input id="telefone" name="telefone" placeholder="(51) 99999-9999">
+                </div>
+                <div>
+                    <label for="modelo">Modelo</label>
+                    <input id="modelo" name="modelo" placeholder="Modelo do veiculo">
+                </div>
+            </div>
+
+            <div class="field-grid">
+                <div>
+                    <label for="documento">CPF ou CNPJ</label>
+                    <input id="documento" name="documento" placeholder="Documento do cliente">
+                </div>
+                <div>
+                    <label for="email">E-mail</label>
+                    <input id="email" name="email" placeholder="cliente@email.com">
+                </div>
+                <div>
+                    <label for="validade_dias">Validade (dias)</label>
+                    <input id="validade_dias" name="validade_dias" type="number" min="1" step="1" value="7">
+                </div>
+                <div>
+                    <label for="forma_pagamento">Pagamento</label>
+                    <input id="forma_pagamento" name="forma_pagamento" placeholder="Pix, dinheiro, cartao...">
+                </div>
+            </div>
+
+            <div class="summary-card">
+                <h3 class="section-title">Itens do orcamento</h3>
+
+                <div class="preset-row">
+                    <select id="select-servico-padrao">
+                        <option value="">Selecione um servico cadastrado</option>
+                        {% for servico in servicos %}
+                        <option value="{{ servico.nome }}" data-valor="{{ servico.valor }}">{{ servico.nome }} - R$ {{ servico.valor }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="button" id="add-servico-padrao-btn">Adicionar servico</button>
+                    <button type="button" id="add-item-manual-btn">Adicionar item manual</button>
+                </div>
+
+                <div id="orcamento-itens" class="line-items top-spacing"></div>
+            </div>
+
+            <div class="summary-grid">
+                <div class="summary-metric">
+                    <strong>Subtotal</strong>
+                    <span id="subtotal-orcamento">R$ 0,00</span>
+                </div>
+                <div class="summary-metric">
+                    <label for="desconto">Desconto</label>
+                    <input id="desconto" name="desconto" type="number" min="0" step="0.01" value="0">
+                </div>
+                <div class="summary-metric">
+                    <strong>Total final</strong>
+                    <span id="total-orcamento">R$ 0,00</span>
+                </div>
+            </div>
+
+            <div>
+                <label for="observacoes">Observacoes comerciais</label>
+                <textarea id="observacoes" name="observacoes" placeholder="Prazo, garantia, condicoes especiais, recados para o cliente..."></textarea>
+            </div>
+
+            <div class="actions-row actions-row--left">
+                <button type="submit">Salvar e gerar PDF</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="page-card page-card--soft helper-panel">
+        <p class="pill-label">Emitente atual</p>
+        <h2 class="section-title top-spacing">Resumo comercial</h2>
+
+        {% if empresa.razao_social or empresa.nome_fantasia %}
+        <p><strong>{{ empresa.nome_fantasia or empresa.razao_social }}</strong></p>
+        <p class="muted-text">CNPJ: {{ empresa.cnpj_formatado or "Nao informado" }}</p>
+        <p class="muted-text">
+            {% if empresa.cidade or empresa.uf %}{{ empresa.cidade or "Cidade" }}{% if empresa.uf %} / {{ empresa.uf }}{% endif %}{% else %}Endereco fiscal nao configurado{% endif %}
+        </p>
+        {% else %}
+        <div class="alert-inline">
+            Preencha os dados do emitente na tela de Nota Fiscal para deixar os PDFs com CNPJ, endereco e dados da empresa.
+        </div>
+        {% endif %}
+
+        <ul>
+            <li>Busque a placa para preencher nome, telefone e modelo automaticamente.</li>
+            <li>Use servicos cadastrados para ganhar velocidade e mantenha itens manuais para excecoes.</li>
+            <li>Os orcamentos gerados ficam salvos e podem virar base para a pagina fiscal.</li>
+        </ul>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <h2 class="section-title">Orcamentos recentes</h2>
+
+    {% if orcamentos %}
+    <div class="document-list top-spacing">
+        {% for item in orcamentos %}
+        <div class="document-card">
+            <div class="document-meta">
+                <div>
+                    <strong>Numero</strong>
+                    Orcamento #{{ item.numero_formatado }}
+                </div>
+                <div>
+                    <strong>Cliente</strong>
+                    {{ item.cliente_nome }}
+                </div>
+                <div>
+                    <strong>Veiculo</strong>
+                    {{ item.modelo or "Nao informado" }}{% if item.placa %} / {{ item.placa }}{% endif %}
+                </div>
+                <div>
+                    <strong>Total</strong>
+                    R$ {{ item.total_exibicao }}
+                </div>
+                <div>
+                    <strong>Emitido em</strong>
+                    {{ item.criado_em_fmt }}
+                </div>
+                <div>
+                    <strong>Status</strong>
+                    <span class="status-badge status-badge--success">{{ item.status }}</span>
+                </div>
+            </div>
+
+            <div class="actions-row actions-row--left top-spacing">
+                <a href="/orcamento/{{ item.id }}/pdf" class="button-link">
+                    <button type="button">Baixar PDF</button>
+                </a>
+                <a href="/nota_fiscal?orcamento_id={{ item.id }}" class="button-link">
+                    <button type="button">Preparar nota fiscal</button>
+                </a>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted-text top-spacing">Nenhum orcamento salvo ainda.</p>
+    {% endif %}
+</div>
+
+<script>
+const moedaBR = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+const itensContainer = document.getElementById("orcamento-itens");
+const descontoInput = document.getElementById("desconto");
+const subtotalDestino = document.getElementById("subtotal-orcamento");
+const totalDestino = document.getElementById("total-orcamento");
+const selectServicoPadrao = document.getElementById("select-servico-padrao");
+
+function formatarNumero(valor) {
+    const numero = Number(valor || 0);
+    return Number.isFinite(numero) ? numero : 0;
+}
+
+function calcularTotaisOrcamento() {
+    const linhas = [...document.querySelectorAll(".js-item-row")];
+    let subtotal = 0;
+
+    linhas.forEach((linha) => {
+        const quantidade = formatarNumero(linha.querySelector("[data-item-quantidade]").value);
+        const valorUnitario = formatarNumero(linha.querySelector("[data-item-valor]").value);
+        const total = Math.max(0, quantidade || 0) * Math.max(0, valorUnitario || 0);
+        linha.querySelector("[data-item-total]").textContent = moedaBR.format(total);
+        subtotal += total;
+    });
+
+    const desconto = Math.max(0, formatarNumero(descontoInput.value));
+    const totalFinal = Math.max(0, subtotal - desconto);
+    subtotalDestino.textContent = moedaBR.format(subtotal);
+    totalDestino.textContent = moedaBR.format(totalFinal);
+}
+
+function criarLinhaItem(descricao = "", quantidade = 1, valorUnitario = 0) {
+    const linha = document.createElement("div");
+    linha.className = "line-item js-item-row";
+    linha.innerHTML = `
+        <div class="line-item__grid">
+            <div>
+                <label>Descricao</label>
+                <input name="item_descricao[]" value="${descricao}" placeholder="Descricao do servico" required>
+            </div>
+            <div>
+                <label>Qtd</label>
+                <input name="item_quantidade[]" data-item-quantidade type="number" min="0.01" step="0.01" value="${quantidade}">
+            </div>
+            <div>
+                <label>Unitario</label>
+                <input name="item_valor_unitario[]" data-item-valor type="number" min="0" step="0.01" value="${Number(valorUnitario || 0).toFixed(2)}">
+            </div>
+            <div>
+                <label>Total</label>
+                <div class="line-item__total" data-item-total>${moedaBR.format(0)}</div>
+            </div>
+            <div>
+                <label>&nbsp;</label>
+                <button type="button" data-remover-item>Remover</button>
+            </div>
+        </div>
+    `;
+
+    linha.querySelector("[data-item-quantidade]").addEventListener("input", calcularTotaisOrcamento);
+    linha.querySelector("[data-item-valor]").addEventListener("input", calcularTotaisOrcamento);
+    linha.querySelector("[data-remover-item]").addEventListener("click", () => {
+        linha.remove();
+        if (!document.querySelector(".js-item-row")) {
+            criarLinhaItem();
+        }
+        calcularTotaisOrcamento();
+    });
+
+    itensContainer.appendChild(linha);
+    calcularTotaisOrcamento();
+}
+
+function adicionarServicoPadrao() {
+    const selecionado = selectServicoPadrao.options[selectServicoPadrao.selectedIndex];
+    if (!selecionado || !selecionado.value) {
+        return;
+    }
+
+    criarLinhaItem(selecionado.value, 1, selecionado.dataset.valor || 0);
+    selectServicoPadrao.value = "";
+}
+
+async function buscarClienteOrcamento() {
+    const placa = (document.getElementById("placa").value || "").trim().toUpperCase();
+    if (!placa) {
+        return;
+    }
+
+    try {
+        const resposta = await fetch(`/api/cliente/${encodeURIComponent(placa)}`);
+        const dados = await resposta.json();
+
+        if (!dados.encontrado) {
+            return;
+        }
+
+        document.getElementById("nome").value = dados.nome || "";
+        document.getElementById("telefone").value = dados.telefone || "";
+        document.getElementById("modelo").value = dados.modelo || "";
+        document.getElementById("placa").value = dados.placa || placa;
+    } catch (erro) {
+        console.error("Falha ao buscar cliente:", erro);
+    }
+}
+
+document.getElementById("add-servico-padrao-btn").addEventListener("click", adicionarServicoPadrao);
+document.getElementById("add-item-manual-btn").addEventListener("click", () => criarLinhaItem());
+document.getElementById("buscar-cliente-btn").addEventListener("click", buscarClienteOrcamento);
+document.getElementById("placa").addEventListener("blur", buscarClienteOrcamento);
+descontoInput.addEventListener("input", calcularTotaisOrcamento);
+
+criarLinhaItem();
+</script>
 
 {% endblock %}

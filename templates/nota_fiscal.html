@@ -1,0 +1,476 @@
+{% extends "base.html" %}
+
+{% block title %}Nota Fiscal{% endblock %}
+{% block titulo %}Emissao Fiscal{% endblock %}
+{% block subtitulo %}Organize os dados do emitente, gere o espelho fiscal e registre a emissao manual{% endblock %}
+
+{% block actions %}
+<a href="/orcamento" class="button-link">
+    <button type="button">Orcamentos</button>
+</a>
+<a href="/" class="button-link">
+    <button type="button">Voltar</button>
+</a>
+{% endblock %}
+
+{% block content %}
+
+{% if feedback %}
+<div class="page-card {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
+</div>
+{% endif %}
+
+{% if not empresa.razao_social or not empresa.cnpj %}
+<div class="page-card error-banner top-spacing">
+    <p>Preencha os dados do emitente fiscal para deixar o espelho da nota com CNPJ, razao social e endereco corretos.</p>
+</div>
+{% endif %}
+
+{% if orcamento_origem %}
+<div class="page-card top-spacing">
+    <p class="pill-label">Origem do faturamento</p>
+    <h2 class="section-title top-spacing">Orcamento #{{ orcamento_origem.numero_formatado }}</h2>
+    <p><strong>Cliente:</strong> {{ orcamento_origem.cliente_nome }}</p>
+    <p class="muted-text">Total: R$ {{ orcamento_origem.total_exibicao }} | Emitido em {{ orcamento_origem.criado_em_fmt }}</p>
+    <div class="actions-row actions-row--left top-spacing">
+        <a href="/orcamento/{{ orcamento_origem.id }}/pdf" class="button-link">
+            <button type="button">Baixar orcamento</button>
+        </a>
+    </div>
+</div>
+{% endif %}
+
+<div class="page-card top-spacing">
+    <p class="pill-label">Emitente</p>
+    <h2 class="section-title top-spacing">Dados da empresa</h2>
+
+    <form action="/nota_fiscal/empresa" method="POST" class="stack-form stack-form--wide">
+        <input type="hidden" name="origem_orcamento_id" value="{{ orcamento_origem.id if orcamento_origem else '' }}">
+
+        <div class="field-grid">
+            <div>
+                <label for="razao_social">Razao social</label>
+                <input id="razao_social" name="razao_social" value="{{ empresa.razao_social }}" placeholder="Razao social da empresa">
+            </div>
+            <div>
+                <label for="nome_fantasia">Nome fantasia</label>
+                <input id="nome_fantasia" name="nome_fantasia" value="{{ empresa.nome_fantasia }}" placeholder="Nome fantasia">
+            </div>
+            <div>
+                <label for="cnpj_emitente">CNPJ</label>
+                <input id="cnpj_emitente" name="cnpj" value="{{ empresa.cnpj_formatado or empresa.cnpj }}" placeholder="00.000.000/0000-00">
+            </div>
+            <div>
+                <label for="regime_tributario">Regime tributario</label>
+                <input id="regime_tributario" name="regime_tributario" value="{{ empresa.regime_tributario }}" placeholder="MEI, Simples Nacional, Lucro Presumido...">
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="inscricao_municipal">Inscricao municipal</label>
+                <input id="inscricao_municipal" name="inscricao_municipal" value="{{ empresa.inscricao_municipal }}" placeholder="Inscricao municipal">
+            </div>
+            <div>
+                <label for="inscricao_estadual">Inscricao estadual</label>
+                <input id="inscricao_estadual" name="inscricao_estadual" value="{{ empresa.inscricao_estadual }}" placeholder="Inscricao estadual">
+            </div>
+            <div>
+                <label for="email_emitente">E-mail</label>
+                <input id="email_emitente" name="email" value="{{ empresa.email }}" placeholder="financeiro@empresa.com">
+            </div>
+            <div>
+                <label for="telefone_emitente">Telefone</label>
+                <input id="telefone_emitente" name="telefone" value="{{ empresa.telefone }}" placeholder="(51) 99999-9999">
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="endereco_emitente">Endereco</label>
+                <input id="endereco_emitente" name="endereco" value="{{ empresa.endereco }}" placeholder="Rua / Avenida">
+            </div>
+            <div>
+                <label for="numero_emitente">Numero</label>
+                <input id="numero_emitente" name="numero" value="{{ empresa.numero }}" placeholder="123">
+            </div>
+            <div>
+                <label for="complemento_emitente">Complemento</label>
+                <input id="complemento_emitente" name="complemento" value="{{ empresa.complemento }}" placeholder="Sala, bloco, referencia">
+            </div>
+            <div>
+                <label for="bairro_emitente">Bairro</label>
+                <input id="bairro_emitente" name="bairro" value="{{ empresa.bairro }}" placeholder="Bairro">
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="cidade_emitente">Cidade</label>
+                <input id="cidade_emitente" name="cidade" value="{{ empresa.cidade }}" placeholder="Cidade">
+            </div>
+            <div>
+                <label for="uf_emitente">UF</label>
+                <input id="uf_emitente" name="uf" value="{{ empresa.uf }}" placeholder="RS" maxlength="2">
+            </div>
+            <div>
+                <label for="cep_emitente">CEP</label>
+                <input id="cep_emitente" name="cep" value="{{ empresa.cep_formatado or empresa.cep }}" placeholder="00000-000">
+            </div>
+            <div>
+                <label for="codigo_servico_padrao">Codigo servico padrao</label>
+                <input id="codigo_servico_padrao" name="codigo_servico_padrao" value="{{ empresa.codigo_servico_padrao }}" placeholder="Codigo usado na sua prefeitura">
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="aliquota_padrao">Aliquota ISS padrao (%)</label>
+                <input id="aliquota_padrao" name="aliquota_padrao" type="number" min="0" step="0.01" value="{{ empresa.aliquota_padrao }}">
+            </div>
+        </div>
+
+        <div class="actions-row actions-row--left">
+            <button type="submit">Salvar dados do emitente</button>
+        </div>
+    </form>
+</div>
+
+<div class="page-card top-spacing">
+    <p class="pill-label">Espelho fiscal</p>
+    <h2 class="section-title top-spacing">Gerar nota fiscal de servico</h2>
+    <p class="muted-text">Esse fluxo organiza os dados fiscais, gera o PDF de apoio e permite registrar manualmente o numero oficial da nota emitida no portal fiscal.</p>
+
+    <form action="/nota_fiscal/gerar" method="POST" class="stack-form stack-form--wide top-spacing" id="nota-form">
+        <input type="hidden" name="origem_orcamento_id" value="{{ prefill.origem_orcamento_id if prefill else '' }}">
+
+        <div class="field-grid">
+            <div>
+                <label for="numero_nota">Numero oficial da nota</label>
+                <input id="numero_nota" name="numero_nota" placeholder="Se ja emitiu no portal, informe aqui">
+            </div>
+            <div>
+                <label for="serie">Serie</label>
+                <input id="serie" name="serie" placeholder="Serie / lote">
+            </div>
+            <div>
+                <label for="ambiente">Ambiente</label>
+                <input id="ambiente" name="ambiente" value="Emissao manual" placeholder="Emissao manual, homologacao, producao...">
+            </div>
+            <div>
+                <label for="codigo_servico">Codigo do servico</label>
+                <input id="codigo_servico" name="codigo_servico" value="{{ prefill.codigo_servico if prefill else empresa.codigo_servico_padrao }}" placeholder="Codigo do servico na prefeitura">
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="cliente_nome">Tomador / cliente</label>
+                <input id="cliente_nome" name="cliente_nome" value="{{ prefill.cliente_nome if prefill else '' }}" placeholder="Nome ou razao social" required>
+            </div>
+            <div>
+                <label for="cliente_documento">CPF ou CNPJ</label>
+                <input id="cliente_documento" name="cliente_documento" value="{{ prefill.cliente_documento if prefill else '' }}" placeholder="Documento do tomador">
+            </div>
+            <div>
+                <label for="cliente_email">E-mail</label>
+                <input id="cliente_email" name="email" value="{{ prefill.email if prefill else '' }}" placeholder="cliente@email.com">
+            </div>
+            <div>
+                <label for="cliente_telefone">Telefone</label>
+                <input id="cliente_telefone" name="telefone" value="{{ prefill.telefone if prefill else '' }}" placeholder="(51) 99999-9999">
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="placa_nota">Placa</label>
+                <input id="placa_nota" name="placa" value="{{ prefill.placa if prefill else '' }}" placeholder="ABC1D23">
+            </div>
+            <div>
+                <label for="modelo_nota">Modelo</label>
+                <input id="modelo_nota" name="modelo" value="{{ prefill.modelo if prefill else '' }}" placeholder="Modelo do veiculo">
+            </div>
+            <div>
+                <label for="aliquota_iss">Aliquota ISS (%)</label>
+                <input id="aliquota_iss" name="aliquota_iss" type="number" min="0" step="0.01" value="{{ prefill.aliquota_iss if prefill else empresa.aliquota_padrao }}">
+            </div>
+            <div>
+                <label for="desconto_nota">Desconto</label>
+                <input id="desconto_nota" name="desconto" type="number" min="0" step="0.01" value="{{ prefill.desconto if prefill else 0 }}">
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="endereco_tomador">Endereco</label>
+                <input id="endereco_tomador" name="endereco" placeholder="Rua / Avenida">
+            </div>
+            <div>
+                <label for="numero_tomador">Numero</label>
+                <input id="numero_tomador" name="numero_endereco" placeholder="123">
+            </div>
+            <div>
+                <label for="complemento_tomador">Complemento</label>
+                <input id="complemento_tomador" name="complemento" placeholder="Sala, bloco, referencia">
+            </div>
+            <div>
+                <label for="bairro_tomador">Bairro</label>
+                <input id="bairro_tomador" name="bairro" placeholder="Bairro">
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="cidade_tomador">Cidade</label>
+                <input id="cidade_tomador" name="cidade" placeholder="Cidade">
+            </div>
+            <div>
+                <label for="uf_tomador">UF</label>
+                <input id="uf_tomador" name="uf" placeholder="RS" maxlength="2">
+            </div>
+            <div>
+                <label for="cep_tomador">CEP</label>
+                <input id="cep_tomador" name="cep" placeholder="00000-000">
+            </div>
+        </div>
+
+        <div class="summary-card">
+            <h3 class="section-title">Itens da nota</h3>
+
+            <div class="preset-row">
+                <select id="select-servico-fiscal">
+                    <option value="">Selecione um servico cadastrado</option>
+                    {% for servico in servicos %}
+                    <option value="{{ servico.nome }}" data-valor="{{ servico.valor }}">{{ servico.nome }} - R$ {{ servico.valor }}</option>
+                    {% endfor %}
+                </select>
+                <button type="button" id="add-servico-fiscal-btn">Adicionar servico</button>
+                <button type="button" id="add-item-fiscal-btn">Adicionar item manual</button>
+            </div>
+
+            <div id="nota-itens" class="line-items top-spacing"></div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="discriminacao">Discriminacao do servico</label>
+                <textarea id="discriminacao" name="discriminacao" placeholder="Descricao fiscal do servico prestado">{{ prefill.discriminacao if prefill else '' }}</textarea>
+            </div>
+            <div>
+                <label for="observacoes_fiscais">Observacoes fiscais</label>
+                <textarea id="observacoes_fiscais" name="observacoes" placeholder="Informacoes complementares da emissao"></textarea>
+            </div>
+        </div>
+
+        <div class="summary-grid">
+            <div class="summary-metric">
+                <strong>Valor dos servicos</strong>
+                <span id="valor-servicos-fiscal">R$ 0,00</span>
+            </div>
+            <div class="summary-metric">
+                <strong>ISS estimado</strong>
+                <span id="valor-iss-fiscal">R$ 0,00</span>
+            </div>
+            <div class="summary-metric">
+                <strong>Total liquido</strong>
+                <span id="valor-total-fiscal">R$ 0,00</span>
+            </div>
+        </div>
+
+        <div class="actions-row actions-row--left">
+            <button type="submit">Salvar e gerar espelho fiscal PDF</button>
+        </div>
+    </form>
+</div>
+
+<div class="page-card top-spacing">
+    <h2 class="section-title">Notas registradas</h2>
+
+    {% if notas %}
+    <div class="document-list top-spacing">
+        {% for item in notas %}
+        <div class="document-card">
+            <div class="document-meta">
+                <div>
+                    <strong>RPS</strong>
+                    {{ item.rps_formatado }}
+                </div>
+                <div>
+                    <strong>Cliente</strong>
+                    {{ item.cliente_nome }}
+                </div>
+                <div>
+                    <strong>Status</strong>
+                    <span class="status-badge {% if item.numero_nota %}status-badge--success{% endif %}">{{ item.status }}</span>
+                </div>
+                <div>
+                    <strong>Numero oficial</strong>
+                    {{ item.numero_nota or "Nao informado" }}
+                </div>
+                <div>
+                    <strong>Total</strong>
+                    R$ {{ item.valor_total_exibicao }}
+                </div>
+                <div>
+                    <strong>Criado em</strong>
+                    {{ item.criado_em_fmt }}
+                </div>
+            </div>
+
+            <div class="actions-row actions-row--left top-spacing">
+                <a href="/nota_fiscal/{{ item.id }}/pdf" class="button-link">
+                    <button type="button">Baixar PDF</button>
+                </a>
+            </div>
+
+            {% if not item.numero_nota %}
+            <form action="/nota_fiscal/{{ item.id }}/registrar" method="POST" class="stack-form stack-form--wide top-spacing">
+                <div class="field-grid">
+                    <div>
+                        <label>Numero oficial da nota</label>
+                        <input name="numero_nota" placeholder="Numero emitido no portal">
+                    </div>
+                    <div>
+                        <label>Serie</label>
+                        <input name="serie" placeholder="Serie">
+                    </div>
+                    <div>
+                        <label>Ambiente</label>
+                        <input name="ambiente" value="{{ item.ambiente or 'Emissao manual' }}">
+                    </div>
+                </div>
+
+                <div class="actions-row actions-row--left">
+                    <button type="submit">Registrar emissao manual</button>
+                </div>
+            </form>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted-text top-spacing">Nenhuma nota fiscal registrada ainda.</p>
+    {% endif %}
+</div>
+
+<script>
+const moedaFiscal = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+const notaItensContainer = document.getElementById("nota-itens");
+const descontoFiscalInput = document.getElementById("desconto_nota");
+const aliquotaFiscalInput = document.getElementById("aliquota_iss");
+const servicosDestino = document.getElementById("valor-servicos-fiscal");
+const issDestino = document.getElementById("valor-iss-fiscal");
+const totalFiscalDestino = document.getElementById("valor-total-fiscal");
+const discriminacaoTextarea = document.getElementById("discriminacao");
+const selectServicoFiscal = document.getElementById("select-servico-fiscal");
+const itensPrefill = {{ (prefill.itens if prefill else [])|tojson }};
+
+function numeroFiscal(valor) {
+    const numero = Number(valor || 0);
+    return Number.isFinite(numero) ? numero : 0;
+}
+
+function atualizarDiscriminacaoPadrao() {
+    if (!discriminacaoTextarea.value.trim()) {
+        const descricoes = [...document.querySelectorAll(".js-item-fiscal-row input[name='item_descricao[]']")]
+            .map((campo) => campo.value.trim())
+            .filter(Boolean);
+        discriminacaoTextarea.value = descricoes.join("; ");
+    }
+}
+
+function recalcularNotaFiscal() {
+    const linhas = [...document.querySelectorAll(".js-item-fiscal-row")];
+    let subtotal = 0;
+
+    linhas.forEach((linha) => {
+        const quantidade = numeroFiscal(linha.querySelector("[data-fiscal-quantidade]").value);
+        const valorUnitario = numeroFiscal(linha.querySelector("[data-fiscal-valor]").value);
+        const total = Math.max(0, quantidade || 0) * Math.max(0, valorUnitario || 0);
+        linha.querySelector("[data-fiscal-total]").textContent = moedaFiscal.format(total);
+        subtotal += total;
+    });
+
+    const desconto = Math.max(0, numeroFiscal(descontoFiscalInput.value));
+    const baseLiquida = Math.max(0, subtotal - desconto);
+    const aliquota = Math.max(0, numeroFiscal(aliquotaFiscalInput.value));
+    const valorIss = baseLiquida * (aliquota / 100);
+
+    servicosDestino.textContent = moedaFiscal.format(subtotal);
+    issDestino.textContent = moedaFiscal.format(valorIss);
+    totalFiscalDestino.textContent = moedaFiscal.format(baseLiquida);
+    atualizarDiscriminacaoPadrao();
+}
+
+function criarLinhaFiscal(descricao = "", quantidade = 1, valorUnitario = 0) {
+    const linha = document.createElement("div");
+    linha.className = "line-item js-item-fiscal-row";
+    linha.innerHTML = `
+        <div class="line-item__grid">
+            <div>
+                <label>Descricao</label>
+                <input name="item_descricao[]" value="${descricao}" placeholder="Descricao do servico" required>
+            </div>
+            <div>
+                <label>Qtd</label>
+                <input name="item_quantidade[]" data-fiscal-quantidade type="number" min="0.01" step="0.01" value="${quantidade}">
+            </div>
+            <div>
+                <label>Unitario</label>
+                <input name="item_valor_unitario[]" data-fiscal-valor type="number" min="0" step="0.01" value="${Number(valorUnitario || 0).toFixed(2)}">
+            </div>
+            <div>
+                <label>Total</label>
+                <div class="line-item__total" data-fiscal-total>${moedaFiscal.format(0)}</div>
+            </div>
+            <div>
+                <label>&nbsp;</label>
+                <button type="button" data-remover-item-fiscal>Remover</button>
+            </div>
+        </div>
+    `;
+
+    linha.querySelector("[data-fiscal-quantidade]").addEventListener("input", recalcularNotaFiscal);
+    linha.querySelector("[data-fiscal-valor]").addEventListener("input", recalcularNotaFiscal);
+    linha.querySelector("[name='item_descricao[]']").addEventListener("input", recalcularNotaFiscal);
+    linha.querySelector("[data-remover-item-fiscal]").addEventListener("click", () => {
+        linha.remove();
+        if (!document.querySelector(".js-item-fiscal-row")) {
+            criarLinhaFiscal();
+        }
+        recalcularNotaFiscal();
+    });
+
+    notaItensContainer.appendChild(linha);
+    recalcularNotaFiscal();
+}
+
+function adicionarServicoFiscal() {
+    const selecionado = selectServicoFiscal.options[selectServicoFiscal.selectedIndex];
+    if (!selecionado || !selecionado.value) {
+        return;
+    }
+
+    criarLinhaFiscal(selecionado.value, 1, selecionado.dataset.valor || 0);
+    selectServicoFiscal.value = "";
+}
+
+document.getElementById("add-servico-fiscal-btn").addEventListener("click", adicionarServicoFiscal);
+document.getElementById("add-item-fiscal-btn").addEventListener("click", () => criarLinhaFiscal());
+descontoFiscalInput.addEventListener("input", recalcularNotaFiscal);
+aliquotaFiscalInput.addEventListener("input", recalcularNotaFiscal);
+
+if (Array.isArray(itensPrefill) && itensPrefill.length) {
+    itensPrefill.forEach((item) => {
+        criarLinhaFiscal(item.descricao || "", item.quantidade || 1, item.valor_unitario || 0);
+    });
+} else {
+    criarLinhaFiscal();
+}
+
+recalcularNotaFiscal();
+</script>
+
+{% endblock %}

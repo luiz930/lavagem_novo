@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+
+{% block title %}Inicio{% endblock %}
+{% block titulo %}Atendimento e cadastro{% endblock %}
+{% block subtitulo %}Busca por placa, abertura de servicos e historico com fotos{% endblock %}
+
+{% block actions %}
+<a href="/painel" class="button-link"><button type="button">Painel</button></a>
+<a href="/clientes" class="button-link"><button type="button">Clientes</button></a>
+{% endblock %}
+
+{% block content %}
+<section class="page-card">
+    <form method="POST" class="inline-form">
+        <div>
+            <label for="placa">Buscar placa</label>
+            <input id="placa" name="placa" value="{{ placa }}" placeholder="Digite a placa" required>
+        </div>
+        <button type="submit">Buscar</button>
+    </form>
+</section>
+
+{% if not buscou %}
+<section class="page-card top-spacing empty-state-card">
+    <h2 class="section-title">Pronto para atender</h2>
+    <p class="muted-text">Busque uma placa para abrir o cadastro, registrar fotos do antes e iniciar um novo servico.</p>
+</section>
+{% endif %}
+
+{% if buscou and dados is none %}
+<section class="page-card top-spacing">
+    <h2 class="section-title">Novo cliente</h2>
+    <form action="/cadastrar" method="POST" class="stack-form stack-form--wide">
+        <div class="field-grid">
+            <input name="placa" value="{{ placa }}" placeholder="Placa" required>
+            <input name="nome" placeholder="Nome do cliente">
+            <input name="telefone" placeholder="Telefone">
+            <input name="modelo" placeholder="Modelo">
+            <input name="cor" placeholder="Cor">
+        </div>
+        <button type="submit">Salvar cadastro</button>
+    </form>
+</section>
+{% endif %}
+
+{% if dados %}
+<section class="dashboard-layout top-spacing">
+    <article class="page-card">
+        <h2 class="section-title">Cliente e veiculo</h2>
+        <div class="service-meta-grid">
+            <div>
+                <span class="meta-label">Cliente</span>
+                <strong>{{ dados.nome or "Nao informado" }}</strong>
+            </div>
+            <div>
+                <span class="meta-label">Telefone</span>
+                <strong>{{ dados.telefone or "Nao informado" }}</strong>
+            </div>
+            <div>
+                <span class="meta-label">Modelo</span>
+                <strong>{{ dados.modelo or "Nao informado" }}</strong>
+            </div>
+            <div>
+                <span class="meta-label">Cor</span>
+                <strong>{{ dados.cor or "Nao informada" }}</strong>
+            </div>
+        </div>
+
+        <details class="top-spacing">
+            <summary>Editar cadastro</summary>
+            <form action="/editar_cliente" method="POST" class="stack-form stack-form--wide top-spacing">
+                <input type="hidden" name="placa_original" value="{{ dados.placa }}">
+                <input type="hidden" name="redirect_to" value="/?placa={{ dados.placa }}">
+                <div class="field-grid">
+                    <input name="placa" value="{{ dados.placa }}" required>
+                    <input name="nome" value="{{ dados.nome }}">
+                    <input name="telefone" value="{{ dados.telefone }}">
+                    <input name="modelo" value="{{ dados.modelo }}">
+                    <input name="cor" value="{{ dados.cor }}">
+                </div>
+                <button type="submit">Atualizar cadastro</button>
+            </form>
+        </details>
+    </article>
+
+    <article class="page-card">
+        <h2 class="section-title">Novo servico</h2>
+        <form action="/servico" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide">
+            <input type="hidden" name="placa" value="{{ dados.placa }}">
+            <input type="hidden" name="redirect_to" value="/?placa={{ dados.placa }}">
+
+            <div class="field-grid">
+                <div>
+                    <label for="tipo">Tipo de servico</label>
+                    {% if servicos_lista %}
+                    <select id="tipo" name="tipo" required>
+                        {% for servico in servicos_lista %}
+                        <option value="{{ servico[1] }}" data-valor="{{ servico[2] }}">{{ servico[1] }} - R$ {{ servico[2] }}</option>
+                        {% endfor %}
+                    </select>
+                    {% else %}
+                    <div class="error-banner">
+                        <p>Cadastre pelo menos um tipo de servico antes de abrir atendimentos.</p>
+                        <a href="/cadastrar_servico" class="button-link"><button type="button">Cadastrar servico</button></a>
+                    </div>
+                    {% endif %}
+                </div>
+                <div>
+                    <label for="status">Status inicial</label>
+                    <select id="status" name="status">
+                        {% for status in status_servicos %}
+                        <option value="{{ status.value }}" {% if status.value == "aguardando" %}selected{% endif %}>{{ status.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="valor">Valor</label>
+                    <input id="valor" name="valor" placeholder="0,00">
+                </div>
+            </div>
+
+            <div>
+                <label for="observacoes">Observacoes</label>
+                <textarea id="observacoes" name="observacoes" rows="4" placeholder="Detalhes, observacoes internas, combinados e necessidades do cliente"></textarea>
+            </div>
+
+            <div class="field-grid">
+                <div>
+                    <label for="fotos_antes">Fotos de antes</label>
+                    <input id="fotos_antes" type="file" name="fotos_antes" accept="image/*" capture="environment" multiple>
+                </div>
+                <div>
+                    <label for="fotos_depois">Fotos de depois</label>
+                    <input id="fotos_depois" type="file" name="fotos_depois" accept="image/*" capture="environment" multiple>
+                </div>
+            </div>
+
+            <button type="submit" {% if not servicos_lista %}disabled{% endif %}>Criar servico</button>
+        </form>
+    </article>
+</section>
+
+<section class="top-spacing">
+    <div class="chart-header">
+        <div>
+            <p class="pill-label">Historico</p>
+            <h2 class="section-title">Servicos da placa {{ dados.placa }}</h2>
+        </div>
+    </div>
+
+    <div class="list-grid">
+        {% for servico in historico %}
+            {% set mostrar_acoes_status = false %}
+            {% set mostrar_uploads = true %}
+            {% include "components/service_card.html" %}
+        {% else %}
+        <div class="page-card">
+            <p class="muted-text">Ainda nao existem servicos registrados para esta placa.</p>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% endblock %}

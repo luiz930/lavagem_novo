@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}Configuracoes{% endblock %}
+{% block titulo %}Configuracoes de Usuario{% endblock %}
+{% block subtitulo %}Senhas, acessos da equipe e perfis do sistema{% endblock %}
+
+{% block actions %}
+<a href="/" class="button-link">
+    <button type="button">Voltar</button>
+</a>
+{% endblock %}
+
+{% block content %}
+
+{% if feedback %}
+<div class="page-card {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
+</div>
+{% endif %}
+
+<div class="page-grid">
+    <div class="page-card">
+        <p class="pill-label">Meu acesso</p>
+        <h2 class="section-title top-spacing">{{ usuario_logado.nome }}</h2>
+        <p><b>Login:</b> {{ usuario_logado.usuario }}</p>
+        <p><b>Perfil:</b> {{ "Administrador" if usuario_logado.perfil == "admin" else "Funcionario" }}</p>
+        <p class="muted-text top-spacing">Use esta area para manter o acesso da equipe organizado e o login principal protegido.</p>
+    </div>
+
+    <div class="page-card">
+        <h2 class="section-title">Alterar minha senha</h2>
+
+        <form action="/configuracoes/senha" method="POST" class="stack-form stack-form--wide">
+            <input name="senha_atual" type="password" placeholder="Senha atual" required>
+            <input name="nova_senha" type="password" placeholder="Nova senha" required>
+            <input name="confirmar_senha" type="password" placeholder="Confirmar nova senha" required>
+
+            <div class="actions-row actions-row--left">
+                <button type="submit">Salvar nova senha</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if admin_logado %}
+<div class="page-card top-spacing">
+    <h2 class="section-title">Novo login de funcionario</h2>
+    <p class="muted-text">Crie acessos individuais para a equipe e mantenha cada usuario sincronizado com o banco de dados.</p>
+
+    <form action="/configuracoes/usuarios" method="POST" class="stack-form stack-form--wide top-spacing">
+        <div class="field-grid">
+            <input name="nome" placeholder="Nome do funcionario" required>
+            <input name="usuario" placeholder="Login do funcionario" required>
+            <input name="senha" type="password" placeholder="Senha inicial" required>
+            <select name="perfil">
+                <option value="funcionario">Funcionario</option>
+                <option value="admin">Administrador</option>
+            </select>
+        </div>
+
+        <div class="actions-row actions-row--left">
+            <button type="submit">Criar acesso</button>
+        </div>
+    </form>
+</div>
+
+<div class="top-spacing">
+    <h2 class="section-title">Acessos cadastrados</h2>
+
+    <div class="list-grid">
+        {% for item in usuarios %}
+        <div class="page-card">
+            <div class="actions-row actions-row--left">
+                <span class="status-badge {% if item.ativo %}status-badge--success{% else %}status-badge--muted{% endif %}">
+                    {% if item.ativo %}Ativo{% else %}Pausado{% endif %}
+                </span>
+                <span class="pill-label">{{ "Administrador" if item.perfil == "admin" else "Funcionario" }}</span>
+            </div>
+
+            <p class="top-spacing"><b>{{ item.nome }}</b></p>
+            <p class="muted-text">Login: {{ item.usuario }}</p>
+            <p class="muted-text">Criado em: {{ item.criado_em_fmt }}</p>
+
+            {% if item.usuario != "admin" %}
+            <div class="actions-row actions-row--left top-spacing">
+                <form action="/configuracoes/usuarios/{{ item.id }}/alternar" method="POST">
+                    <button type="submit">{% if item.ativo %}Pausar acesso{% else %}Ativar acesso{% endif %}</button>
+                </form>
+            </div>
+
+            <details class="top-spacing">
+                <summary>Redefinir senha</summary>
+
+                <form action="/configuracoes/usuarios/{{ item.id }}/senha" method="POST" class="stack-form stack-form--wide top-spacing">
+                    <input name="nova_senha" type="password" placeholder="Nova senha para {{ item.usuario }}" required>
+
+                    <div class="actions-row actions-row--left">
+                        <button type="submit">Salvar senha</button>
+                    </div>
+                </form>
+            </details>
+            {% else %}
+            <p class="muted-text top-spacing">A senha do administrador principal deve ser alterada na area "Alterar minha senha".</p>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="page-card page-card--soft">
+            <p class="muted-text">Nenhum acesso cadastrado ainda.</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
