@@ -48,6 +48,8 @@ UPLOADS_THUMBS_FOLDER = os.path.join(UPLOAD_FOLDER, "thumbs")
 UPLOADS_SERVICOS_FOLDER = os.path.join(UPLOAD_FOLDER, "servicos")
 UPLOADS_PERFIS_FOLDER = os.path.join(UPLOAD_FOLDER, "perfis")
 BACKUP_RETENCAO_PADRAO = 15
+AGENDA_RETORNO_MARCOS = (15, 30, 45)
+AGENDA_RETORNO_LIMITE_ITENS = 18
 FREQUENCIAS_BACKUP = [
     {"value": "diario", "label": "Diario"},
     {"value": "semanal", "label": "Semanal"},
@@ -4436,6 +4438,247 @@ def montar_contexto_lavagem_placa(placa):
         "tipo_alerta": "aviso" if dias_desde is not None and dias_desde >= 15 else "sucesso",
     }
 
+def faixa_retorno_por_dias(dias_desde):
+    if dias_desde is None:
+        return None
+
+    if dias_desde >= 45:
+        return 45
+
+    if dias_desde >= 30:
+        return 30
+
+    if dias_desde >= 15:
+        return 15
+
+    return None
+
+def descrever_faixa_retorno(faixa):
+    if faixa == 45:
+        return "45+ dias"
+    if faixa == 30:
+        return "30+ dias"
+    if faixa == 15:
+        return "15+ dias"
+    return "Sem faixa"
+
+def descrever_prioridade_retorno(faixa):
+    if faixa == 45:
+        return "Urgente"
+    if faixa == 30:
+        return "Contato recomendado"
+    if faixa == 15:
+        return "Lembrete"
+    return "Monitorar"
+
+def montar_sugestao_contato_retorno(item):
+    cliente = (item.get("cliente") or "").strip()
+    primeiro_nome = cliente.split()[0] if cliente else "cliente"
+    placa = item.get("placa") or "veiculo"
+    carro = (item.get("carro") or "").strip()
+    referencia = carro or f"veiculo placa {placa}"
+    dias_desde = item.get("dias_desde")
+    recomendacao = (item.get("recomendacoes") or ["Podemos sugerir um novo cuidado para o carro."])[0]
+    saudacao = (
+        f"Oi {primeiro_nome}, tudo bem?"
+        if cliente else
+        "Ola, tudo bem?"
+    )
+    dias_texto = f"{dias_desde} dias" if dias_desde is not None else "alguns dias"
+    recomendacao = str(recomendacao or "").rstrip(".")
+
+    return (
+        f"{saudacao} Seu {referencia} ja esta ha {dias_texto} sem retornar na Wagen. "
+        f"{recomendacao}. Se quiser, podemos deixar seu atendimento agendado."
+    )
+
+def listar_ultimas_lavagens_sync():
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT
+            placa,
+            cliente,
+            carro,
+            cor,
+            servico,
+            data_lavagem,
+            data_original,
+            id
+        FROM historico_lavagens_sync
+        WHERE placa IS NOT NULL
+          AND TRIM(placa) <> ''
+        ORDER BY
+            UPPER(placa) ASC,
+            CASE
+                WHEN data_lavagem IS NULL OR data_lavagem = '' THEN 1
+                ELSE 0
+            END,
+            data_lavagem DESC,
+            id DESC
+    """)
+    rows = c.fetchall()
+    conn.close()
+
+    ultimos = {}
+
+    for row in rows:
+        item = dict(row)
+        placa = (item.get("placa") or "").strip().upper()
+
+        if not placa or placa in ultimos:
+            continue
+
+        item["placa"] = placa
+        item["origem"] = "historico sincronizado"
+        item["data_ref"] = interpretar_datahora_sistema(item.get("data_lavagem"))
+        ultimos[placa] = item
+
+    return ultimos
+
+def listar_ultimas_lavagens_locais():
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT
+            veiculos.placa,
+            clientes.nome AS cliente,
+            veiculos.modelo AS carro,
+            veiculos.cor AS cor,
+            tipos_servico.nome AS servico,
+            servicos.entrega,
+            servicos.id
+        FROM servicos
+        LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
+        LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
+        LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
+        WHERE servicos.status = 'FINALIZADO'
+          AND servicos.entrega IS NOT NULL
+          AND veiculos.placa IS NOT NULL
+          AND TRIM(veiculos.placa) <> ''
+        ORDER BY
+            UPPER(veiculos.placa) ASC,
+            servicos.entrega DESC,
+            servicos.id DESC
+    """)
+    rows = c.fetchall()
+    conn.close()
+
+    ultimos = {}
+
+    for row in rows:
+        item = dict(row)
+        placa = (item.get("placa") or "").strip().upper()
+
+        if not placa or placa in ultimos:
+            continue
+
+        item["placa"] = placa
+        item["origem"] = "historico interno"
+        item["data_ref"] = interpretar_datahora_sistema(item.get("entrega"))
+        ultimos[placa] = item
+
+    return ultimos
+
+def escolher_referencia_retorno(sync_item=None, local_item=None):
+    sync_data = sync_item.get("data_ref") if sync_item else None
+    local_data = local_item.get("data_ref") if local_item else None
+
+    if sync_item and local_item:
+        if sync_data and local_data:
+            principal = sync_item if sync_data >= local_data else local_item
+            apoio = local_item if principal is sync_item else sync_item
+            return principal, apoio
+        if sync_data:
+            return sync_item, local_item
+        if local_data:
+            return local_item, sync_item
+        return sync_item, local_item
+
+    if sync_item:
+        return sync_item, None
+
+    if local_item:
+        return local_item, None
+
+    return None, None
+
+def mesclar_dados_retorno(principal, apoio=None):
+    dados = {}
+
+    for chave in ("placa", "cliente", "carro", "cor", "servico", "origem"):
+        dados[chave] = (
+            (principal or {}).get(chave) or
+            (apoio or {}).get(chave) or
+            ""
+        )
+
+    dados["data_ref"] = (principal or {}).get("data_ref") or (apoio or {}).get("data_ref")
+    return dados
+
+def listar_agenda_retorno_lavagens(limite=AGENDA_RETORNO_LIMITE_ITENS):
+    historico_sync = listar_ultimas_lavagens_sync()
+    historico_local = listar_ultimas_lavagens_locais()
+    placas = sorted(set(historico_sync.keys()) | set(historico_local.keys()))
+
+    itens = []
+    contadores = {"15": 0, "30": 0, "45": 0}
+    hoje = agora().date()
+
+    for placa in placas:
+        principal, apoio = escolher_referencia_retorno(
+            historico_sync.get(placa),
+            historico_local.get(placa),
+        )
+
+        if not principal:
+            continue
+
+        item = mesclar_dados_retorno(principal, apoio)
+        data_ref = item.get("data_ref")
+
+        if not data_ref:
+            continue
+
+        dias_desde = max(0, (hoje - data_ref.date()).days)
+        faixa = faixa_retorno_por_dias(dias_desde)
+
+        if not faixa:
+            continue
+
+        recomendacoes = gerar_recomendacoes_servicos_lavagem(
+            dias_desde,
+            item.get("servico") or "",
+        )
+
+        item["dias_desde"] = dias_desde
+        item["faixa_alerta"] = faixa
+        item["faixa_label"] = descrever_faixa_retorno(faixa)
+        item["prioridade_label"] = descrever_prioridade_retorno(faixa)
+        item["ultima_lavagem"] = data_ref.strftime("%d/%m/%Y")
+        item["recomendacoes"] = recomendacoes
+        item["sugestao_contato"] = montar_sugestao_contato_retorno(item)
+        itens.append(item)
+        contadores[str(faixa)] += 1
+
+    prioridade = {45: 0, 30: 1, 15: 2}
+    itens.sort(
+        key=lambda item: (
+            prioridade.get(item.get("faixa_alerta"), 3),
+            -(item.get("dias_desde") or 0),
+            item.get("placa") or "",
+        )
+    )
+
+    total = len(itens)
+    return {
+        "total": total,
+        "itens": itens[:max(1, int(limite or AGENDA_RETORNO_LIMITE_ITENS))],
+        "contadores": contadores,
+        "ultima_atualizacao": agora_iso(),
+        "restantes": max(0, total - min(total, max(1, int(limite or AGENDA_RETORNO_LIMITE_ITENS)))),
+    }
+
 def obter_mapeamento_sync_por_form(form):
     return {
         campo["key"]: (form.get(f"campo_{campo['key']}") or "").strip()
@@ -5674,6 +5917,21 @@ def limpar_notificacoes():
     conn.close()
 
     return jsonify({"status": "ok", "removidas": total})
+
+@app.route("/api/agenda-retornos")
+def api_agenda_retorno():
+    if not session.get("usuario"):
+        return jsonify({"erro": "nao autorizado"}), 401
+
+    try:
+        dados = listar_agenda_retorno_lavagens()
+        return jsonify(dados)
+    except Exception as e:
+        print("ERRO AGENDA RETORNOS:", e)
+        return jsonify({
+            "erro": "nao foi possivel carregar a agenda agora",
+            "detalhe": str(e),
+        }), 500
 
 @app.route("/api/hud")
 def api_hud():

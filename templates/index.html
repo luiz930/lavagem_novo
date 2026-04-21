@@ -630,6 +630,11 @@ input[type="file"] {
         width: min(92vw, 320px);
         max-height: 60vh;
     }
+
+    #dropdown-agenda-retorno {
+        width: min(92vw, 360px);
+        max-height: 60vh;
+    }
 }
 
 @media (max-width: 640px) {
@@ -695,6 +700,7 @@ input[type="file"] {
 }
 
 #hud-usuario-avatar {
+    order: 1;
     width: 42px;
     height: 42px;
     border-radius: 50%;
@@ -719,7 +725,8 @@ input[type="file"] {
     display: block;
 }
 
-#btn-sino {
+#btn-sino,
+#btn-agenda-retorno {
     background: #111;
     color: #ffd700;
     border: none;
@@ -736,6 +743,14 @@ input[type="file"] {
     font-size: 18px;
 }
 
+#btn-agenda-retorno {
+    order: 2;
+}
+
+#btn-sino {
+    order: 3;
+}
+
 #badge {
     background: red;
     color: white;
@@ -748,17 +763,178 @@ input[type="file"] {
     right: -4px;
 }
 
+#badge-agenda-retorno {
+    background: #f97316;
+    color: white;
+    border-radius: 999px;
+    padding: 2px 6px;
+    font-size: 11px;
+    margin-left: 0;
+    position: absolute;
+    top: -4px;
+    right: -5px;
+    min-width: 20px;
+    text-align: center;
+}
+
 #dropdown-notificacoes {
     position: absolute;
     right: 0;
     top: 50px;
     width: min(92vw, 300px);
-    max-height: 400px;
+    max-height: 220px;
     overflow-y: auto;
     background: #111;
     border: 1px solid #ffd700;
     border-radius: 10px;
     padding: 10px;
+    box-shadow: 0 18px 32px rgba(0, 0, 0, 0.34);
+    z-index: 10001;
+}
+
+#dropdown-agenda-retorno {
+    position: absolute;
+    right: 58px;
+    top: 50px;
+    width: min(92vw, 360px);
+    max-height: 330px;
+    overflow-y: auto;
+    background: #111827;
+    border: 1px solid #facc15;
+    border-radius: 12px;
+    padding: 12px;
+    box-shadow: 0 18px 32px rgba(0, 0, 0, 0.34);
+    z-index: 10001;
+}
+
+.agenda-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.agenda-header strong {
+    font-size: 14px;
+}
+
+.agenda-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.agenda-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(250, 204, 21, 0.12);
+    border: 1px solid rgba(250, 204, 21, 0.28);
+    color: #fef08a;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.agenda-card {
+    border: 1px solid rgba(250, 204, 21, 0.16);
+    border-radius: 12px;
+    padding: 10px;
+    background: rgba(15, 23, 42, 0.92);
+    margin-bottom: 10px;
+    text-align: left;
+}
+
+.agenda-card:last-child {
+    margin-bottom: 0;
+}
+
+.agenda-card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+
+.agenda-card-top strong {
+    display: block;
+    font-size: 14px;
+    color: #ffffff;
+}
+
+.agenda-card-top span {
+    display: block;
+    margin-top: 2px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.72);
+}
+
+.agenda-priority {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.agenda-priority--15 {
+    background: rgba(250, 204, 21, 0.14);
+    color: #fef08a;
+}
+
+.agenda-priority--30 {
+    background: rgba(251, 146, 60, 0.16);
+    color: #fdba74;
+}
+
+.agenda-priority--45 {
+    background: rgba(239, 68, 68, 0.16);
+    color: #fca5a5;
+}
+
+.agenda-card-meta {
+    font-size: 12px;
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.82);
+}
+
+.agenda-card-meta strong {
+    color: #f8fafc;
+}
+
+.agenda-card-note {
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #fef3c7;
+}
+
+.agenda-card-contact {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed rgba(250, 204, 21, 0.18);
+    font-size: 12px;
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.78);
+}
+
+.agenda-empty {
+    padding: 10px;
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.76);
+    border: 1px dashed rgba(250, 204, 21, 0.18);
+    color: rgba(255, 255, 255, 0.8);
+    text-align: left;
+    line-height: 1.5;
 }
 
 .voice-widget {
@@ -816,7 +992,8 @@ input[type="file"] {
         gap: 8px;
     }
 
-    #btn-sino {
+    #btn-sino,
+    #btn-agenda-retorno {
         width: 44px;
         height: 44px;
     }
@@ -831,6 +1008,11 @@ input[type="file"] {
         right: 12px;
         bottom: 12px;
         width: min(92vw, 260px);
+    }
+
+    #dropdown-agenda-retorno {
+        right: 50px;
+        width: min(94vw, 320px);
     }
 
     .voice-widget-actions {
@@ -1304,6 +1486,61 @@ setTimeout(() => {
 </script>
 
 <script>
+let agendaRetornoData = {
+    total: 0,
+    itens: [],
+    contadores: { "15": 0, "30": 0, "45": 0 },
+    restantes: 0
+};
+
+function garantirAgendaRetornoUI() {
+    const container = document.getElementById("sino-container");
+    if (!container) return;
+
+    let button = document.getElementById("btn-agenda-retorno");
+    const sino = document.getElementById("btn-sino");
+
+    if (!button && sino) {
+        button = document.createElement("button");
+        button.id = "btn-agenda-retorno";
+        button.type = "button";
+        button.title = "Agenda de retornos";
+        button.innerHTML = "&#128197;<span id=\"badge-agenda-retorno\">0</span>";
+        button.onclick = toggleAgendaRetornoDropdown;
+        container.insertBefore(button, sino);
+    }
+
+    let dropdown = document.getElementById("dropdown-agenda-retorno");
+
+    if (!dropdown) {
+        dropdown = document.createElement("div");
+        dropdown.id = "dropdown-agenda-retorno";
+        dropdown.className = "hidden";
+        container.appendChild(dropdown);
+    }
+}
+
+function fecharDropdownsCabecalho(excecaoId = "") {
+    ["dropdown-notificacoes", "dropdown-agenda-retorno"].forEach(id => {
+        if (id === excecaoId) return;
+
+        const el = document.getElementById(id);
+        if (el) {
+            el.classList.add("hidden");
+        }
+    });
+}
+
+function formatarResumoAgenda(contadores) {
+    const dados = contadores || {};
+
+    return [
+        { label: "15d", total: Number(dados["15"] || 0) },
+        { label: "30d", total: Number(dados["30"] || 0) },
+        { label: "45d", total: Number(dados["45"] || 0) }
+    ];
+}
+
 function montarAcoesNotificacoes(dropdown, total) {
     const wrapper = document.createElement("div");
     wrapper.style.marginBottom = "10px";
@@ -1324,6 +1561,97 @@ function montarAcoesNotificacoes(dropdown, total) {
     dropdown.appendChild(wrapper);
 }
 
+function montarCardAgendaRetorno(item) {
+    const card = document.createElement("div");
+    card.className = "agenda-card";
+
+    const recomendacao = (item.recomendacoes || [])[0] || "Contato recomendado.";
+    const carroRef = item.carro || "Carro nao informado";
+    const corRef = item.cor ? ` / ${item.cor}` : "";
+    const clienteRef = item.cliente || "Cliente nao identificado";
+
+    card.innerHTML = `
+        <div class="agenda-card-top">
+            <div>
+                <strong>${item.placa}</strong>
+                <span>${clienteRef}</span>
+            </div>
+            <span class="agenda-priority agenda-priority--${item.faixa_alerta}">
+                ${item.faixa_label}
+            </span>
+        </div>
+        <div class="agenda-card-meta">
+            <div><strong>Carro:</strong> ${carroRef}${corRef}</div>
+            <div><strong>Ultima lavagem:</strong> ${item.ultima_lavagem} (${item.dias_desde} dias)</div>
+            <div><strong>Servico anterior:</strong> ${item.servico || "Nao informado"}</div>
+            <div><strong>Prioridade:</strong> ${item.prioridade_label}</div>
+        </div>
+        <div class="agenda-card-note">${recomendacao}</div>
+        <div class="agenda-card-contact">${item.sugestao_contato || ""}</div>
+    `;
+
+    return card;
+}
+
+function renderizarAgendaRetorno() {
+    garantirAgendaRetornoUI();
+
+    const dropdown = document.getElementById("dropdown-agenda-retorno");
+    const badge = document.getElementById("badge-agenda-retorno");
+
+    if (!dropdown || !badge) {
+        return;
+    }
+
+    dropdown.innerHTML = "";
+    const itensAgenda = agendaRetornoData.itens || [];
+    const totalAgenda = itensAgenda.length;
+
+    const header = document.createElement("div");
+    header.className = "agenda-header";
+    header.innerHTML = `
+        <strong>Agenda de retornos</strong>
+        <span class="agenda-chip">${totalAgenda} carro(s)</span>
+    `;
+    dropdown.appendChild(header);
+
+    const resumo = document.createElement("div");
+    resumo.className = "agenda-summary";
+    formatarResumoAgenda(agendaRetornoData.contadores).forEach(item => {
+        const chip = document.createElement("span");
+        chip.className = "agenda-chip";
+        chip.textContent = `${item.label}: ${item.total}`;
+        resumo.appendChild(chip);
+    });
+    dropdown.appendChild(resumo);
+
+    if (!itensAgenda.length) {
+        const vazio = document.createElement("div");
+        vazio.className = "agenda-empty";
+        vazio.textContent = (
+            "Nenhum carro entrou nas faixas de 15, 30 ou 45 dias agora. " +
+            "Quando houver retorno pendente, ele aparece aqui."
+        );
+        dropdown.appendChild(vazio);
+    } else {
+        itensAgenda.forEach(item => {
+            dropdown.appendChild(montarCardAgendaRetorno(item));
+        });
+
+        if (agendaRetornoData.restantes > 0) {
+            const restante = document.createElement("div");
+            restante.className = "agenda-empty";
+            restante.textContent = (
+                `Ha mais ${agendaRetornoData.restantes} carro(s) pendente(s) nesta agenda.`
+            );
+            dropdown.appendChild(restante);
+        }
+    }
+
+    badge.textContent = String(totalAgenda);
+    badge.style.display = totalAgenda > 0 ? "inline-flex" : "none";
+}
+
 async function carregarNotificacoes() {
     const res = await fetch("/api/notificacoes");
     const dados = await res.json();
@@ -1336,7 +1664,7 @@ async function carregarNotificacoes() {
 
     let naoLidas = 0;
 
-    dados.slice(0, 6).forEach(n => {
+    dados.forEach(n => {
         if (n.lida === 0) naoLidas++;
 
         const div = document.createElement("div");
@@ -1362,13 +1690,59 @@ async function carregarNotificacoes() {
     badge.innerText = naoLidas;
 }
 
-document.getElementById("btn-sino").onclick = () => {
+async function carregarAgendaRetorno() {
+    try {
+        garantirAgendaRetornoUI();
+
+        const res = await fetch("/api/agenda-retornos");
+        const dados = await res.json();
+
+        if (dados && !dados.erro) {
+            agendaRetornoData = dados;
+            renderizarAgendaRetorno();
+        }
+    } catch (e) {
+        console.log("Erro agenda de retornos");
+    }
+}
+
+function toggleAgendaRetornoDropdown(event) {
+    if (event) {
+        event.stopPropagation();
+    }
+
+    garantirAgendaRetornoUI();
+    fecharDropdownsCabecalho("dropdown-agenda-retorno");
+
+    const dropdown = document.getElementById("dropdown-agenda-retorno");
+    if (!dropdown) {
+        return;
+    }
+
+    dropdown.classList.toggle("hidden");
+}
+
+document.getElementById("btn-sino").onclick = (event) => {
+    event.stopPropagation();
+    fecharDropdownsCabecalho("dropdown-notificacoes");
     const drop = document.getElementById("dropdown-notificacoes");
     drop.classList.toggle("hidden");
 };
 
+document.addEventListener("click", (event) => {
+    const container = document.getElementById("sino-container");
+    if (!container || container.contains(event.target)) {
+        return;
+    }
+
+    fecharDropdownsCabecalho();
+});
+
 setInterval(carregarNotificacoes, 5000);
+setInterval(carregarAgendaRetorno, 60000);
+garantirAgendaRetornoUI();
 carregarNotificacoes();
+carregarAgendaRetorno();
 </script>
 
 <script>
@@ -1406,11 +1780,22 @@ function atualizarAvatarUsuario() {
     const container = document.getElementById("sino-container");
     if (!container) return;
 
+    garantirAgendaRetornoUI();
+
     let avatar = document.getElementById("hud-usuario-avatar");
+    const referencia =
+        document.getElementById("btn-agenda-retorno") ||
+        document.getElementById("btn-sino");
+
     if (!avatar) {
         avatar = document.createElement("div");
         avatar.id = "hud-usuario-avatar";
-        container.insertBefore(avatar, document.getElementById("btn-sino"));
+    }
+
+    if (referencia) {
+        container.insertBefore(avatar, referencia);
+    } else {
+        container.prepend(avatar);
     }
 
     avatar.title = hudData.usuario_nome || "Usuario logado";
@@ -1519,7 +1904,6 @@ function atualizarRelogio() {
         alertaAtivo = false;
     }
 } // 🔥 FECHAMENTO CORRETO DA FUNÇÃO
-
 // LOOP
 setInterval(atualizarRelogio, 1000);
 setInterval(atualizarClima, 60000);
