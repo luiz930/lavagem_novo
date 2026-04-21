@@ -18,6 +18,12 @@
 </div>
 {% endif %}
 
+{% if usuario_logado.senha_alteracao_obrigatoria %}
+<div class="page-card error-banner top-spacing">
+    <p>Por seguranca, este acesso precisa trocar a senha antes de continuar usando o sistema. Enquanto isso, as demais areas ficam bloqueadas.</p>
+</div>
+{% endif %}
+
 <div class="page-grid">
     <div class="page-card">
         <p class="pill-label">Meu acesso</p>
@@ -25,6 +31,7 @@
         <p><b>Login:</b> {{ usuario_logado.usuario }}</p>
         <p><b>Perfil:</b> {{ "Administrador" if usuario_logado.perfil == "admin" else "Funcionario" }}</p>
         <p class="muted-text top-spacing">Use esta area para manter o acesso da equipe organizado e o login principal protegido.</p>
+        <p class="muted-text">Padrao minimo: 10+ caracteres, letra maiuscula, minuscula, numero e simbolo.</p>
     </div>
 
     <div class="page-card">
@@ -32,8 +39,8 @@
 
         <form action="/configuracoes/senha" method="POST" class="stack-form stack-form--wide">
             <input name="senha_atual" type="password" placeholder="Senha atual" required>
-            <input name="nova_senha" type="password" placeholder="Nova senha" required>
-            <input name="confirmar_senha" type="password" placeholder="Confirmar nova senha" required>
+            <input name="nova_senha" type="password" placeholder="Nova senha forte" autocomplete="new-password" required>
+            <input name="confirmar_senha" type="password" placeholder="Confirmar nova senha" autocomplete="new-password" required>
 
             <div class="actions-row actions-row--left">
                 <button type="submit">Salvar nova senha</button>
@@ -42,16 +49,29 @@
     </div>
 </div>
 
+<div class="page-card top-spacing">
+    <p class="pill-label">Backup automatico</p>
+    <h2 class="section-title top-spacing">Protecao do banco</h2>
+    <p><b>Status:</b> Ativo</p>
+    <p><b>Ultimo backup:</b> {{ backup_status.ultimo_backup_em_fmt }}</p>
+    <p><b>Quantidade salva:</b> {{ backup_status.quantidade }} arquivo(s)</p>
+    <p><b>Retencao:</b> ultimos {{ backup_status.retencao }} backups</p>
+    <p class="muted-text">Pasta: {{ backup_status.pasta }}</p>
+    {% if backup_status.ultimo_backup_nome %}
+    <p class="muted-text">Arquivo mais recente: {{ backup_status.ultimo_backup_nome }}</p>
+    {% endif %}
+</div>
+
 {% if admin_logado %}
 <div class="page-card top-spacing">
     <h2 class="section-title">Novo login de funcionario</h2>
-    <p class="muted-text">Crie acessos individuais para a equipe e mantenha cada usuario sincronizado com o banco de dados.</p>
+    <p class="muted-text">Crie acessos individuais para a equipe com senha forte. No primeiro login, a troca de senha sera obrigatoria.</p>
 
     <form action="/configuracoes/usuarios" method="POST" class="stack-form stack-form--wide top-spacing">
         <div class="field-grid">
             <input name="nome" placeholder="Nome do funcionario" required>
             <input name="usuario" placeholder="Login do funcionario" required>
-            <input name="senha" type="password" placeholder="Senha inicial" required>
+            <input name="senha" type="password" placeholder="Senha inicial forte" autocomplete="new-password" required>
             <select name="perfil">
                 <option value="funcionario">Funcionario</option>
                 <option value="admin">Administrador</option>
@@ -75,11 +95,21 @@
                     {% if item.ativo %}Ativo{% else %}Pausado{% endif %}
                 </span>
                 <span class="pill-label">{{ "Administrador" if item.perfil == "admin" else "Funcionario" }}</span>
+                {% if item.troca_senha_obrigatoria %}
+                <span class="status-badge status-badge--warning">Troca de senha pendente</span>
+                {% endif %}
+                {% if item.bloqueado %}
+                <span class="status-badge status-badge--warning">Bloqueado temporariamente</span>
+                {% endif %}
             </div>
 
             <p class="top-spacing"><b>{{ item.nome }}</b></p>
             <p class="muted-text">Login: {{ item.usuario }}</p>
             <p class="muted-text">Criado em: {{ item.criado_em_fmt }}</p>
+            <p class="muted-text">Ultimo login: {{ item.ultimo_login_em_fmt or "Ainda nao acessou" }}</p>
+            {% if item.bloqueado %}
+            <p class="muted-text">Bloqueio ate: {{ item.bloqueado_ate_fmt }} ({{ item.bloqueado_restante }})</p>
+            {% endif %}
 
             {% if item.usuario != "admin" %}
             <div class="actions-row actions-row--left top-spacing">
@@ -92,7 +122,7 @@
                 <summary>Redefinir senha</summary>
 
                 <form action="/configuracoes/usuarios/{{ item.id }}/senha" method="POST" class="stack-form stack-form--wide top-spacing">
-                    <input name="nova_senha" type="password" placeholder="Nova senha para {{ item.usuario }}" required>
+                    <input name="nova_senha" type="password" placeholder="Nova senha forte para {{ item.usuario }}" autocomplete="new-password" required>
 
                     <div class="actions-row actions-row--left">
                         <button type="submit">Salvar senha</button>

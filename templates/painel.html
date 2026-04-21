@@ -56,6 +56,26 @@
 
     <p class="muted-text">Fotos: entrada {{ s.fotos_entrada }} | detalhe {{ s.fotos_detalhe }} | saida {{ s.fotos_saida }}</p>
 
+    {% if s.tem_fotos %}
+    <div class="photo-gallery top-spacing">
+        {% for tipo, titulo in [('entrada', 'Entrada'), ('detalhe', 'Detalhe'), ('saida', 'Finalizacao')] %}
+        {% set fotos = s.galeria_fotos.get(tipo, []) %}
+        {% if fotos %}
+        <div class="photo-gallery-group">
+            <p class="photo-gallery-label">{{ titulo }} ({{ fotos|length }})</p>
+            <div class="photo-gallery-track">
+                {% for foto in fotos %}
+                <a href="{{ foto.url }}" target="_blank" rel="noopener" class="photo-thumb-link" title="{{ titulo }} {{ loop.index }}">
+                    <img src="{{ foto.url }}" alt="{{ titulo }} {{ loop.index }}" class="photo-thumb-image">
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
     <div class="actions-row actions-row--left top-spacing">
         <a href="/prioridade/{{ s.id }}/up" class="button-link">
             <button type="button">Subir</button>

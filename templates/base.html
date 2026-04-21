@@ -21,51 +21,159 @@ if ("serviceWorker" in navigator) {
 </script>
 
 <style>
-/* 🔥 SIDEBAR */
+body.responsive-page {
+    overflow-x: hidden;
+}
+
+body.responsive-page.sidebar-open {
+    overflow: hidden;
+}
+
 .sidebar {
     position: fixed;
     top: 0;
-    left: -260px;
+    left: -100%;
     width: 250px;
     height: 100%;
-    background: #111827;
+    background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
     border-right: 2px solid #facc15;
-    padding: 20px;
-    transition: 0.3s;
+    box-shadow: 14px 0 30px rgba(0, 0, 0, 0.35);
+    padding: 24px 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(250, 204, 21, 0.7) rgba(17, 24, 39, 0.42);
     z-index: 2000;
+    transition: left 0.3s ease;
+}
+
+.sidebar::-webkit-scrollbar {
+    width: 10px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+    background: rgba(17, 24, 39, 0.45);
+    border-radius: 999px;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, #facc15, #f59e0b);
+    border-radius: 999px;
+    border: 2px solid rgba(17, 24, 39, 0.72);
 }
 
 .sidebar.show {
     left: 0;
 }
 
-.sidebar a {
+.sidebar-header {
+    margin: 28px 6px 4px;
+    padding: 18px 14px 20px;
+    border: 1px solid rgba(250, 204, 21, 0.22);
+    border-radius: 18px;
+    background: linear-gradient(180deg, rgba(250, 204, 21, 0.14), rgba(250, 204, 21, 0.03));
+    text-align: center;
+}
+
+.sidebar-logo {
+    width: 92px;
+    height: 92px;
     display: block;
-    margin: 10px 0;
+    object-fit: cover;
+    border-radius: 50%;
+    border: 3px solid rgba(250, 204, 21, 0.45);
+    box-shadow: 0 12px 25px rgba(250, 204, 21, 0.15);
+    margin: 0 auto 14px;
+}
+
+.sidebar-title {
+    margin: 0;
+    color: #ffffff;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.sidebar-subtitle {
+    margin: 6px 0 0;
+    color: rgba(250, 204, 21, 0.82);
+    font-size: 11px;
+    letter-spacing: 1.6px;
+    text-transform: uppercase;
+}
+
+.sidebar-nav {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 2px 4px 0;
+}
+
+.sidebar-nav a {
+    width: 100%;
     text-decoration: none;
 }
 
-.sidebar button {
+.sidebar-nav button {
     width: 100%;
+    margin: 0;
+    padding: 14px 16px;
+    border-radius: 14px;
+    border: 1px solid rgba(250, 204, 21, 0.18);
+    background: linear-gradient(135deg, rgba(31, 41, 55, 0.98), rgba(17, 24, 39, 0.98));
+    color: #f9fafb;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: flex-start;
+    text-align: left;
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22);
+    transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
 }
 
-/* 🔥 BOTÃO MENU */
+.sidebar-nav button:hover {
+    background: linear-gradient(135deg, #facc15, #f59e0b);
+    color: #111827;
+    border-color: rgba(250, 204, 21, 0.75);
+    transform: translateX(4px);
+}
+
+.sidebar-nav button span {
+    width: 20px;
+    text-align: center;
+    font-size: 16px;
+}
+
 .menu-btn {
     position: fixed;
     top: 15px;
     left: 15px;
     z-index: 3000;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
+    line-height: 1;
+    text-align: center;
+    padding: 0;
+    margin: 0;
     background: #facc15;
+    border-radius: 6px;
+    box-shadow: 0 0 10px rgba(250, 204, 21, 0.6);
 }
 
-/* 🔥 OVERLAY */
 .overlay {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0,0,0,0.6);
+    background: rgba(0, 0, 0, 0.6);
     display: none;
     z-index: 1500;
 }
@@ -74,29 +182,36 @@ if ("serviceWorker" in navigator) {
     display: block;
 }
 
-/* 🔥 AJUSTE DO CONTEÚDO */
 .main-content {
-    padding-left: 0;
-    transition: 0.3s;
+    margin-left: 0;
+    transition: margin-left 0.3s ease;
 }
 
 .main-content.shift {
-    padding-left: 260px;
+    margin-left: 250px;
 }
-
-/* 🔥 RESPONSIVO GLOBAL */
 
 .responsive-main {
-    transition: 0.3s;
+    transition: margin-left 0.3s ease;
 }
 
-/* 📱 MOBILE */
-@media (max-width: 768px) {
+.no-sidebar {
+    margin-left: 0 !important;
+}
 
+@media (max-width: 1024px) {
+    .page-shell {
+        padding: 0 10px;
+    }
+}
+
+@media (max-width: 768px) {
     .menu-btn {
-        width: 48px;
-        height: 48px;
-        font-size: 22px;
+        top: 12px;
+        left: 12px;
+        width: 44px;
+        height: 44px;
+        font-size: 20px;
     }
 
     .page-header {
@@ -117,40 +232,23 @@ if ("serviceWorker" in navigator) {
         font-size: 1.6rem;
     }
 
-}
-
-/* 📲 TABLET */
-@media (max-width: 1024px) {
-
-    .page-shell {
-        padding: 0 10px;
-    }
-
-}
-
-/* 📱 SIDEBAR MOBILE */
-
-@media (max-width: 768px) {
-
     .sidebar {
-        width: 80%;
-        left: -100%;
+        width: min(82vw, 300px);
+        padding: 22px 12px;
     }
 
-    .sidebar.show {
-        left: 0;
+    .sidebar-header {
+        margin-top: 42px;
+    }
+
+    .sidebar-nav button {
+        padding: 13px 14px;
     }
 
     .main-content.shift {
-        padding-left: 0;
+        margin-left: 0;
     }
 }
-
-/* 🔥 LOGIN SEM SIDEBAR */
-.no-sidebar {
-    padding-left: 0 !important;
-}
-
 </style>
 
 </head>
@@ -159,37 +257,38 @@ if ("serviceWorker" in navigator) {
 
 {% if session.get("usuario") %}
 
-<button class="menu-btn" onclick="toggleMenu()">☰</button>
+<div id="overlay" class="overlay" onclick="toggleSidebar()"></div>
 
 <div id="sidebar" class="sidebar">
-
-    <h2>Wagen</h2>
-<a href="{{ url_for('pagina_nota_fiscal') }}"><button>Nota Fiscal</button></a>
-
-<a href="{{ url_for('index') }}"><button>🏠 Início</button></a>
-<a href="{{ url_for('clientes') }}"><button>👥 Clientes</button></a>
-<a href="{{ url_for('cadastrar_servico') }}"><button>🛠 Serviços</button></a>
-<a href="{{ url_for('itens_checklist') }}"><button>☑️ Itens</button></a>
-<a href="{{ url_for('painel') }}"><button>📊 Painel</button></a>
-<a href="{{ url_for('financeiro') }}"><button>💰 Financeiro</button></a>
-<a href="{{ url_for('pagina_orcamento') }}"><button>🧾 Orçamento</button></a>
-<a href="{{ url_for('cadastrar_pneu') }}"><button>🛞 Pneus</button></a>
-<a href="{{ url_for('clima') }}"><button>🌦 Clima</button></a>
-<a href="{{ url_for('configuracoes') }}"><button>⚙ Configurações</button></a>
-
-<a href="{{ url_for('logout') }}">
-    <button style="background:#dc2626;color:white;width:100%;">🚪 Sair</button>
-</a>
+    <div class="sidebar-header">
+        <img src="/static/logo.jpg" class="sidebar-logo">
+        <h2 class="sidebar-title">Wagen Estetica</h2>
+        <p class="sidebar-subtitle">Gestao Automotiva</p>
     </div>
 
+    <div class="sidebar-nav">
+        <a href="{{ url_for('pagina_nota_fiscal') }}"><button><span>&#128220;</span> Emissao de nota fiscal</button></a>
+        <a href="{{ url_for('painel') }}"><button><span>&#128202;</span> Painel</button></a>
+        <a href="{{ url_for('clientes') }}"><button><span>&#128100;</span> Clientes</button></a>
+        <a href="{{ url_for('cadastrar_servico') }}"><button><span>&#129532;</span> Servicos</button></a>
+        <a href="{{ url_for('itens_checklist') }}"><button><span>&#9745;</span> Itens Checklist</button></a>
+        <a href="{{ url_for('pagina_orcamento') }}"><button><span>&#128196;</span> Orcamentos</button></a>
+        <a href="{{ url_for('financeiro') }}"><button><span>&#128176;</span> Financeiro</button></a>
+        <a href="{{ url_for('cadastrar_pneu') }}"><button><span>&#128736;</span> Pneus</button></a>
+        <a href="{{ url_for('clima') }}"><button><span>&#9729;</span> Clima</button></a>
+        <a href="{{ url_for('configuracoes') }}"><button><span>&#9881;</span> Configuracoes</button></a>
+        <a href="{{ url_for('logout') }}">
+            <button style="background: linear-gradient(135deg, #dc2626, #b91c1c); color: white; border: 1px solid rgba(255, 0, 0, 0.4);">
+                <span>&#128682;</span> Sair
+            </button>
+        </a>
+    </div>
 </div>
 
-<div id="overlay" class="overlay" onclick="toggleMenu()"></div>
+<button class="menu-btn" onclick="toggleSidebar()">&#9776;</button>
 
 {% endif %}
 
-
-<!-- 🔥 CONTEÚDO -->
 <div id="main" class="main-content responsive-main {% if session.get('usuario') %}{% else %}no-sidebar{% endif %}">
 
 <div class="page-shell page-shell--wide">
@@ -220,14 +319,28 @@ if ("serviceWorker" in navigator) {
 </div>
 
 <script>
-function toggleMenu() {
+function toggleSidebar() {
     const sidebar = document.getElementById("sidebar");
     const overlay = document.getElementById("overlay");
     const main = document.getElementById("main");
 
-    sidebar.classList.toggle("show");
-    overlay.classList.toggle("show");
-    main.classList.toggle("shift");
+    if (!sidebar || !overlay || !main) {
+        return;
+    }
+
+    const aberto = sidebar.classList.contains("show");
+
+    if (aberto) {
+        sidebar.classList.remove("show");
+        overlay.classList.remove("show");
+        main.classList.remove("shift");
+        document.body.classList.remove("sidebar-open");
+    } else {
+        sidebar.classList.add("show");
+        overlay.classList.add("show");
+        main.classList.add("shift");
+        document.body.classList.add("sidebar-open");
+    }
 }
 </script>
 

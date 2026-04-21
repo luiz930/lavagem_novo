@@ -5,9 +5,6 @@
 {% block subtitulo %}Monte, salve e gere PDFs mais completos para os clientes{% endblock %}
 
 {% block actions %}
-<a href="/nota_fiscal" class="button-link">
-    <button type="button">Nota Fiscal</button>
-</a>
 <a href="/" class="button-link">
     <button type="button">Voltar</button>
 </a>
@@ -21,13 +18,13 @@
 </div>
 {% endif %}
 
-<div class="page-grid">
+<div class="page-grid page-grid--budget">
     <div class="page-card">
         <p class="pill-label">Novo orcamento</p>
         <h2 class="section-title top-spacing">Dados do cliente e itens</h2>
 
-        <form action="/gerar_orcamento" method="POST" class="stack-form stack-form--wide" id="orcamento-form">
-            <div class="field-grid">
+        <form action="/gerar_orcamento" method="POST" class="stack-form stack-form--wide stack-form--spacious" id="orcamento-form">
+            <div class="field-grid field-grid--budget-search">
                 <div>
                     <label for="placa">Placa</label>
                     <input id="placa" name="placa" placeholder="ABC1D23">
@@ -38,7 +35,7 @@
                 </div>
             </div>
 
-            <div class="field-grid">
+            <div class="field-grid field-grid--budget-main">
                 <div>
                     <label for="nome">Nome do cliente</label>
                     <input id="nome" name="nome" placeholder="Nome do cliente" required>
@@ -53,7 +50,7 @@
                 </div>
             </div>
 
-            <div class="field-grid">
+            <div class="field-grid field-grid--budget-details">
                 <div>
                     <label for="documento">CPF ou CNPJ</label>
                     <input id="documento" name="documento" placeholder="Documento do cliente">
@@ -72,10 +69,10 @@
                 </div>
             </div>
 
-            <div class="summary-card">
+            <div class="summary-card summary-card--budget">
                 <h3 class="section-title">Itens do orcamento</h3>
 
-                <div class="preset-row">
+                <div class="preset-row preset-row--budget">
                     <select id="select-servico-padrao">
                         <option value="">Selecione um servico cadastrado</option>
                         {% for servico in servicos %}
@@ -86,10 +83,10 @@
                     <button type="button" id="add-item-manual-btn">Adicionar item manual</button>
                 </div>
 
-                <div id="orcamento-itens" class="line-items top-spacing"></div>
+                <div id="orcamento-itens" class="line-items line-items--budget top-spacing"></div>
             </div>
 
-            <div class="summary-grid">
+            <div class="summary-grid summary-grid--budget">
                 <div class="summary-metric">
                     <strong>Subtotal</strong>
                     <span id="subtotal-orcamento">R$ 0,00</span>
@@ -115,7 +112,7 @@
         </form>
     </div>
 
-    <div class="page-card page-card--soft helper-panel">
+    <div class="page-card page-card--soft helper-panel page-card--budget-side">
         <p class="pill-label">Emitente atual</p>
         <h2 class="section-title top-spacing">Resumo comercial</h2>
 
@@ -127,14 +124,14 @@
         </p>
         {% else %}
         <div class="alert-inline">
-            Preencha os dados do emitente na tela de Nota Fiscal para deixar os PDFs com CNPJ, endereco e dados da empresa.
+            Preencha os dados da empresa para deixar os PDFs do orcamento mais completos para o cliente.
         </div>
         {% endif %}
 
         <ul>
             <li>Busque a placa para preencher nome, telefone e modelo automaticamente.</li>
             <li>Use servicos cadastrados para ganhar velocidade e mantenha itens manuais para excecoes.</li>
-            <li>Os orcamentos gerados ficam salvos e podem virar base para a pagina fiscal.</li>
+            <li>Os orcamentos gerados ficam salvos com historico proprio para consulta e reimpressao.</li>
         </ul>
     </div>
 </div>
@@ -176,9 +173,6 @@
             <div class="actions-row actions-row--left top-spacing">
                 <a href="/orcamento/{{ item.id }}/pdf" class="button-link">
                     <button type="button">Baixar PDF</button>
-                </a>
-                <a href="/nota_fiscal?orcamento_id={{ item.id }}" class="button-link">
-                    <button type="button">Preparar nota fiscal</button>
                 </a>
             </div>
         </div>

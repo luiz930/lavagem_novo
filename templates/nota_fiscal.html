@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 
 {% block title %}Nota Fiscal{% endblock %}
-{% block titulo %}Emissao Fiscal{% endblock %}
-{% block subtitulo %}Organize os dados do emitente, gere o espelho fiscal e registre a emissao manual{% endblock %}
+{% block titulo %}Emissao de nota fiscal{% endblock %}
+{% block subtitulo %}Centralize a emissao em uma tela propria e acompanhe o historico das notas emitidas{% endblock %}
 
 {% block actions %}
 <a href="/orcamento" class="button-link">
@@ -138,8 +138,203 @@
 </div>
 
 <div class="page-card top-spacing">
+    <p class="pill-label">Integracao futura</p>
+    <h2 class="section-title top-spacing">Preparacao para prefeitura, NFS-e ou NF-e</h2>
+    <p class="muted-text">Essa configuracao nao transmite notas ainda. Ela deixa a aba fiscal pronta para uma integracao futura com prefeitura, Emissor Nacional ou SEFAZ quando voce decidir ativar.</p>
+
+    <div class="summary-grid top-spacing">
+        <div class="summary-metric">
+            <strong>Modo atual</strong>
+            <span>{{ integracao.tipo_integracao_label }}</span>
+        </div>
+        <div class="summary-metric">
+            <strong>Ambiente</strong>
+            <span>{{ integracao.ambiente|default("homologacao")|capitalize }}</span>
+        </div>
+        <div class="summary-metric">
+            <strong>Autenticacao</strong>
+            <span>{{ integracao.autenticacao_tipo_label }}</span>
+        </div>
+        <div class="summary-metric">
+            <strong>Status</strong>
+            <span>
+                <span class="status-badge {% if prontidao_integracao.pronta %}status-badge--success{% elif integracao.tipo_integracao == 'manual' %}status-badge--muted{% else %}status-badge--warning{% endif %}">
+                    {{ prontidao_integracao.status }}
+                </span>
+            </span>
+        </div>
+    </div>
+
+    {% if prontidao_integracao.faltantes or prontidao_integracao.avisos %}
+    <div class="page-grid top-spacing">
+        {% if prontidao_integracao.faltantes %}
+        <div class="summary-card helper-panel">
+            <h3 class="section-title">Pendencias para integrar</h3>
+            <ul>
+                {% for item in prontidao_integracao.faltantes %}
+                <li>{{ item }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if prontidao_integracao.avisos %}
+        <div class="summary-card helper-panel">
+            <h3 class="section-title">Avisos importantes</h3>
+            <ul>
+                {% for item in prontidao_integracao.avisos %}
+                <li>{{ item }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <form action="/nota_fiscal/integracao" method="POST" class="stack-form stack-form--wide top-spacing">
+        <input type="hidden" name="origem_orcamento_id" value="{{ orcamento_origem.id if orcamento_origem else '' }}">
+        <input type="hidden" name="ultimo_status" value="{{ integracao.ultimo_status }}">
+        <input type="hidden" name="ultima_mensagem" value="{{ integracao.ultima_mensagem }}">
+
+        <div class="field-grid">
+            <div>
+                <label for="tipo_integracao">Tipo de integracao</label>
+                <select id="tipo_integracao" name="tipo_integracao">
+                    {% for item in tipos_integracao_fiscal %}
+                    <option value="{{ item.value }}" {% if integracao.tipo_integracao == item.value %}selected{% endif %}>{{ item.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="ambiente_integracao">Ambiente</label>
+                <select id="ambiente_integracao" name="ambiente">
+                    {% for item in ambientes_integracao_fiscal %}
+                    <option value="{{ item.value }}" {% if integracao.ambiente == item.value %}selected{% endif %}>{{ item.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="provedor_nome">Prefeitura / provedor</label>
+                <input id="provedor_nome" name="provedor_nome" value="{{ integracao.provedor_nome }}" placeholder="Betha, IPM, ISSNet, portal proprio...">
+            </div>
+            <div>
+                <label class="inline-toggle" for="integracao_ativa">
+                    <input id="integracao_ativa" type="checkbox" name="ativo" {% if integracao.ativo %}checked{% endif %}>
+                    Ativar configuracao quando estiver pronta
+                </label>
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="municipio_codigo_ibge">Codigo IBGE do municipio</label>
+                <input id="municipio_codigo_ibge" name="municipio_codigo_ibge" value="{{ integracao.municipio_codigo_ibge }}" placeholder="4314902">
+            </div>
+            <div>
+                <label for="municipio_nome">Municipio emissor</label>
+                <input id="municipio_nome" name="municipio_nome" value="{{ integracao.municipio_nome }}" placeholder="Porto Alegre">
+            </div>
+            <div>
+                <label for="uf_integracao">UF</label>
+                <input id="uf_integracao" name="uf" value="{{ integracao.uf }}" placeholder="RS" maxlength="2">
+            </div>
+            <div>
+                <label for="serie_rps">Serie RPS</label>
+                <input id="serie_rps" name="serie_rps" value="{{ integracao.serie_rps }}" placeholder="RPS-001">
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="serie_nfe">Serie NF-e</label>
+                <input id="serie_nfe" name="serie_nfe" value="{{ integracao.serie_nfe }}" placeholder="1">
+            </div>
+            <div>
+                <label for="autenticacao_tipo">Tipo de autenticacao</label>
+                <select id="autenticacao_tipo" name="autenticacao_tipo">
+                    {% for item in autenticacoes_integracao_fiscal %}
+                    <option value="{{ item.value }}" {% if integracao.autenticacao_tipo == item.value %}selected{% endif %}>{{ item.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="certificado_tipo">Certificado digital</label>
+                <select id="certificado_tipo" name="certificado_tipo">
+                    {% for item in tipos_certificado_fiscal %}
+                    <option value="{{ item.value }}" {% if integracao.certificado_tipo == item.value %}selected{% endif %}>{{ item.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="endpoint_emissao">Endpoint de emissao</label>
+                <input id="endpoint_emissao" name="endpoint_emissao" value="{{ integracao.endpoint_emissao }}" placeholder="https://api.prefeitura.com/emissao">
+            </div>
+            <div>
+                <label for="endpoint_consulta">Endpoint de consulta</label>
+                <input id="endpoint_consulta" name="endpoint_consulta" value="{{ integracao.endpoint_consulta }}" placeholder="https://api.prefeitura.com/consulta">
+            </div>
+            <div>
+                <label for="endpoint_cancelamento">Endpoint de cancelamento</label>
+                <input id="endpoint_cancelamento" name="endpoint_cancelamento" value="{{ integracao.endpoint_cancelamento }}" placeholder="https://api.prefeitura.com/cancelamento">
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="usuario_api">Usuario API</label>
+                <input id="usuario_api" name="usuario_api" value="{{ integracao.usuario_api }}" placeholder="usuario da integracao">
+            </div>
+            <div>
+                <label for="senha_api">Senha API</label>
+                <input id="senha_api" type="password" name="senha_api" value="{{ integracao.senha_api }}" placeholder="senha da API">
+            </div>
+            <div>
+                <label for="token_api">Token / API key</label>
+                <input id="token_api" type="password" name="token_api" value="{{ integracao.token_api }}" placeholder="token, bearer ou chave">
+            </div>
+            <div>
+                <label for="token_url">Token URL</label>
+                <input id="token_url" name="token_url" value="{{ integracao.token_url }}" placeholder="https://api.prefeitura.com/oauth/token">
+            </div>
+        </div>
+
+        <div class="field-grid">
+            <div>
+                <label for="client_id">Client ID</label>
+                <input id="client_id" name="client_id" value="{{ integracao.client_id }}" placeholder="client id">
+            </div>
+            <div>
+                <label for="client_secret">Client Secret</label>
+                <input id="client_secret" type="password" name="client_secret" value="{{ integracao.client_secret }}" placeholder="client secret">
+            </div>
+            <div>
+                <label for="certificado_arquivo">Arquivo/referencia do certificado</label>
+                <input id="certificado_arquivo" name="certificado_arquivo" value="{{ integracao.certificado_arquivo }}" placeholder="caminho, alias ou identificador">
+            </div>
+            <div>
+                <label for="certificado_senha">Senha do certificado</label>
+                <input id="certificado_senha" type="password" name="certificado_senha" value="{{ integracao.certificado_senha }}" placeholder="senha do certificado">
+            </div>
+        </div>
+
+        <div class="actions-row actions-row--left">
+            <button type="submit">Salvar configuracao de integracao</button>
+        </div>
+    </form>
+
+    <div class="summary-card top-spacing">
+        <h3 class="section-title">Exemplo de payload para futura integracao</h3>
+        <p class="muted-text">Esse espelho mostra como os dados fiscais ja podem sair estruturados para um conector futuro com prefeitura, NFS-e nacional ou NF-e.</p>
+        <pre class="payload-preview">{{ payload_integracao_json }}</pre>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
     <p class="pill-label">Espelho fiscal</p>
-    <h2 class="section-title top-spacing">Gerar nota fiscal de servico</h2>
+    <h2 class="section-title top-spacing">Emitir nota fiscal de servico</h2>
     <p class="muted-text">Esse fluxo organiza os dados fiscais, gera o PDF de apoio e permite registrar manualmente o numero oficial da nota emitida no portal fiscal.</p>
 
     <form action="/nota_fiscal/gerar" method="POST" class="stack-form stack-form--wide top-spacing" id="nota-form">
@@ -152,11 +347,11 @@
             </div>
             <div>
                 <label for="serie">Serie</label>
-                <input id="serie" name="serie" placeholder="Serie / lote">
+                <input id="serie" name="serie" value="{{ prefill.serie if prefill and prefill.serie else (integracao.serie_nfe if integracao.tipo_integracao == 'nfe_sefaz' else integracao.serie_rps) }}" placeholder="Serie / lote">
             </div>
             <div>
                 <label for="ambiente">Ambiente</label>
-                <input id="ambiente" name="ambiente" value="Emissao manual" placeholder="Emissao manual, homologacao, producao...">
+                <input id="ambiente" name="ambiente" value="{{ prefill.ambiente if prefill and prefill.ambiente else ('Emissao manual' if integracao.tipo_integracao == 'manual' else integracao.ambiente) }}" placeholder="Emissao manual, homologacao, producao...">
             </div>
             <div>
                 <label for="codigo_servico">Codigo do servico</label>
@@ -286,11 +481,11 @@
 </div>
 
 <div class="page-card top-spacing">
-    <h2 class="section-title">Notas registradas</h2>
+    <h2 class="section-title">Notas pendentes de registro</h2>
 
-    {% if notas %}
+    {% if notas_pendentes %}
     <div class="document-list top-spacing">
-        {% for item in notas %}
+        {% for item in notas_pendentes %}
         <div class="document-card">
             <div class="document-meta">
                 <div>
@@ -351,7 +546,54 @@
         {% endfor %}
     </div>
     {% else %}
-    <p class="muted-text top-spacing">Nenhuma nota fiscal registrada ainda.</p>
+    <p class="muted-text top-spacing">Nenhuma nota pendente de registro no momento.</p>
+    {% endif %}
+</div>
+
+<div class="page-card top-spacing">
+    <h2 class="section-title">Historico das notas emitidas</h2>
+
+    {% if notas_emitidas %}
+    <div class="document-list top-spacing">
+        {% for item in notas_emitidas %}
+        <div class="document-card">
+            <div class="document-meta">
+                <div>
+                    <strong>RPS</strong>
+                    {{ item.rps_formatado }}
+                </div>
+                <div>
+                    <strong>Numero oficial</strong>
+                    {{ item.numero_nota }}
+                </div>
+                <div>
+                    <strong>Cliente</strong>
+                    {{ item.cliente_nome }}
+                </div>
+                <div>
+                    <strong>Status</strong>
+                    <span class="status-badge status-badge--success">{{ item.status }}</span>
+                </div>
+                <div>
+                    <strong>Total</strong>
+                    R$ {{ item.valor_total_exibicao }}
+                </div>
+                <div>
+                    <strong>Emitido em</strong>
+                    {{ item.criado_em_fmt }}
+                </div>
+            </div>
+
+            <div class="actions-row actions-row--left top-spacing">
+                <a href="/nota_fiscal/{{ item.id }}/pdf" class="button-link">
+                    <button type="button">Baixar PDF</button>
+                </a>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted-text top-spacing">Nenhuma nota fiscal emitida ainda.</p>
     {% endif %}
 </div>
 

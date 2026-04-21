@@ -104,11 +104,16 @@ input, select {
     top: 15px;
     left: 15px;
     z-index: 3000; /* 🔥 maior que sidebar */
-
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 40px;
     height: 40px;
     font-size: 20px;
-
+    line-height: 1;
+    text-align: center;
+    padding: 0;
+    margin: 0;
     background: #facc15;
     border-radius: 6px;
     box-shadow: 0 0 10px rgba(250, 204, 21, 0.6);
@@ -448,6 +453,52 @@ input[type="file"] {
     grid-column: 1 / -1;
 }
 
+.historico-gallery {
+    margin-top: 12px;
+    display: grid;
+    gap: 14px;
+}
+
+.historico-gallery-group {
+    display: grid;
+    gap: 10px;
+}
+
+.historico-gallery-label {
+    color: #facc15;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.historico-gallery-track {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+}
+
+.historico-thumb-link {
+    flex: 0 0 auto;
+    display: block;
+    text-decoration: none;
+}
+
+.historico-thumb-image {
+    width: 88px;
+    height: 88px;
+    object-fit: cover;
+    border-radius: 14px;
+    border: 1px solid rgba(250, 204, 21, 0.18);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.25);
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.historico-thumb-link:hover .historico-thumb-image {
+    transform: translateY(-2px);
+    border-color: rgba(250, 204, 21, 0.65);
+}
+
 .lavagem-alerta {
     width: min(100%, 980px);
     margin: 16px auto 0;
@@ -723,7 +774,7 @@ input[type="file"] {
 </div>
 
 <div class="sidebar-nav">
-<a href="/nota_fiscal"><button><span>&#128220;</span> Nota Fiscal</button></a>
+<a href="/nota_fiscal"><button><span>&#128220;</span> Emissao de nota fiscal</button></a>
 <a href="/painel"><button><span>&#128202;</span> Painel</button></a>
 <a href="/clientes"><button><span>&#128100;</span> Clientes</button></a>
 <a href="/cadastrar_servico"><button><span>&#129532;</span> Servicos</button></a>
@@ -979,6 +1030,32 @@ Hidro vidros {{ "Sim" if s.hidro_vidros == "Sim" else "Nao" }}
     <div class="historico-meta-item historico-meta-item--wide">
         <strong>Observacoes</strong>
         {{ s.observacoes or "Sem observacoes registradas" }}
+    </div>
+
+    <div class="historico-meta-item historico-meta-item--wide">
+        <strong>Fotos do atendimento</strong>
+
+        {% if s.fotos_entrada or s.fotos_detalhe or s.fotos_saida %}
+        <div class="historico-gallery">
+            {% for tipo, titulo in [('entrada', 'Entrada'), ('detalhe', 'Detalhe'), ('saida', 'Finalizacao')] %}
+            {% set fotos = s.galeria_fotos.get(tipo, []) %}
+            {% if fotos %}
+            <div class="historico-gallery-group">
+                <span class="historico-gallery-label">{{ titulo }} ({{ fotos|length }})</span>
+                <div class="historico-gallery-track">
+                    {% for foto in fotos %}
+                    <a href="{{ foto.url }}" target="_blank" rel="noopener" class="historico-thumb-link" title="{{ titulo }} {{ loop.index }}">
+                        <img src="{{ foto.url }}" alt="{{ titulo }} {{ loop.index }}" class="historico-thumb-image">
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+        {% else %}
+        Sem fotos salvas neste atendimento.
+        {% endif %}
     </div>
 </div>
 </details>

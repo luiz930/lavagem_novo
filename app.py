@@ -7,6 +7,8 @@ import os
 import time
 import hashlib
 import re
+import secrets
+import string
 from threading import Thread
 from io import BytesIO
 from threading import Lock, Thread
@@ -26,6 +28,10 @@ from xml.sax.saxutils import escape as xml_escape
 
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+BACKUP_FOLDER = "backups"
+os.makedirs(BACKUP_FOLDER, exist_ok=True)
+DATABASE_FILE = "database_v2.db"
+BACKUP_RETENCAO_ARQUIVOS = 15
 
 from datetime import datetime, date, time as dt_time
 
@@ -157,6 +163,137 @@ from zoneinfo import ZoneInfo
 def agora():
     return datetime.now(ZoneInfo("America/Sao_Paulo"))
 
+def caminho_banco_absoluto():
+    return os.path.abspath(DATABASE_FILE)
+
+def caminho_diretorio_backup():
+    os.makedirs(BACKUP_FOLDER, exist_ok=True)
+    return os.path.abspath(BACKUP_FOLDER)
+
+def nome_arquivo_backup_banco(datahora=None):
+    datahora = datahora or agora()
+    return f"database_v2_{datahora.strftime('%Y%m%d_%H%M%S')}.db"
+
+def listar_arquivos_backup_banco():
+    pasta = caminho_diretorio_backup()
+    backups = []
+
+    for nome in os.listdir(pasta):
+        if not nome.startswith("database_v2_") or not nome.endswith(".db"):
+            continue
+
+        caminho = os.path.join(pasta, nome)
+        if not os.path.isfile(caminho):
+            continue
+
+        backups.append({
+            "nome": nome,
+            "caminho": caminho,
+            "modificado_em": os.path.getmtime(caminho),
+        })
+
+    backups.sort(key=lambda item: item["modificado_em"], reverse=True)
+    return backups
+
+def limpar_backups_antigos_banco():
+    backups = listar_arquivos_backup_banco()
+    removidos = 0
+
+    for item in backups[BACKUP_RETENCAO_ARQUIVOS:]:
+        try:
+            os.remove(item["caminho"])
+            removidos += 1
+        except Exception:
+            continue
+
+    return removidos
+
+def obter_status_backup_banco():
+    backups = listar_arquivos_backup_banco()
+    ultimo = backups[0] if backups else None
+    caminho_ultimo = ultimo["caminho"] if ultimo else ""
+
+    return {
+        "ativo": True,
+        "pasta": caminho_diretorio_backup(),
+        "retencao": BACKUP_RETENCAO_ARQUIVOS,
+        "quantidade": len(backups),
+        "ultimo_backup": caminho_ultimo,
+        "ultimo_backup_nome": os.path.basename(caminho_ultimo) if caminho_ultimo else "",
+        "ultimo_backup_em": (
+            datetime.fromtimestamp(ultimo["modificado_em"], ZoneInfo("America/Sao_Paulo")).isoformat()
+            if ultimo else ""
+        ),
+        "ultimo_backup_em_fmt": (
+            formatar_datahora(datetime.fromtimestamp(ultimo["modificado_em"], ZoneInfo("America/Sao_Paulo")).isoformat())
+            if ultimo else "Nenhum backup ainda"
+        ),
+    }
+
+def criar_backup_banco(force=False):
+    if not backup_lock.acquire(blocking=False):
+        return False, "Backup ja esta em execucao.", None
+
+    origem = None
+    destino = None
+
+    try:
+        caminho_origem = caminho_banco_absoluto()
+        if not os.path.exists(caminho_origem):
+            return False, "Banco principal nao encontrado para backup.", None
+
+        agora_atual = agora()
+        tag_hoje = agora_atual.strftime("%Y%m%d_")
+        backups = listar_arquivos_backup_banco()
+        ultimo_hoje = next((item for item in backups if item["nome"].startswith(f"database_v2_{tag_hoje}")), None)
+
+        if ultimo_hoje and not force:
+            return True, "Backup diario ja criado hoje.", ultimo_hoje["caminho"]
+
+        destino_path = os.path.join(caminho_diretorio_backup(), nome_arquivo_backup_banco(agora_atual))
+        origem = sqlite3.connect(f"file:{caminho_origem}?mode=ro", uri=True)
+        destino = sqlite3.connect(destino_path)
+
+        with destino:
+            origem.backup(destino)
+
+        limpar_backups_antigos_banco()
+        return True, "Backup automatico do banco criado com sucesso.", destino_path
+    except Exception as e:
+        return False, f"Erro ao criar backup do banco: {e}", None
+    finally:
+        try:
+            if origem:
+                origem.close()
+        except Exception:
+            pass
+        try:
+            if destino:
+                destino.close()
+        except Exception:
+            pass
+        backup_lock.release()
+
+def loop_worker_backup_banco():
+    while True:
+        try:
+            sucesso, mensagem, caminho = criar_backup_banco(force=False)
+            if caminho and "criado com sucesso" in mensagem.lower():
+                print(f"BACKUP: {mensagem} -> {caminho}")
+        except Exception as e:
+            print("ERRO WORKER BACKUP:", e)
+
+        time.sleep(3600)
+
+def iniciar_worker_backup_banco():
+    global backup_worker_iniciado
+
+    if backup_worker_iniciado:
+        return
+
+    backup_worker_iniciado = True
+    Thread(target=loop_worker_backup_banco, daemon=True).start()
+
 def calcular_prioridade(entrada_iso, valor, tipo_nome):
     prioridade = 0
 
@@ -263,6 +400,32 @@ MAPA_PERIODOS_FINANCEIRO = {
     "30dias": "ultimos 30 dias",
     "mes": "mes atual",
 }
+TIPOS_INTEGRACAO_FISCAL = [
+    {"value": "manual", "label": "Manual / sem integracao"},
+    {"value": "nfse_nacional", "label": "NFS-e Padrao Nacional"},
+    {"value": "prefeitura_api", "label": "API da prefeitura / provedor municipal"},
+    {"value": "nfe_sefaz", "label": "NF-e / SEFAZ estadual"},
+]
+AMBIENTES_INTEGRACAO_FISCAL = [
+    {"value": "homologacao", "label": "Homologacao"},
+    {"value": "producao", "label": "Producao"},
+]
+AUTENTICACAO_INTEGRACAO_FISCAL = [
+    {"value": "nenhuma", "label": "Sem autenticacao"},
+    {"value": "token", "label": "Token / Bearer"},
+    {"value": "basic", "label": "Usuario e senha"},
+    {"value": "oauth2", "label": "OAuth2 / Client Credentials"},
+    {"value": "certificado", "label": "Certificado digital"},
+]
+TIPOS_CERTIFICADO_FISCAL = [
+    {"value": "nenhum", "label": "Sem certificado"},
+    {"value": "a1", "label": "A1 / arquivo"},
+    {"value": "a3", "label": "A3 / dispositivo"},
+]
+SENHA_PADRAO_ADMIN_LEGADA = "admin123"
+SENHA_MINIMO_CARACTERES = 10
+MAX_TENTATIVAS_LOGIN = 5
+MINUTOS_BLOQUEIO_LOGIN = 15
 
 ITENS_CHECKLIST_PADRAO = [
     "Aspiracao do interior concluida",
@@ -309,9 +472,11 @@ ALIASES_CAMPOS_SYNC = {
 
 sync_lock = Lock()
 sync_worker_iniciado = False
+backup_lock = Lock()
+backup_worker_iniciado = False
 
 def conectar():
-    conn = sqlite3.connect("database_v2.db")
+    conn = sqlite3.connect(DATABASE_FILE)
     conn.row_factory = sqlite3.Row  # 🔥 ESSENCIAL
     return conn
 
@@ -340,6 +505,25 @@ def atualizar_banco():
     conn = conectar()
     c = conn.cursor()
 
+    def senha_usa_bcrypt_local(valor):
+        texto = str(valor or "")
+        return texto.startswith("$2a$") or texto.startswith("$2b$") or texto.startswith("$2y$")
+
+    def verificar_senha_local(senha_digitada, senha_salva):
+        senha_digitada = str(senha_digitada or "")
+        senha_salva = str(senha_salva or "")
+
+        if not senha_salva:
+            return False
+
+        if senha_usa_bcrypt_local(senha_salva):
+            try:
+                return bcrypt.checkpw(senha_digitada.encode(), senha_salva.encode())
+            except Exception:
+                return False
+
+        return senha_digitada == senha_salva
+
     adicionar_coluna_se_preciso(c, "sincronizacoes_clientes", "ultimo_hash TEXT")
     adicionar_coluna_se_preciso(c, "sincronizacoes_clientes", "colunas_ultima_sync TEXT")
     adicionar_coluna_se_preciso(c, "sincronizacoes_clientes", "campo_servico TEXT")
@@ -354,6 +538,12 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "usuarios", "perfil TEXT")
     adicionar_coluna_se_preciso(c, "usuarios", "ativo INTEGER")
     adicionar_coluna_se_preciso(c, "usuarios", "criado_em TEXT")
+    adicionar_coluna_se_preciso(c, "usuarios", "tentativas_login INTEGER")
+    adicionar_coluna_se_preciso(c, "usuarios", "bloqueado_ate TEXT")
+    adicionar_coluna_se_preciso(c, "usuarios", "ultimo_login_em TEXT")
+    adicionar_coluna_se_preciso(c, "usuarios", "senha_alteracao_obrigatoria INTEGER")
+    adicionar_coluna_se_preciso(c, "usuarios", "senha_atualizada_em TEXT")
+    adicionar_coluna_se_preciso(c, "integracao_fiscal", "token_api TEXT")
 
     c.execute("""
         UPDATE usuarios
@@ -371,6 +561,42 @@ def atualizar_banco():
         UPDATE usuarios
         SET criado_em=COALESCE(criado_em, ?)
     """, (agora().isoformat(timespec="seconds"),))
+    c.execute("""
+        UPDATE usuarios
+        SET tentativas_login=COALESCE(tentativas_login, 0)
+    """)
+    c.execute("""
+        UPDATE usuarios
+        SET senha_alteracao_obrigatoria=COALESCE(senha_alteracao_obrigatoria, 0)
+    """)
+    c.execute("""
+        UPDATE usuarios
+        SET senha_atualizada_em=COALESCE(senha_atualizada_em, criado_em, ?)
+    """, (agora().isoformat(timespec="seconds"),))
+
+    c.execute("""
+        SELECT id, usuario, senha, senha_alteracao_obrigatoria
+        FROM usuarios
+    """)
+    usuarios = c.fetchall()
+    for usuario in usuarios:
+        precisa_troca = False
+        senha_salva = usuario["senha"]
+
+        if not senha_usa_bcrypt_local(senha_salva):
+            precisa_troca = True
+
+        if (
+            str(usuario["usuario"] or "").strip().lower() == "admin" and
+            verificar_senha_local(SENHA_PADRAO_ADMIN_LEGADA, senha_salva)
+        ):
+            precisa_troca = True
+
+        if precisa_troca and not int(usuario["senha_alteracao_obrigatoria"] or 0):
+            c.execute(
+                "UPDATE usuarios SET senha_alteracao_obrigatoria=1 WHERE id=?",
+                (usuario["id"],)
+            )
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS historico_lavagens_sync (
@@ -507,7 +733,7 @@ def init_db():
     atualizar_banco()
 
 def criar_todas_tabelas():
-    conn = sqlite3.connect("database_v2.db")
+    conn = sqlite3.connect(DATABASE_FILE)
     c = conn.cursor()
 
     # 🔔 NOTIFICAÇÕES
@@ -554,7 +780,12 @@ def criar_todas_tabelas():
         nome TEXT,
         perfil TEXT,
         ativo INTEGER DEFAULT 1,
-        criado_em TEXT
+        criado_em TEXT,
+        tentativas_login INTEGER DEFAULT 0,
+        bloqueado_ate TEXT,
+        ultimo_login_em TEXT,
+        senha_alteracao_obrigatoria INTEGER DEFAULT 0,
+        senha_atualizada_em TEXT
     )
     """)
 
@@ -833,6 +1064,36 @@ def criar_todas_tabelas():
         FOREIGN KEY(nota_fiscal_id) REFERENCES notas_fiscais(id)
     )
     """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS integracao_fiscal (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        tipo_integracao TEXT DEFAULT 'manual',
+        provedor_nome TEXT,
+        ambiente TEXT DEFAULT 'homologacao',
+        municipio_codigo_ibge TEXT,
+        municipio_nome TEXT,
+        uf TEXT,
+        endpoint_emissao TEXT,
+        endpoint_consulta TEXT,
+        endpoint_cancelamento TEXT,
+        autenticacao_tipo TEXT DEFAULT 'nenhuma',
+        usuario_api TEXT,
+        senha_api TEXT,
+        client_id TEXT,
+        client_secret TEXT,
+        token_api TEXT,
+        token_url TEXT,
+        certificado_tipo TEXT DEFAULT 'nenhum',
+        certificado_arquivo TEXT,
+        certificado_senha TEXT,
+        serie_rps TEXT,
+        serie_nfe TEXT,
+        ativo INTEGER DEFAULT 0,
+        ultimo_status TEXT,
+        ultima_mensagem TEXT,
+        atualizado_em TEXT
+    )
+    """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_servico_status ON servicos(status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_servico_entrada ON servicos(entrada)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_veiculo_placa ON veiculos(placa)")
@@ -926,6 +1187,86 @@ def verificar_senha_usuario(senha_digitada, senha_salva):
 
     return senha_digitada == senha_salva
 
+def gerar_senha_temporaria_segura(comprimento=18):
+    alfabeto = string.ascii_letters + string.digits + "!@#$%*+-_?"
+    return "".join(secrets.choice(alfabeto) for _ in range(max(14, int(comprimento or 18))))
+
+def validar_forca_senha(senha, usuario=""):
+    senha = str(senha or "")
+    usuario = str(usuario or "").strip().lower()
+
+    if len(senha) < SENHA_MINIMO_CARACTERES:
+        return f"A senha precisa ter pelo menos {SENHA_MINIMO_CARACTERES} caracteres."
+    if usuario and usuario in senha.lower():
+        return "A senha nao pode conter o proprio login."
+    if not re.search(r"[a-z]", senha):
+        return "A senha precisa ter pelo menos uma letra minuscula."
+    if not re.search(r"[A-Z]", senha):
+        return "A senha precisa ter pelo menos uma letra maiuscula."
+    if not re.search(r"\d", senha):
+        return "A senha precisa ter pelo menos um numero."
+    if not re.search(r"[^A-Za-z0-9]", senha):
+        return "A senha precisa ter pelo menos um simbolo."
+    if senha == SENHA_PADRAO_ADMIN_LEGADA:
+        return "Essa senha nao pode ser usada."
+    return None
+
+def senha_padrao_admin_ativa(usuario_row):
+    if not usuario_row:
+        return False
+    if str(usuario_row["usuario"] or "").strip().lower() != "admin":
+        return False
+    return verificar_senha_usuario(SENHA_PADRAO_ADMIN_LEGADA, usuario_row["senha"])
+
+def usuario_precisa_trocar_senha(usuario_row):
+    if not usuario_row:
+        return False
+
+    try:
+        obrigatoria = bool(int(usuario_row["senha_alteracao_obrigatoria"] or 0))
+    except Exception:
+        obrigatoria = False
+
+    senha_salva = str(usuario_row["senha"] or "")
+    if not senha_usa_bcrypt(senha_salva):
+        return True
+
+    if senha_padrao_admin_ativa(usuario_row):
+        return True
+
+    return obrigatoria
+
+def usuario_bloqueado_ate(usuario_row):
+    if not usuario_row:
+        return None
+
+    bloqueado_ate = interpretar_datahora_sistema(usuario_row["bloqueado_ate"])
+    if not bloqueado_ate:
+        return None
+
+    return bloqueado_ate if bloqueado_ate > agora() else None
+
+def registrar_falha_login(c, usuario_row):
+    tentativas = int(usuario_row["tentativas_login"] or 0) + 1
+    bloqueado_ate = None
+
+    if tentativas >= MAX_TENTATIVAS_LOGIN:
+        bloqueado_ate = (agora() + timedelta(minutes=MINUTOS_BLOQUEIO_LOGIN)).isoformat(timespec="seconds")
+        tentativas = 0
+
+    c.execute(
+        "UPDATE usuarios SET tentativas_login=?, bloqueado_ate=? WHERE id=?",
+        (tentativas, bloqueado_ate, usuario_row["id"])
+    )
+    return bloqueado_ate
+
+def limpar_status_login_usuario(c, usuario_id, registrar_login=False):
+    atualizado_em = agora_iso() if registrar_login else None
+    c.execute(
+        "UPDATE usuarios SET tentativas_login=0, bloqueado_ate=?, ultimo_login_em=COALESCE(?, ultimo_login_em) WHERE id=?",
+        (None, atualizado_em, usuario_id)
+    )
+
 def preencher_sessao_usuario(usuario_row, limpar=True):
     if limpar:
         session.clear()
@@ -936,13 +1277,19 @@ def preencher_sessao_usuario(usuario_row, limpar=True):
         usuario_row["perfil"] or
         ("admin" if usuario_row["usuario"] == "admin" else "funcionario")
     )
+    session["senha_alteracao_obrigatoria"] = usuario_precisa_trocar_senha(usuario_row)
     session.permanent = True
 
 def sincronizar_sessao_usuario():
     if not session.get("usuario"):
         return
 
-    if session.get("usuario_id") and session.get("usuario_nome") and session.get("usuario_perfil"):
+    if (
+        session.get("usuario_id") and
+        session.get("usuario_nome") and
+        session.get("usuario_perfil") and
+        "senha_alteracao_obrigatoria" in session
+    ):
         return
 
     conn = conectar()
@@ -1207,6 +1554,275 @@ def salvar_configuracao_empresa_form(form):
     conn.commit()
     conn.close()
 
+def integracao_fiscal_padrao():
+    return {
+        "tipo_integracao": "manual",
+        "provedor_nome": "",
+        "ambiente": "homologacao",
+        "municipio_codigo_ibge": "",
+        "municipio_nome": "",
+        "uf": "",
+        "endpoint_emissao": "",
+        "endpoint_consulta": "",
+        "endpoint_cancelamento": "",
+        "autenticacao_tipo": "nenhuma",
+        "usuario_api": "",
+        "senha_api": "",
+        "client_id": "",
+        "client_secret": "",
+        "token_api": "",
+        "token_url": "",
+        "certificado_tipo": "nenhum",
+        "certificado_arquivo": "",
+        "certificado_senha": "",
+        "serie_rps": "",
+        "serie_nfe": "",
+        "ativo": False,
+        "ultimo_status": "",
+        "ultima_mensagem": "",
+        "atualizado_em": "",
+    }
+
+def obter_configuracao_integracao_fiscal():
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT * FROM integracao_fiscal WHERE id=1")
+    item = c.fetchone()
+    conn.close()
+
+    dados = integracao_fiscal_padrao()
+
+    if item:
+        dados.update(dict(item))
+
+    dados["ativo"] = bool(dados.get("ativo"))
+    dados["tipo_integracao_label"] = next(
+        (item["label"] for item in TIPOS_INTEGRACAO_FISCAL if item["value"] == dados.get("tipo_integracao")),
+        "Manual / sem integracao",
+    )
+    dados["autenticacao_tipo_label"] = next(
+        (item["label"] for item in AUTENTICACAO_INTEGRACAO_FISCAL if item["value"] == dados.get("autenticacao_tipo")),
+        "Sem autenticacao",
+    )
+    dados["certificado_tipo_label"] = next(
+        (item["label"] for item in TIPOS_CERTIFICADO_FISCAL if item["value"] == dados.get("certificado_tipo")),
+        "Sem certificado",
+    )
+    return dados
+
+def salvar_configuracao_integracao_fiscal_form(form):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO integracao_fiscal (
+            id, tipo_integracao, provedor_nome, ambiente, municipio_codigo_ibge, municipio_nome, uf,
+            endpoint_emissao, endpoint_consulta, endpoint_cancelamento, autenticacao_tipo, usuario_api,
+            senha_api, client_id, client_secret, token_api, token_url, certificado_tipo,
+            certificado_arquivo, certificado_senha, serie_rps, serie_nfe, ativo, ultimo_status,
+            ultima_mensagem, atualizado_em
+        )
+        VALUES (
+            1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+        ON CONFLICT(id) DO UPDATE SET
+            tipo_integracao=excluded.tipo_integracao,
+            provedor_nome=excluded.provedor_nome,
+            ambiente=excluded.ambiente,
+            municipio_codigo_ibge=excluded.municipio_codigo_ibge,
+            municipio_nome=excluded.municipio_nome,
+            uf=excluded.uf,
+            endpoint_emissao=excluded.endpoint_emissao,
+            endpoint_consulta=excluded.endpoint_consulta,
+            endpoint_cancelamento=excluded.endpoint_cancelamento,
+            autenticacao_tipo=excluded.autenticacao_tipo,
+            usuario_api=excluded.usuario_api,
+            senha_api=excluded.senha_api,
+            client_id=excluded.client_id,
+            client_secret=excluded.client_secret,
+            token_api=excluded.token_api,
+            token_url=excluded.token_url,
+            certificado_tipo=excluded.certificado_tipo,
+            certificado_arquivo=excluded.certificado_arquivo,
+            certificado_senha=excluded.certificado_senha,
+            serie_rps=excluded.serie_rps,
+            serie_nfe=excluded.serie_nfe,
+            ativo=excluded.ativo,
+            ultimo_status=excluded.ultimo_status,
+            ultima_mensagem=excluded.ultima_mensagem,
+            atualizado_em=excluded.atualizado_em
+    """, (
+        normalizar_texto_campo(form.get("tipo_integracao")) or "manual",
+        normalizar_texto_campo(form.get("provedor_nome")),
+        normalizar_texto_campo(form.get("ambiente")) or "homologacao",
+        re.sub(r"\D", "", str(form.get("municipio_codigo_ibge") or "")),
+        normalizar_texto_campo(form.get("municipio_nome")),
+        normalizar_texto_campo(form.get("uf")).upper()[:2],
+        normalizar_texto_campo(form.get("endpoint_emissao")),
+        normalizar_texto_campo(form.get("endpoint_consulta")),
+        normalizar_texto_campo(form.get("endpoint_cancelamento")),
+        normalizar_texto_campo(form.get("autenticacao_tipo")) or "nenhuma",
+        normalizar_texto_campo(form.get("usuario_api")),
+        normalizar_texto_campo(form.get("senha_api")),
+        normalizar_texto_campo(form.get("client_id")),
+        normalizar_texto_campo(form.get("client_secret")),
+        normalizar_texto_campo(form.get("token_api")),
+        normalizar_texto_campo(form.get("token_url")),
+        normalizar_texto_campo(form.get("certificado_tipo")) or "nenhum",
+        normalizar_texto_campo(form.get("certificado_arquivo")),
+        normalizar_texto_campo(form.get("certificado_senha")),
+        normalizar_texto_campo(form.get("serie_rps")),
+        normalizar_texto_campo(form.get("serie_nfe")),
+        1 if form.get("ativo") else 0,
+        normalizar_texto_campo(form.get("ultimo_status")),
+        normalizar_texto_campo(form.get("ultima_mensagem")),
+        agora_iso(),
+    ))
+    conn.commit()
+    conn.close()
+
+def avaliar_prontidao_integracao_fiscal(empresa, integracao):
+    empresa = empresa or empresa_snapshot_padrao()
+    integracao = integracao or integracao_fiscal_padrao()
+    faltantes = []
+    avisos = []
+    tipo = integracao.get("tipo_integracao") or "manual"
+    autenticacao = integracao.get("autenticacao_tipo") or "nenhuma"
+    certificado = integracao.get("certificado_tipo") or "nenhum"
+
+    if not empresa_possui_dados_fiscais(empresa):
+        faltantes.append("Razao social e CNPJ do emitente")
+
+    if not empresa.get("codigo_servico_padrao"):
+        avisos.append("Definir codigo de servico padrao ajuda no mapeamento fiscal.")
+
+    if tipo == "manual":
+        avisos.append("Modo manual ativo. A estrutura esta preparada, mas sem transmissao automatica.")
+    else:
+        if not integracao.get("ativo"):
+            faltantes.append("Ativar a integracao fiscal")
+
+        if not integracao.get("ambiente"):
+            faltantes.append("Escolher ambiente de homologacao ou producao")
+
+        if tipo in {"nfse_nacional", "prefeitura_api"}:
+            if not integracao.get("municipio_codigo_ibge"):
+                faltantes.append("Codigo IBGE do municipio emissor")
+            if not integracao.get("uf"):
+                faltantes.append("UF do municipio emissor")
+            if not integracao.get("serie_rps"):
+                avisos.append("Definir serie do RPS deixa a emissao municipal pronta para conversao.")
+
+        if tipo == "prefeitura_api":
+            if not integracao.get("provedor_nome"):
+                faltantes.append("Nome do provedor ou prefeitura")
+            if not integracao.get("endpoint_emissao"):
+                faltantes.append("Endpoint de emissao da prefeitura")
+
+        if tipo == "nfse_nacional":
+            avisos.append("No padrao nacional, valide as parametrizacoes do municipio e o fluxo de token/certificado antes de ativar.")
+
+        if tipo == "nfe_sefaz":
+            if not empresa.get("inscricao_estadual"):
+                faltantes.append("Inscricao estadual do emitente")
+            if not integracao.get("uf"):
+                faltantes.append("UF vinculada a SEFAZ")
+            if not integracao.get("serie_nfe"):
+                faltantes.append("Serie da NF-e")
+            avisos.append("NF-e normalmente exige credenciamento e certificado ICP-Brasil.")
+
+        if autenticacao == "basic":
+            if not integracao.get("usuario_api"):
+                faltantes.append("Usuario da API")
+            if not integracao.get("senha_api"):
+                faltantes.append("Senha da API")
+        elif autenticacao == "oauth2":
+            if not integracao.get("token_url"):
+                faltantes.append("URL de token OAuth2")
+            if not integracao.get("client_id"):
+                faltantes.append("Client ID")
+            if not integracao.get("client_secret"):
+                faltantes.append("Client Secret")
+        elif autenticacao == "token":
+            if not integracao.get("token_api"):
+                faltantes.append("Token ou chave de API")
+
+        if certificado == "a1":
+            if not integracao.get("certificado_arquivo"):
+                faltantes.append("Arquivo/referencia do certificado A1")
+            if not integracao.get("certificado_senha"):
+                faltantes.append("Senha do certificado A1")
+        elif certificado == "a3":
+            avisos.append("Certificado A3 exige middleware/dispositivo no ambiente onde a integracao rodar.")
+
+    pronta = not faltantes and tipo != "manual"
+    if pronta:
+        status = "Pronta para homologacao"
+    elif tipo == "manual":
+        status = "Modo manual"
+    else:
+        status = "Configuracao incompleta"
+
+    return {
+        "status": status,
+        "pronta": pronta,
+        "faltantes": faltantes,
+        "avisos": avisos,
+    }
+
+def montar_payload_exemplo_integracao(empresa, integracao, prefill=None):
+    empresa = empresa or empresa_snapshot_padrao()
+    integracao = integracao or integracao_fiscal_padrao()
+    prefill = prefill or {}
+    itens = enriquecer_itens_documento(prefill.get("itens") or [
+        {"descricao": "Lavagem completa", "quantidade": 1, "valor_unitario": 60.0, "valor_total": 60.0},
+    ])
+
+    return {
+        "tipo_integracao": integracao.get("tipo_integracao"),
+        "ambiente": integracao.get("ambiente"),
+        "emitente": {
+            "razao_social": empresa.get("razao_social"),
+            "cnpj": empresa.get("cnpj"),
+            "inscricao_municipal": empresa.get("inscricao_municipal"),
+            "inscricao_estadual": empresa.get("inscricao_estadual"),
+            "municipio_codigo_ibge": integracao.get("municipio_codigo_ibge"),
+            "uf": integracao.get("uf") or empresa.get("uf"),
+        },
+        "tomador": {
+            "nome": prefill.get("cliente_nome", "Cliente exemplo"),
+            "documento": normalizar_documento_fiscal(prefill.get("cliente_documento", "")),
+            "email": prefill.get("email", ""),
+            "telefone": prefill.get("telefone", ""),
+        },
+        "documento": {
+            "codigo_servico": prefill.get("codigo_servico") or empresa.get("codigo_servico_padrao"),
+            "serie_rps": integracao.get("serie_rps"),
+            "serie_nfe": integracao.get("serie_nfe"),
+            "aliquota_iss": converter_valor_numerico(prefill.get("aliquota_iss") or empresa.get("aliquota_padrao")),
+        },
+        "itens": [
+            {
+                "descricao": item.get("descricao"),
+                "quantidade": item.get("quantidade"),
+                "valor_unitario": item.get("valor_unitario"),
+                "valor_total": item.get("valor_total"),
+            }
+            for item in itens
+        ],
+        "endpoints": {
+            "emissao": integracao.get("endpoint_emissao"),
+            "consulta": integracao.get("endpoint_consulta"),
+            "cancelamento": integracao.get("endpoint_cancelamento"),
+        },
+        "autenticacao": {
+            "tipo": integracao.get("autenticacao_tipo"),
+            "token_url": integracao.get("token_url"),
+            "possui_client_id": bool(integracao.get("client_id")),
+            "possui_token_api": bool(integracao.get("token_api")),
+            "certificado_tipo": integracao.get("certificado_tipo"),
+        },
+    }
+
 def serializar_empresa_snapshot(empresa):
     return json.dumps(empresa or empresa_snapshot_padrao(), ensure_ascii=True)
 
@@ -1445,15 +2061,26 @@ def salvar_orcamento(dados, itens, empresa):
     conn.close()
     return buscar_orcamento_completo(orcamento_id)
 
-def listar_notas_fiscais_recentes(limit=8):
+def listar_notas_fiscais_recentes(limit=8, somente_emitidas=False, somente_pendentes=False):
     conn = conectar()
     c = conn.cursor()
-    c.execute("""
+    query = """
         SELECT id, rps_numero, numero_nota, serie, ambiente, status, cliente_nome, valor_total, criado_em
         FROM notas_fiscais
+    """
+    params = []
+
+    if somente_emitidas:
+        query += " WHERE COALESCE(NULLIF(numero_nota, ''), '') <> ''"
+    elif somente_pendentes:
+        query += " WHERE COALESCE(NULLIF(numero_nota, ''), '') = ''"
+
+    query += """
         ORDER BY rps_numero DESC
         LIMIT ?
-    """, (limit,))
+    """
+    params.append(limit)
+    c.execute(query, tuple(params))
     registros = [dict(item) for item in c.fetchall()]
     conn.close()
 
@@ -1929,6 +2556,69 @@ def salvar_fotos_servico(cursor, servico_id, fotos, tipo):
         total_salvas += 1
 
     return total_salvas
+
+def caminho_foto_para_url(caminho):
+    texto = str(caminho or "").strip().replace("\\", "/")
+
+    if not texto:
+        return ""
+
+    if texto.startswith("http://") or texto.startswith("https://"):
+        return texto
+
+    if texto.startswith("/static/"):
+        return texto
+
+    if texto.startswith("static/"):
+        return "/" + quote(texto)
+
+    return "/static/uploads/" + quote(os.path.basename(texto))
+
+def listar_fotos_servicos(ids_servicos):
+    ids = [int(item) for item in (ids_servicos or []) if item]
+
+    if not ids:
+        return {}
+
+    conn = conectar()
+    c = conn.cursor()
+    placeholders = ",".join(["?"] * len(ids))
+    c.execute(f"""
+        SELECT id, servico_id, tipo, caminho, criado_em
+        FROM fotos
+        WHERE servico_id IN ({placeholders})
+        ORDER BY
+            CASE tipo
+                WHEN 'entrada' THEN 0
+                WHEN 'detalhe' THEN 1
+                WHEN 'saida' THEN 2
+                ELSE 3
+            END,
+            id DESC
+    """, ids)
+
+    fotos_por_servico = {}
+    labels = {
+        "entrada": "Entrada",
+        "detalhe": "Detalhe",
+        "saida": "Finalizacao",
+    }
+
+    for row in c.fetchall():
+        foto = dict(row)
+        foto["url"] = caminho_foto_para_url(foto.get("caminho"))
+        foto["arquivo_nome"] = os.path.basename(str(foto.get("caminho") or "").replace("\\", "/"))
+        foto["tipo_label"] = labels.get(foto.get("tipo"), "Foto")
+        foto["criado_em_fmt"] = formatar_datahora(foto.get("criado_em"))
+
+        if not foto["url"]:
+            continue
+
+        grupos = fotos_por_servico.setdefault(foto["servico_id"], {})
+        grupos.setdefault(foto["tipo"], []).append(foto)
+
+    conn.close()
+    return fotos_por_servico
 
 def contar_fotos_validas(fotos):
     return sum(
@@ -3168,10 +3858,32 @@ def preparar_sincronizacoes():
     if request.endpoint == "static":
         return
 
+    iniciar_worker_backup_banco()
     iniciar_worker_sincronizacao()
 
     if session.get("usuario"):
         sincronizar_fontes_pendentes()
+
+@app.before_request
+def exigir_troca_senha_obrigatoria():
+    endpoint = request.endpoint or ""
+
+    if endpoint == "static" or not session.get("usuario"):
+        return
+
+    sincronizar_sessao_usuario()
+
+    if not session.get("senha_alteracao_obrigatoria"):
+        return
+
+    if endpoint in {"configuracoes", "atualizar_minha_senha", "logout"}:
+        return
+
+    definir_feedback_configuracoes(
+        "erro",
+        "Por seguranca, troque sua senha antes de continuar usando o sistema."
+    )
+    return redirect("/configuracoes")
 
 @app.route("/api/cliente/<placa>")
 def buscar_cliente_api(placa):
@@ -3379,6 +4091,8 @@ def pagina_nota_fiscal():
     if not session.get("usuario"):
         return redirect("/login")
 
+    empresa = obter_configuracao_empresa()
+    integracao = obter_configuracao_integracao_fiscal()
     conn = conectar()
     c = conn.cursor()
     c.execute("SELECT nome, valor FROM tipos_servico ORDER BY nome ASC")
@@ -3396,10 +4110,25 @@ def pagina_nota_fiscal():
         else:
             definir_feedback_nota_fiscal("erro", "Nao encontrei o orcamento informado para montar a nota.")
 
+    prontidao_integracao = avaliar_prontidao_integracao_fiscal(empresa, integracao)
+    payload_integracao_json = json.dumps(
+        montar_payload_exemplo_integracao(empresa, integracao, prefill=prefill),
+        indent=2,
+        ensure_ascii=False,
+    )
+
     return render_template(
         "nota_fiscal.html",
-        empresa=obter_configuracao_empresa(),
-        notas=listar_notas_fiscais_recentes(),
+        empresa=empresa,
+        integracao=integracao,
+        prontidao_integracao=prontidao_integracao,
+        payload_integracao_json=payload_integracao_json,
+        tipos_integracao_fiscal=TIPOS_INTEGRACAO_FISCAL,
+        ambientes_integracao_fiscal=AMBIENTES_INTEGRACAO_FISCAL,
+        autenticacoes_integracao_fiscal=AUTENTICACAO_INTEGRACAO_FISCAL,
+        tipos_certificado_fiscal=TIPOS_CERTIFICADO_FISCAL,
+        notas_pendentes=listar_notas_fiscais_recentes(limit=8, somente_pendentes=True),
+        notas_emitidas=listar_notas_fiscais_recentes(limit=20, somente_emitidas=True),
         feedback=session.pop("nota_fiscal_feedback", None),
         servicos=servicos,
         prefill=prefill,
@@ -3413,6 +4142,37 @@ def salvar_emitente_nota_fiscal():
 
     salvar_configuracao_empresa_form(request.form)
     definir_feedback_nota_fiscal("sucesso", "Dados do emitente fiscal salvos com sucesso.")
+
+    origem_id = converter_inteiro(request.form.get("origem_orcamento_id"), 0)
+    if origem_id:
+        return redirect(f"/nota_fiscal?orcamento_id={origem_id}")
+
+    return redirect("/nota_fiscal")
+
+@app.route("/nota_fiscal/integracao", methods=["POST"])
+def salvar_integracao_nota_fiscal():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    salvar_configuracao_integracao_fiscal_form(request.form)
+    integracao = obter_configuracao_integracao_fiscal()
+    prontidao = avaliar_prontidao_integracao_fiscal(obter_configuracao_empresa(), integracao)
+
+    if prontidao["pronta"]:
+        definir_feedback_nota_fiscal(
+            "sucesso",
+            "Configuracao de integracao fiscal salva. O sistema ja esta preparado para avancar para homologacao futura.",
+        )
+    elif integracao.get("tipo_integracao") == "manual":
+        definir_feedback_nota_fiscal(
+            "sucesso",
+            "Estrutura fiscal salva. O sistema segue em modo manual, mas a aba de nota fiscal ficou preparada para integracao futura.",
+        )
+    else:
+        definir_feedback_nota_fiscal(
+            "erro",
+            "Configuracao salva, mas ainda faltam alguns dados para deixar a integracao pronta.",
+        )
 
     origem_id = converter_inteiro(request.form.get("origem_orcamento_id"), 0)
     if origem_id:
@@ -3790,6 +4550,8 @@ def criar_admin():
 
     c.execute("SELECT * FROM usuarios WHERE usuario=?", ("admin",))
     admin = c.fetchone()
+    senha_temporaria = None
+    aviso_troca = False
 
     if admin:
         c.execute("""
@@ -3798,31 +4560,71 @@ def criar_admin():
                 nome=COALESCE(NULLIF(nome, ''), 'Administrador'),
                 perfil=COALESCE(NULLIF(perfil, ''), 'admin'),
                 ativo=COALESCE(ativo, 1),
-                criado_em=COALESCE(criado_em, ?)
+                criado_em=COALESCE(criado_em, ?),
+                tentativas_login=COALESCE(tentativas_login, 0),
+                senha_alteracao_obrigatoria=COALESCE(senha_alteracao_obrigatoria, 0),
+                senha_atualizada_em=COALESCE(senha_atualizada_em, criado_em, ?)
             WHERE usuario='admin'
-        """, (agora_iso(),))
+        """, (agora_iso(), agora_iso()))
+
+        c.execute("SELECT * FROM usuarios WHERE usuario=?", ("admin",))
+        admin_atualizado = c.fetchone()
+
+        if not str(admin_atualizado["senha"] or "").strip():
+            senha_temporaria = gerar_senha_temporaria_segura()
+            c.execute("""
+                UPDATE usuarios
+                SET senha=?, senha_alteracao_obrigatoria=1, senha_atualizada_em=?, tentativas_login=0, bloqueado_ate=NULL
+                WHERE usuario='admin'
+            """, (
+                senha_hash_bcrypt(senha_temporaria),
+                agora_iso(),
+            ))
+        elif senha_padrao_admin_ativa(admin_atualizado) or not senha_usa_bcrypt(admin_atualizado["senha"]):
+            c.execute("""
+                UPDATE usuarios
+                SET senha_alteracao_obrigatoria=1
+                WHERE usuario='admin'
+            """)
+            aviso_troca = True
     else:
+        senha_temporaria = gerar_senha_temporaria_segura()
         c.execute("""
-            INSERT INTO usuarios (usuario, senha, nome, perfil, ativo, criado_em)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO usuarios (
+                usuario, senha, nome, perfil, ativo, criado_em,
+                tentativas_login, bloqueado_ate, ultimo_login_em,
+                senha_alteracao_obrigatoria, senha_atualizada_em
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             "admin",
-            senha_hash_bcrypt("admin123"),
+            senha_hash_bcrypt(senha_temporaria),
             "Administrador",
             "admin",
             1,
             agora_iso(),
+            0,
+            None,
+            None,
+            1,
+            agora_iso(),
         ))
-        print("✅ Admin criado: admin / admin123")
 
     conn.commit()
     conn.close()
+
+    if senha_temporaria:
+        print(f"ADMIN criado/recuperado com senha temporaria segura: admin / {senha_temporaria}")
+        print("ATENCAO: troque essa senha no primeiro login.")
+    elif aviso_troca:
+        print("ATENCAO: senha antiga/padrao do administrador detectada. Troca obrigatoria ativada.")
 
 def carregar_usuarios_configuracao():
     conn = conectar()
     c = conn.cursor()
     c.execute("""
-        SELECT id, usuario, nome, perfil, ativo, criado_em
+        SELECT id, usuario, nome, perfil, ativo, criado_em,
+               tentativas_login, bloqueado_ate, ultimo_login_em, senha_alteracao_obrigatoria
         FROM usuarios
         ORDER BY
             CASE WHEN perfil='admin' THEN 0 ELSE 1 END,
@@ -3837,6 +4639,13 @@ def carregar_usuarios_configuracao():
         item["perfil"] = normalizar_perfil_usuario(item.get("perfil"))
         item["ativo"] = int(item.get("ativo") or 0)
         item["criado_em_fmt"] = formatar_datahora(item.get("criado_em"))
+        item["ultimo_login_em_fmt"] = formatar_datahora(item.get("ultimo_login_em"))
+        item["tentativas_login"] = int(item.get("tentativas_login") or 0)
+        item["troca_senha_obrigatoria"] = bool(int(item.get("senha_alteracao_obrigatoria") or 0))
+        bloqueado_ate = usuario_bloqueado_ate(item)
+        item["bloqueado"] = bool(bloqueado_ate)
+        item["bloqueado_ate_fmt"] = formatar_datahora(item.get("bloqueado_ate"))
+        item["bloqueado_restante"] = formatar_tempo_restante(item.get("bloqueado_ate")) if bloqueado_ate else ""
 
     return usuarios
 
@@ -3846,6 +4655,9 @@ criar_admin()
 def login():
 
     if session.get("usuario"):
+        sincronizar_sessao_usuario()
+        if session.get("senha_alteracao_obrigatoria"):
+            return redirect("/configuracoes")
         return redirect("/")
 
     if request.method == "POST":
@@ -3869,21 +4681,49 @@ def login():
             conn.close()
             return render_template("login.html", erro="Este acesso esta desativado.")
 
-        if not verificar_senha_usuario(senha, user["senha"]):
+        bloqueado_ate = usuario_bloqueado_ate(user)
+        if bloqueado_ate:
             conn.close()
+            return render_template(
+                "login.html",
+                erro=f"Login bloqueado temporariamente. {formatar_tempo_restante(bloqueado_ate.isoformat(timespec='seconds'))} para tentar de novo."
+            )
+
+        if not verificar_senha_usuario(senha, user["senha"]):
+            novo_bloqueio = registrar_falha_login(c, user)
+            conn.commit()
+            conn.close()
+            if novo_bloqueio:
+                return render_template(
+                    "login.html",
+                    erro=f"Muitas tentativas invalidas. Login bloqueado por {MINUTOS_BLOQUEIO_LOGIN} minutos."
+                )
             return render_template("login.html", erro="Usuario ou senha invalidos.")
 
         if not senha_usa_bcrypt(user["senha"]):
             c.execute(
-                "UPDATE usuarios SET senha=? WHERE id=?",
-                (senha_hash_bcrypt(senha), user["id"])
+                "UPDATE usuarios SET senha=?, senha_alteracao_obrigatoria=1, senha_atualizada_em=? WHERE id=?",
+                (senha_hash_bcrypt(senha), agora_iso(), user["id"])
             )
-            conn.commit()
-            c.execute("SELECT * FROM usuarios WHERE id=?", (user["id"],))
-            user = c.fetchone()
+        elif senha_padrao_admin_ativa(user):
+            c.execute(
+                "UPDATE usuarios SET senha_alteracao_obrigatoria=1 WHERE id=?",
+                (user["id"],)
+            )
+
+        limpar_status_login_usuario(c, user["id"], registrar_login=True)
+        conn.commit()
+        c.execute("SELECT * FROM usuarios WHERE id=?", (user["id"],))
+        user = c.fetchone()
 
         conn.close()
         preencher_sessao_usuario(user)
+        if session.get("senha_alteracao_obrigatoria"):
+            definir_feedback_configuracoes(
+                "erro",
+                "Por seguranca, troque sua senha antes de continuar. Senhas temporarias, padrao ou antigas nao ficam liberadas no sistema."
+            )
+            return redirect("/configuracoes")
         return redirect("/")
 
     return render_template("login.html")
@@ -3899,7 +4739,8 @@ def configuracoes():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    usuarios = carregar_usuarios_configuracao() if usuario_admin() else []
+    pode_gerenciar_usuarios = usuario_admin() and not session.get("senha_alteracao_obrigatoria")
+    usuarios = carregar_usuarios_configuracao() if pode_gerenciar_usuarios else []
 
     return render_template(
         "configuracoes.html",
@@ -3911,9 +4752,11 @@ def configuracoes():
             "perfil": session.get("usuario_perfil") or (
                 "admin" if session.get("usuario") == "admin" else "funcionario"
             ),
+            "senha_alteracao_obrigatoria": bool(session.get("senha_alteracao_obrigatoria")),
         },
         usuarios=usuarios,
-        admin_logado=usuario_admin(),
+        admin_logado=pode_gerenciar_usuarios,
+        backup_status=obter_status_backup_banco(),
     )
 
 @app.route("/configuracoes/senha", methods=["POST"])
@@ -3934,10 +4777,6 @@ def atualizar_minha_senha():
         definir_feedback_configuracoes("erro", "A confirmacao da nova senha nao confere.")
         return redirect("/configuracoes")
 
-    if len(nova_senha) < 4:
-        definir_feedback_configuracoes("erro", "A nova senha precisa ter pelo menos 4 caracteres.")
-        return redirect("/configuracoes")
-
     conn = conectar()
     c = conn.cursor()
     c.execute("SELECT * FROM usuarios WHERE id=?", (session.get("usuario_id"),))
@@ -3948,9 +4787,24 @@ def atualizar_minha_senha():
         definir_feedback_configuracoes("erro", "A senha atual informada esta incorreta.")
         return redirect("/configuracoes")
 
+    erro_forca = validar_forca_senha(nova_senha, session.get("usuario"))
+    if erro_forca:
+        conn.close()
+        definir_feedback_configuracoes("erro", erro_forca)
+        return redirect("/configuracoes")
+
+    if verificar_senha_usuario(nova_senha, usuario["senha"]):
+        conn.close()
+        definir_feedback_configuracoes("erro", "Escolha uma senha diferente da atual.")
+        return redirect("/configuracoes")
+
     c.execute(
-        "UPDATE usuarios SET senha=? WHERE id=?",
-        (senha_hash_bcrypt(nova_senha), usuario["id"])
+        """
+        UPDATE usuarios
+        SET senha=?, senha_alteracao_obrigatoria=0, senha_atualizada_em=?, tentativas_login=0, bloqueado_ate=NULL
+        WHERE id=?
+        """,
+        (senha_hash_bcrypt(nova_senha), agora_iso(), usuario["id"])
     )
     conn.commit()
     c.execute("SELECT * FROM usuarios WHERE id=?", (usuario["id"],))
@@ -3958,7 +4812,7 @@ def atualizar_minha_senha():
     conn.close()
 
     preencher_sessao_usuario(usuario_atualizado)
-    definir_feedback_configuracoes("sucesso", "Senha atualizada com sucesso.")
+    definir_feedback_configuracoes("sucesso", "Senha atualizada com sucesso. Seu acesso agora esta protegido com hash bcrypt e politica forte.")
     return redirect("/configuracoes")
 
 @app.route("/configuracoes/usuarios", methods=["POST"])
@@ -3980,8 +4834,9 @@ def criar_usuario_funcionario():
         definir_feedback_configuracoes("erro", "Informe nome, login e senha para criar o usuario.")
         return redirect("/configuracoes")
 
-    if len(senha) < 4:
-        definir_feedback_configuracoes("erro", "A senha inicial precisa ter pelo menos 4 caracteres.")
+    erro_forca = validar_forca_senha(senha, usuario)
+    if erro_forca:
+        definir_feedback_configuracoes("erro", erro_forca)
         return redirect("/configuracoes")
 
     conn = conectar()
@@ -3995,19 +4850,24 @@ def criar_usuario_funcionario():
         return redirect("/configuracoes")
 
     c.execute("""
-        INSERT INTO usuarios (usuario, senha, nome, perfil, ativo, criado_em)
-        VALUES (?, ?, ?, ?, 1, ?)
+        INSERT INTO usuarios (
+            usuario, senha, nome, perfil, ativo, criado_em,
+            tentativas_login, bloqueado_ate, ultimo_login_em,
+            senha_alteracao_obrigatoria, senha_atualizada_em
+        )
+        VALUES (?, ?, ?, ?, 1, ?, 0, NULL, NULL, 1, ?)
     """, (
         usuario,
         senha_hash_bcrypt(senha),
         nome,
         perfil,
         agora_iso(),
+        agora_iso(),
     ))
     conn.commit()
     conn.close()
 
-    definir_feedback_configuracoes("sucesso", f"Usuario {usuario} criado com sucesso.")
+    definir_feedback_configuracoes("sucesso", f"Usuario {usuario} criado com sucesso. A troca de senha sera obrigatoria no primeiro login.")
     return redirect("/configuracoes")
 
 @app.route("/configuracoes/usuarios/<int:usuario_id>/senha", methods=["POST"])
@@ -4022,10 +4882,6 @@ def redefinir_senha_usuario(usuario_id):
 
     nova_senha = request.form.get("nova_senha") or ""
 
-    if len(nova_senha) < 4:
-        definir_feedback_configuracoes("erro", "A nova senha precisa ter pelo menos 4 caracteres.")
-        return redirect("/configuracoes")
-
     conn = conectar()
     c = conn.cursor()
     c.execute("SELECT id, usuario, perfil FROM usuarios WHERE id=?", (usuario_id,))
@@ -4036,14 +4892,24 @@ def redefinir_senha_usuario(usuario_id):
         definir_feedback_configuracoes("erro", "Usuario nao encontrado.")
         return redirect("/configuracoes")
 
+    erro_forca = validar_forca_senha(nova_senha, alvo["usuario"])
+    if erro_forca:
+        conn.close()
+        definir_feedback_configuracoes("erro", erro_forca)
+        return redirect("/configuracoes")
+
     c.execute(
-        "UPDATE usuarios SET senha=? WHERE id=?",
-        (senha_hash_bcrypt(nova_senha), usuario_id)
+        """
+        UPDATE usuarios
+        SET senha=?, senha_alteracao_obrigatoria=1, senha_atualizada_em=?, tentativas_login=0, bloqueado_ate=NULL
+        WHERE id=?
+        """,
+        (senha_hash_bcrypt(nova_senha), agora_iso(), usuario_id)
     )
     conn.commit()
     conn.close()
 
-    definir_feedback_configuracoes("sucesso", f"Senha do usuario {alvo['usuario']} atualizada.")
+    definir_feedback_configuracoes("sucesso", f"Senha do usuario {alvo['usuario']} atualizada. Ele vai precisar trocar a senha no proximo login.")
     return redirect("/configuracoes")
 
 @app.route("/configuracoes/usuarios/<int:usuario_id>/alternar", methods=["POST"])
@@ -4381,6 +5247,7 @@ def index():
                 """, (veiculo_id,))
 
                 historico_db = c.fetchall()
+                fotos_por_servico = listar_fotos_servicos([row["id"] for row in historico_db])
 
                 # 🔥 FORMATAR HISTÓRICO
                 historico_formatado = []
@@ -4422,6 +5289,10 @@ def index():
                     checklist_itens = [row["item_nome"] for row in c.fetchall()]
                     s_dict["checklist_itens"] = checklist_itens
                     s_dict["checklist_resumo"] = ", ".join(checklist_itens)
+                    s_dict["galeria_fotos"] = fotos_por_servico.get(s_dict["id"], {})
+                    s_dict["fotos_entrada"] = len(s_dict["galeria_fotos"].get("entrada", []))
+                    s_dict["fotos_detalhe"] = len(s_dict["galeria_fotos"].get("detalhe", []))
+                    s_dict["fotos_saida"] = len(s_dict["galeria_fotos"].get("saida", []))
 
                     historico_formatado.append({
                         "servico": s_dict,
@@ -5403,23 +6274,9 @@ def painel():
     c.execute("SELECT nome FROM produtos_pneu ORDER BY nome")
     produtos_pneu = [row[0] for row in c.fetchall()]
 
-    fotos_por_servico = {}
     ids_servicos = [row["id"] for row in servicos_db]
-
-    if ids_servicos:
-        placeholders = ",".join(["?"] * len(ids_servicos))
-        c.execute(f"""
-            SELECT servico_id, tipo, COUNT(*) AS total
-            FROM fotos
-            WHERE servico_id IN ({placeholders})
-            GROUP BY servico_id, tipo
-        """, ids_servicos)
-
-        for foto in c.fetchall():
-            mapa = fotos_por_servico.setdefault(foto["servico_id"], {})
-            mapa[foto["tipo"]] = foto["total"]
-
     conn.close()
+    fotos_por_servico = listar_fotos_servicos(ids_servicos)
 
     servicos = []
 
@@ -5471,9 +6328,11 @@ def painel():
         s_dict["cera"] = s_dict.get("cera") or "Nao"
         s_dict["hidro_lataria"] = s_dict.get("hidro_lataria") or "Nao"
         s_dict["hidro_vidros"] = s_dict.get("hidro_vidros") or "Nao"
-        s_dict["fotos_entrada"] = fotos_por_servico.get(s_dict["id"], {}).get("entrada", 0)
-        s_dict["fotos_detalhe"] = fotos_por_servico.get(s_dict["id"], {}).get("detalhe", 0)
-        s_dict["fotos_saida"] = fotos_por_servico.get(s_dict["id"], {}).get("saida", 0)
+        s_dict["galeria_fotos"] = fotos_por_servico.get(s_dict["id"], {})
+        s_dict["fotos_entrada"] = len(s_dict["galeria_fotos"].get("entrada", []))
+        s_dict["fotos_detalhe"] = len(s_dict["galeria_fotos"].get("detalhe", []))
+        s_dict["fotos_saida"] = len(s_dict["galeria_fotos"].get("saida", []))
+        s_dict["tem_fotos"] = bool(s_dict["fotos_entrada"] or s_dict["fotos_detalhe"] or s_dict["fotos_saida"])
 
         servicos.append(s_dict)
 
