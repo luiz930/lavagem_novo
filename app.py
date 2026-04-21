@@ -1,9 +1,10 @@
-from flask import Flask, render_template, request, redirect, session, jsonify
+from flask import Flask, render_template, request, redirect, session, jsonify, has_request_context
 import csv
 import json
 import sqlite3
 from zoneinfo import ZoneInfo
 import os
+import shutil
 import time
 import hashlib
 import re
@@ -26,12 +27,36 @@ from reportlab.platypus import Flowable
 from reportlab.lib.utils import ImageReader
 from xml.sax.saxutils import escape as xml_escape
 
+try:
+    from PIL import Image, ImageFile, ImageOps, UnidentifiedImageError
+    ImageFile.LOAD_TRUNCATED_IMAGES = True
+    PILLOW_DISPONIVEL = True
+except Exception:
+    Image = None
+    ImageFile = None
+    ImageOps = None
+    UnidentifiedImageError = Exception
+    PILLOW_DISPONIVEL = False
+
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 BACKUP_FOLDER = "backups"
 os.makedirs(BACKUP_FOLDER, exist_ok=True)
 DATABASE_FILE = "database_v2.db"
-BACKUP_RETENCAO_ARQUIVOS = 15
+UPLOADS_ORFAOS_FOLDER = os.path.join(UPLOAD_FOLDER, "orfaos")
+UPLOADS_THUMBS_FOLDER = os.path.join(UPLOAD_FOLDER, "thumbs")
+UPLOADS_SERVICOS_FOLDER = os.path.join(UPLOAD_FOLDER, "servicos")
+BACKUP_RETENCAO_PADRAO = 15
+FREQUENCIAS_BACKUP = [
+    {"value": "diario", "label": "Diario"},
+    {"value": "semanal", "label": "Semanal"},
+    {"value": "mensal", "label": "Mensal"},
+]
+FOTO_MAX_DIMENSAO = 1600
+FOTO_QUALIDADE_JPEG = 82
+RETENCAO_ORFAOS_DIAS = 30
+RETENCAO_THUMBS_DIAS = 7
+IDADE_MINIMA_ORFAO_SEGUNDOS = 600
 
 from datetime import datetime, date, time as dt_time
 
@@ -96,17 +121,27 @@ def montar_mensagem_sheety_bloqueado(status_code=None, intervalo_minutos=None):
     estimativa = estimar_requisicoes_mensais(intervalo_minutos)
     if estimativa:
         partes.append(
-            f"No intervalo atual de {intervalo_minutos} minutos, a sincronizacao tenta cerca de {estimativa} leituras por mes."
+            (
+                f"No intervalo atual de {intervalo_minutos} minutos, "
+                f"a sincronizacao tenta cerca de {estimativa} leituras por mes."
+            )
         )
 
         if estimativa > 200:
             partes.append(
-                "No plano gratis do Sheety, a pagina de precos informa 200 requests por mes. "
-                "Para uso continuo, use um link direto da planilha (Google Sheets/OneDrive/SharePoint) ou aumente o plano do Sheety."
+                (
+                    "No plano gratis do Sheety, a pagina de precos informa "
+                    "200 requests por mes. "
+                    "Para uso continuo, use um link direto da planilha "
+                    "(Google Sheets/OneDrive/SharePoint) ou aumente o plano do Sheety."
+                )
             )
 
     partes.append(
-        "Para parar de dar erro recorrente, a melhor opcao e trocar o link do Sheety pelo link direto/exportavel da planilha."
+        (
+            "Para parar de dar erro recorrente, a melhor opcao e trocar o "
+            "link do Sheety pelo link direto/exportavel da planilha."
+        )
     )
 
     return " ".join(partes)
@@ -174,6 +209,141 @@ def nome_arquivo_backup_banco(datahora=None):
     datahora = datahora or agora()
     return f"database_v2_{datahora.strftime('%Y%m%d_%H%M%S')}.db"
 
+def configuracao_backup_padrao():
+    return {
+        "id": 1,
+        "frequencia": "diario",
+        "retencao_arquivos": BACKUP_RETENCAO_PADRAO,
+        "atualizado_em": "",
+    }
+
+def obter_configuracao_backup():
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT * FROM configuracao_backup WHERE id=1")
+    row = c.fetchone()
+    conn.close()
+
+    dados = configuracao_backup_padrao()
+    if row:
+        dados.update(dict(row))
+
+    frequencia = str(dados.get("frequencia") or "diario").strip().lower()
+    dados["frequencia"] = frequencia if frequencia in {"diario", "semanal", "mensal"} else "diario"
+
+    try:
+        retencao = int(dados.get("retencao_arquivos") or BACKUP_RETENCAO_PADRAO)
+    except Exception:
+        retencao = BACKUP_RETENCAO_PADRAO
+
+    dados["retencao_arquivos"] = max(1, min(120, retencao))
+    dados["frequencia_label"] = next(
+        (item["label"] for item in FREQUENCIAS_BACKUP if item["value"] == dados["frequencia"]),
+        "Diario",
+    )
+    return dados
+
+def salvar_configuracao_backup_form(form):
+    frequencia = str(form.get("frequencia") or "diario").strip().lower()
+    if frequencia not in {"diario", "semanal", "mensal"}:
+        frequencia = "diario"
+
+    try:
+        retencao = int(form.get("retencao_arquivos") or BACKUP_RETENCAO_PADRAO)
+    except Exception:
+        retencao = BACKUP_RETENCAO_PADRAO
+
+    retencao = max(1, min(120, retencao))
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO configuracao_backup (id, frequencia, retencao_arquivos, atualizado_em)
+        VALUES (1, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            frequencia=excluded.frequencia,
+            retencao_arquivos=excluded.retencao_arquivos,
+            atualizado_em=excluded.atualizado_em
+    """, (
+        frequencia,
+        retencao,
+        agora_iso(),
+    ))
+    conn.commit()
+    conn.close()
+    return obter_configuracao_backup()
+
+def periodo_backup_coberto(frequencia, ultimo_dt, agora_atual):
+    if not ultimo_dt:
+        return False
+
+    if frequencia == "mensal":
+        return (ultimo_dt.year, ultimo_dt.month) == (agora_atual.year, agora_atual.month)
+
+    if frequencia == "semanal":
+        return ultimo_dt.isocalendar()[:2] == agora_atual.isocalendar()[:2]
+
+    return ultimo_dt.date() == agora_atual.date()
+
+def calcular_proximo_backup_programado(ultimo_dt, frequencia):
+    if not ultimo_dt:
+        return agora()
+
+    if frequencia == "mensal":
+        if ultimo_dt.month == 12:
+            return ultimo_dt.replace(
+                year=ultimo_dt.year + 1,
+                month=1,
+                day=1,
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+        return ultimo_dt.replace(
+            month=ultimo_dt.month + 1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+    if frequencia == "semanal":
+        base = ultimo_dt - timedelta(days=ultimo_dt.weekday())
+        return (base + timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    return (ultimo_dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+def formatar_tamanho_arquivo(tamanho_bytes):
+    try:
+        valor = float(tamanho_bytes or 0)
+    except Exception:
+        valor = 0
+
+    if valor < 1024:
+        return f"{int(valor)} B"
+    if valor < 1024 ** 2:
+        return f"{valor / 1024:.1f} KB"
+    if valor < 1024 ** 3:
+        return f"{valor / (1024 ** 2):.1f} MB"
+    return f"{valor / (1024 ** 3):.1f} GB"
+
+def caminho_backup_unico(datahora=None, sufixo=""):
+    base_nome = nome_arquivo_backup_banco(datahora).replace(".db", "")
+    if sufixo:
+        base_nome = f"{base_nome}_{sufixo}"
+
+    pasta = caminho_diretorio_backup()
+    destino = os.path.join(pasta, f"{base_nome}.db")
+    contador = 1
+
+    while os.path.exists(destino):
+        destino = os.path.join(pasta, f"{base_nome}_{contador}.db")
+        contador += 1
+
+    return destino
+
 def listar_arquivos_backup_banco():
     pasta = caminho_diretorio_backup()
     backups = []
@@ -186,10 +356,17 @@ def listar_arquivos_backup_banco():
         if not os.path.isfile(caminho):
             continue
 
+        stat = os.stat(caminho)
+        modificado_dt = datetime.fromtimestamp(stat.st_mtime, ZoneInfo("America/Sao_Paulo"))
         backups.append({
             "nome": nome,
             "caminho": caminho,
-            "modificado_em": os.path.getmtime(caminho),
+            "modificado_em": stat.st_mtime,
+            "modificado_dt": modificado_dt,
+            "modificado_em_iso": modificado_dt.isoformat(timespec="seconds"),
+            "modificado_em_fmt": formatar_datahora(modificado_dt.isoformat(timespec="seconds")),
+            "tamanho_bytes": stat.st_size,
+            "tamanho_fmt": formatar_tamanho_arquivo(stat.st_size),
         })
 
     backups.sort(key=lambda item: item["modificado_em"], reverse=True)
@@ -197,9 +374,10 @@ def listar_arquivos_backup_banco():
 
 def limpar_backups_antigos_banco():
     backups = listar_arquivos_backup_banco()
+    retencao = obter_configuracao_backup()["retencao_arquivos"]
     removidos = 0
 
-    for item in backups[BACKUP_RETENCAO_ARQUIVOS:]:
+    for item in backups[retencao:]:
         try:
             os.remove(item["caminho"])
             removidos += 1
@@ -209,24 +387,32 @@ def limpar_backups_antigos_banco():
     return removidos
 
 def obter_status_backup_banco():
+    configuracao = obter_configuracao_backup()
     backups = listar_arquivos_backup_banco()
     ultimo = backups[0] if backups else None
     caminho_ultimo = ultimo["caminho"] if ultimo else ""
+    proximo_backup_dt = (
+        calcular_proximo_backup_programado(ultimo.get("modificado_dt"), configuracao["frequencia"])
+        if ultimo else None
+    )
+    proximo_backup_iso = proximo_backup_dt.isoformat(timespec="seconds") if proximo_backup_dt else ""
 
     return {
         "ativo": True,
         "pasta": caminho_diretorio_backup(),
-        "retencao": BACKUP_RETENCAO_ARQUIVOS,
+        "retencao": configuracao["retencao_arquivos"],
+        "frequencia": configuracao["frequencia"],
+        "frequencia_label": configuracao["frequencia_label"],
         "quantidade": len(backups),
         "ultimo_backup": caminho_ultimo,
         "ultimo_backup_nome": os.path.basename(caminho_ultimo) if caminho_ultimo else "",
-        "ultimo_backup_em": (
-            datetime.fromtimestamp(ultimo["modificado_em"], ZoneInfo("America/Sao_Paulo")).isoformat()
-            if ultimo else ""
-        ),
-        "ultimo_backup_em_fmt": (
-            formatar_datahora(datetime.fromtimestamp(ultimo["modificado_em"], ZoneInfo("America/Sao_Paulo")).isoformat())
-            if ultimo else "Nenhum backup ainda"
+        "ultimo_backup_em": ultimo["modificado_em_iso"] if ultimo else "",
+        "ultimo_backup_em_fmt": ultimo["modificado_em_fmt"] if ultimo else "Nenhum backup ainda",
+        "ultimo_backup_tamanho": ultimo["tamanho_bytes"] if ultimo else 0,
+        "ultimo_backup_tamanho_fmt": ultimo["tamanho_fmt"] if ultimo else "0 B",
+        "proximo_backup_em": proximo_backup_iso,
+        "proximo_backup_em_fmt": (
+            formatar_datahora(proximo_backup_iso) if proximo_backup_iso else "Assim que a rotina rodar"
         ),
     }
 
@@ -243,14 +429,22 @@ def criar_backup_banco(force=False):
             return False, "Banco principal nao encontrado para backup.", None
 
         agora_atual = agora()
-        tag_hoje = agora_atual.strftime("%Y%m%d_")
+        configuracao = obter_configuracao_backup()
         backups = listar_arquivos_backup_banco()
-        ultimo_hoje = next((item for item in backups if item["nome"].startswith(f"database_v2_{tag_hoje}")), None)
+        ultimo_backup = backups[0] if backups else None
 
-        if ultimo_hoje and not force:
-            return True, "Backup diario ja criado hoje.", ultimo_hoje["caminho"]
+        if (
+            ultimo_backup and
+            not force and
+            periodo_backup_coberto(configuracao["frequencia"], ultimo_backup.get("modificado_dt"), agora_atual)
+        ):
+            return (
+                True,
+                f"Backup {configuracao['frequencia_label'].lower()} ja criado no periodo atual.",
+                ultimo_backup["caminho"],
+            )
 
-        destino_path = os.path.join(caminho_diretorio_backup(), nome_arquivo_backup_banco(agora_atual))
+        destino_path = caminho_backup_unico(agora_atual)
         origem = sqlite3.connect(f"file:{caminho_origem}?mode=ro", uri=True)
         destino = sqlite3.connect(destino_path)
 
@@ -273,6 +467,589 @@ def criar_backup_banco(force=False):
         except Exception:
             pass
         backup_lock.release()
+
+def restaurar_backup_banco(nome_arquivo_backup):
+    backups_disponiveis = {item["nome"]: item for item in listar_arquivos_backup_banco()}
+    selecionado = backups_disponiveis.get(str(nome_arquivo_backup or "").strip())
+
+    if not selecionado:
+        return False, "Backup selecionado nao foi encontrado."
+
+    if not sync_lock.acquire(blocking=False):
+        return False, "Existe uma sincronizacao em andamento. Tente restaurar novamente em alguns segundos."
+
+    origem = None
+    destino = None
+    backup_preventivo = None
+    restore_lock = False
+
+    try:
+        sucesso_backup, mensagem_backup, caminho_backup = criar_backup_banco(force=True)
+        if not sucesso_backup:
+            return False, f"Nao foi possivel criar o backup preventivo antes da restauracao. {mensagem_backup}"
+
+        backup_preventivo = caminho_backup
+
+        if not backup_lock.acquire(blocking=False):
+            return False, "Ja existe um backup ou restauracao em andamento. Tente novamente em instantes."
+
+        restore_lock = True
+        origem = sqlite3.connect(f"file:{selecionado['caminho']}?mode=ro", uri=True)
+        destino = sqlite3.connect(caminho_banco_absoluto())
+
+        with destino:
+            origem.backup(destino)
+
+        origem.close()
+        origem = None
+        destino.close()
+        destino = None
+
+        init_db()
+
+        nome_preventivo = os.path.basename(backup_preventivo) if backup_preventivo else ""
+        return (
+            True,
+            (
+                f"Banco restaurado com sucesso usando {selecionado['nome']}. "
+                f"Backup preventivo salvo em {nome_preventivo}."
+            ),
+        )
+    except Exception as e:
+        return False, f"Erro ao restaurar backup: {e}"
+    finally:
+        try:
+            if origem:
+                origem.close()
+        except Exception:
+            pass
+        try:
+            if destino:
+                destino.close()
+        except Exception:
+            pass
+        if restore_lock:
+            try:
+                backup_lock.release()
+            except Exception:
+                pass
+        try:
+            sync_lock.release()
+        except Exception:
+            pass
+
+def usuario_sistema_interno():
+    return {"id": None, "usuario": "sistema", "nome": "Sistema"}
+
+def caminho_static_absoluto():
+    return os.path.abspath("static")
+
+def caminho_uploads_absoluto():
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    return os.path.abspath(UPLOAD_FOLDER)
+
+def caminho_uploads_orfaos_absoluto():
+    os.makedirs(UPLOADS_ORFAOS_FOLDER, exist_ok=True)
+    return os.path.abspath(UPLOADS_ORFAOS_FOLDER)
+
+def caminho_uploads_thumbs_absoluto():
+    os.makedirs(UPLOADS_THUMBS_FOLDER, exist_ok=True)
+    return os.path.abspath(UPLOADS_THUMBS_FOLDER)
+
+def caminho_uploads_servicos_diretorio(datahora=None):
+    datahora = datahora or agora()
+    pasta = os.path.join(
+        caminho_uploads_absoluto(),
+        "servicos",
+        datahora.strftime("%Y"),
+        datahora.strftime("%m"),
+    )
+    os.makedirs(pasta, exist_ok=True)
+    return pasta
+
+def normalizar_caminho_arquivo(caminho):
+    texto = str(caminho or "").strip()
+    if not texto:
+        return ""
+
+    if os.path.isabs(texto):
+        return os.path.normpath(texto)
+
+    return os.path.normpath(os.path.abspath(texto))
+
+def caminho_relativo_static(caminho):
+    texto = str(caminho or "").strip()
+    if not texto:
+        return ""
+
+    texto_normalizado = texto.replace("\\", "/")
+    if texto_normalizado.startswith("/static/"):
+        return texto_normalizado.lstrip("/")
+    if texto_normalizado.startswith("static/"):
+        return texto_normalizado
+
+    caminho_abs = normalizar_caminho_arquivo(texto)
+    if not caminho_abs:
+        return ""
+
+    try:
+        rel = os.path.relpath(caminho_abs, caminho_static_absoluto()).replace("\\", "/")
+    except Exception:
+        return ""
+
+    if rel.startswith(".."):
+        return ""
+
+    return f"static/{rel}"
+
+def arquivo_dentro_da_pasta(caminho_arquivo, pasta_base):
+    try:
+        return os.path.commonpath([normalizar_caminho_arquivo(caminho_arquivo), os.path.abspath(pasta_base)]) == os.path.abspath(pasta_base)
+    except Exception:
+        return False
+
+def coletar_metricas_diretorio(pasta, ignorar_subpastas=None):
+    base = os.path.abspath(pasta)
+    ignorar_subpastas = [os.path.abspath(item) for item in (ignorar_subpastas or [])]
+    total_arquivos = 0
+    total_bytes = 0
+
+    if not os.path.exists(base):
+        return {"arquivos": 0, "bytes": 0, "tamanho_fmt": "0 B"}
+
+    for raiz, dirs, arquivos in os.walk(base):
+        raiz_abs = os.path.abspath(raiz)
+        dirs[:] = [
+            item for item in dirs
+            if os.path.abspath(os.path.join(raiz, item)) not in ignorar_subpastas
+        ]
+
+        if raiz_abs in ignorar_subpastas:
+            continue
+
+        for nome in arquivos:
+            caminho = os.path.join(raiz_abs, nome)
+            try:
+                total_bytes += os.path.getsize(caminho)
+                total_arquivos += 1
+            except Exception:
+                continue
+
+    return {
+        "arquivos": total_arquivos,
+        "bytes": total_bytes,
+        "tamanho_fmt": formatar_tamanho_arquivo(total_bytes),
+    }
+
+def listar_arquivos_recursivos(pasta):
+    base = os.path.abspath(pasta)
+    arquivos = []
+
+    if not os.path.exists(base):
+        return arquivos
+
+    for raiz, _, nomes in os.walk(base):
+        for nome in nomes:
+            caminho = os.path.join(raiz, nome)
+            try:
+                stat = os.stat(caminho)
+            except Exception:
+                continue
+
+            arquivos.append({
+                "caminho": caminho,
+                "nome": nome,
+                "modificado_em": stat.st_mtime,
+                "tamanho_bytes": stat.st_size,
+            })
+
+    return arquivos
+
+def remover_diretorios_vazios(base, preservar=None):
+    base_abs = os.path.abspath(base)
+    preservar = {os.path.abspath(item) for item in (preservar or [])}
+    removidos = 0
+
+    if not os.path.exists(base_abs):
+        return removidos
+
+    for raiz, dirs, _ in os.walk(base_abs, topdown=False):
+        raiz_abs = os.path.abspath(raiz)
+        if raiz_abs == base_abs or raiz_abs in preservar:
+            continue
+
+        try:
+            if not os.listdir(raiz_abs):
+                os.rmdir(raiz_abs)
+                removidos += 1
+        except Exception:
+            continue
+
+    return removidos
+
+def obter_status_manutencao_arquivos_db():
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT * FROM manutencao_arquivos WHERE id=1")
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else {
+        "id": 1,
+        "ultimo_executado_em": "",
+        "ultima_mensagem": "",
+        "ultimo_resultado_json": "",
+    }
+
+def salvar_status_manutencao_arquivos(resultado, mensagem):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO manutencao_arquivos (id, ultimo_executado_em, ultima_mensagem, ultimo_resultado_json)
+        VALUES (1, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            ultimo_executado_em=excluded.ultimo_executado_em,
+            ultima_mensagem=excluded.ultima_mensagem,
+            ultimo_resultado_json=excluded.ultimo_resultado_json
+    """, (
+        agora_iso(),
+        mensagem,
+        json.dumps(resultado or {}, ensure_ascii=False, default=sanitizar_para_json),
+    ))
+    conn.commit()
+    conn.close()
+
+def obter_estatisticas_armazenamento():
+    uploads_base = caminho_uploads_absoluto()
+    orfaos_base = caminho_uploads_orfaos_absoluto()
+    thumbs_base = caminho_uploads_thumbs_absoluto()
+    backups_base = caminho_diretorio_backup()
+    banco_path = caminho_banco_absoluto()
+
+    uploads = coletar_metricas_diretorio(uploads_base, ignorar_subpastas=[orfaos_base, thumbs_base])
+    orfaos = coletar_metricas_diretorio(orfaos_base)
+    thumbs = coletar_metricas_diretorio(thumbs_base)
+    backups = coletar_metricas_diretorio(backups_base)
+    banco_bytes = os.path.getsize(banco_path) if os.path.exists(banco_path) else 0
+    total_sistema = uploads["bytes"] + orfaos["bytes"] + thumbs["bytes"] + backups["bytes"] + banco_bytes
+    disco = shutil.disk_usage(os.path.abspath("."))
+
+    return {
+        "uploads": uploads,
+        "orfaos": orfaos,
+        "thumbs": thumbs,
+        "backups": backups,
+        "banco": {
+            "bytes": banco_bytes,
+            "tamanho_fmt": formatar_tamanho_arquivo(banco_bytes),
+        },
+        "sistema": {
+            "bytes": total_sistema,
+            "tamanho_fmt": formatar_tamanho_arquivo(total_sistema),
+        },
+        "disco": {
+            "total_bytes": disco.total,
+            "livre_bytes": disco.free,
+            "usado_bytes": disco.used,
+            "total_fmt": formatar_tamanho_arquivo(disco.total),
+            "livre_fmt": formatar_tamanho_arquivo(disco.free),
+            "usado_fmt": formatar_tamanho_arquivo(disco.used),
+        },
+    }
+
+def obter_status_arquivos():
+    estado = obter_status_manutencao_arquivos_db()
+    armazenamento = obter_estatisticas_armazenamento()
+    resultado = {}
+
+    try:
+        resultado = json.loads(estado.get("ultimo_resultado_json") or "{}")
+    except Exception:
+        resultado = {}
+
+    return {
+        "ultimo_executado_em": estado.get("ultimo_executado_em") or "",
+        "ultimo_executado_em_fmt": (
+            formatar_datahora(estado.get("ultimo_executado_em"))
+            if estado.get("ultimo_executado_em") else "Ainda nao executada"
+        ),
+        "ultima_mensagem": estado.get("ultima_mensagem") or "Nenhuma manutencao registrada ainda.",
+        "ultimo_resultado": resultado,
+        "armazenamento": armazenamento,
+        "uploads_pasta": caminho_uploads_absoluto(),
+        "orfaos_pasta": caminho_uploads_orfaos_absoluto(),
+        "thumbs_pasta": caminho_uploads_thumbs_absoluto(),
+    }
+
+def executar_manutencao_arquivos(force=False, registrar_log=True, usuario=None):
+    if not maintenance_lock.acquire(blocking=False):
+        return False, "Manutencao de arquivos ja esta em execucao.", {}
+
+    try:
+        estado = obter_status_manutencao_arquivos_db()
+        ultimo_dt = interpretar_datahora_sistema(estado.get("ultimo_executado_em"))
+        agora_atual = agora()
+
+        if ultimo_dt and not force and ultimo_dt.date() == agora_atual.date():
+            resultado = {}
+            try:
+                resultado = json.loads(estado.get("ultimo_resultado_json") or "{}")
+            except Exception:
+                resultado = {}
+            return True, "Manutencao diaria ja executada hoje.", resultado
+
+        uploads_base = caminho_uploads_absoluto()
+        orfaos_base = caminho_uploads_orfaos_absoluto()
+        thumbs_base = caminho_uploads_thumbs_absoluto()
+        referenced = set()
+
+        conn = conectar()
+        c = conn.cursor()
+        c.execute("SELECT caminho FROM fotos WHERE caminho IS NOT NULL AND TRIM(caminho) <> ''")
+        for row in c.fetchall():
+            caminho_ref = normalizar_caminho_arquivo(row["caminho"])
+            if caminho_ref:
+                referenced.add(caminho_ref)
+        conn.close()
+
+        orfaos_movidos = 0
+        thumbs_removidas = 0
+        orfaos_removidos = 0
+
+        for arquivo in listar_arquivos_recursivos(uploads_base):
+            caminho_arquivo = arquivo["caminho"]
+            if arquivo_dentro_da_pasta(caminho_arquivo, orfaos_base) or arquivo_dentro_da_pasta(caminho_arquivo, thumbs_base):
+                continue
+
+            if normalizar_caminho_arquivo(caminho_arquivo) in referenced:
+                continue
+
+            if (time.time() - arquivo["modificado_em"]) < IDADE_MINIMA_ORFAO_SEGUNDOS:
+                continue
+
+            destino_dir = os.path.join(orfaos_base, agora_atual.strftime("%Y-%m"))
+            os.makedirs(destino_dir, exist_ok=True)
+            destino = os.path.join(destino_dir, os.path.basename(caminho_arquivo))
+            contador = 1
+            while os.path.exists(destino):
+                nome, ext = os.path.splitext(os.path.basename(caminho_arquivo))
+                destino = os.path.join(destino_dir, f"{nome}_{contador}{ext}")
+                contador += 1
+
+            try:
+                shutil.move(caminho_arquivo, destino)
+                orfaos_movidos += 1
+            except Exception:
+                continue
+
+        limite_orfaos = time.time() - (RETENCAO_ORFAOS_DIAS * 86400)
+        for arquivo in listar_arquivos_recursivos(orfaos_base):
+            if arquivo["modificado_em"] < limite_orfaos:
+                try:
+                    os.remove(arquivo["caminho"])
+                    orfaos_removidos += 1
+                except Exception:
+                    continue
+
+        limite_thumbs = time.time() - (RETENCAO_THUMBS_DIAS * 86400)
+        for arquivo in listar_arquivos_recursivos(thumbs_base):
+            if arquivo["modificado_em"] < limite_thumbs:
+                try:
+                    os.remove(arquivo["caminho"])
+                    thumbs_removidas += 1
+                except Exception:
+                    continue
+
+        diretorios_limpos = 0
+        diretorios_limpos += remover_diretorios_vazios(uploads_base, preservar=[uploads_base, orfaos_base, thumbs_base])
+        diretorios_limpos += remover_diretorios_vazios(orfaos_base, preservar=[orfaos_base])
+        diretorios_limpos += remover_diretorios_vazios(thumbs_base, preservar=[thumbs_base])
+
+        armazenamento = obter_estatisticas_armazenamento()
+        resultado = {
+            "orfaos_movidos": orfaos_movidos,
+            "orfaos_removidos": orfaos_removidos,
+            "thumbs_removidas": thumbs_removidas,
+            "diretorios_limpos": diretorios_limpos,
+            "uploads_ativos": armazenamento["uploads"]["arquivos"],
+            "uploads_tamanho": armazenamento["uploads"]["tamanho_fmt"],
+            "orfaos_tamanho": armazenamento["orfaos"]["tamanho_fmt"],
+        }
+        mensagem = (
+            f"Manutencao concluida. Orfaos movidos: {orfaos_movidos} | "
+            f"Orfaos removidos: {orfaos_removidos} | "
+            f"Miniaturas limpas: {thumbs_removidas}."
+        )
+        salvar_status_manutencao_arquivos(resultado, mensagem)
+
+        if registrar_log:
+            registrar_auditoria(
+                "manutencao_arquivos",
+                "arquivos",
+                detalhes=resultado,
+                usuario=usuario or usuario_sistema_interno(),
+            )
+
+        return True, mensagem, resultado
+    except Exception as e:
+        mensagem = f"Erro na manutencao de arquivos: {e}"
+        salvar_status_manutencao_arquivos({}, mensagem)
+        return False, mensagem, {}
+    finally:
+        maintenance_lock.release()
+
+def loop_worker_manutencao_arquivos():
+    while True:
+        try:
+            sucesso, mensagem, _ = executar_manutencao_arquivos(
+                force=False,
+                registrar_log=False,
+                usuario=usuario_sistema_interno(),
+            )
+            if sucesso and "concluida" in mensagem.lower():
+                print(f"ARQUIVOS: {mensagem}")
+        except Exception as e:
+            print("ERRO WORKER ARQUIVOS:", e)
+
+        time.sleep(3600)
+
+def iniciar_worker_manutencao_arquivos():
+    global maintenance_worker_iniciado
+
+    if maintenance_worker_iniciado:
+        return
+
+    maintenance_worker_iniciado = True
+    Thread(target=loop_worker_manutencao_arquivos, daemon=True).start()
+
+def normalizar_periodo_auditoria(valor):
+    valor = str(valor or "").strip().lower()
+    if valor in {"hoje", "7dias", "30dias", "todos"}:
+        return valor
+    return "7dias"
+
+def filtrar_inicio_periodo_auditoria(periodo, referencia=None):
+    referencia = referencia or agora()
+    if periodo == "todos":
+        return None
+    if periodo == "30dias":
+        return referencia - timedelta(days=30)
+    if periodo == "7dias":
+        return referencia - timedelta(days=7)
+    return referencia.replace(hour=0, minute=0, second=0, microsecond=0)
+
+def formatar_acao_auditoria(acao):
+    chave = normalizar_texto_campo(acao)
+    if not chave:
+        return "Acao"
+    if chave in ACOES_AUDITORIA_LABELS:
+        return ACOES_AUDITORIA_LABELS[chave]
+    return chave.replace("_", " ").capitalize()
+
+def carregar_contexto_auditoria(args):
+    periodo = normalizar_periodo_auditoria(args.get("periodo"))
+    usuario = normalizar_texto_campo(args.get("usuario"))
+    placa = normalizar_texto_campo(args.get("placa")).upper()
+    acao = normalizar_texto_campo(args.get("acao"))
+    busca = normalizar_texto_campo(args.get("busca"))
+    inicio_periodo = filtrar_inicio_periodo_auditoria(periodo)
+
+    conn = conectar()
+    c = conn.cursor()
+    filtros_sql = []
+    params = []
+
+    if usuario:
+        filtros_sql.append("usuario = ?")
+        params.append(usuario)
+    if placa:
+        filtros_sql.append("placa LIKE ?")
+        params.append(f"%{placa}%")
+    if acao:
+        filtros_sql.append("acao = ?")
+        params.append(acao)
+    if inicio_periodo:
+        filtros_sql.append("criado_em >= ?")
+        params.append(inicio_periodo.isoformat(timespec='seconds'))
+    if busca:
+        filtros_sql.append("(detalhes_json LIKE ? OR usuario_nome LIKE ? OR entidade LIKE ?)")
+        termo = f"%{busca}%"
+        params.extend([termo, termo, termo])
+
+    where = f"WHERE {' AND '.join(filtros_sql)}" if filtros_sql else ""
+    c.execute(f"""
+        SELECT *
+        FROM auditoria
+        {where}
+        ORDER BY criado_em DESC, id DESC
+        LIMIT 250
+    """, params)
+    registros = [dict(item) for item in c.fetchall()]
+
+    c.execute("""
+        SELECT DISTINCT usuario
+        FROM auditoria
+        WHERE COALESCE(NULLIF(usuario, ''), '') <> ''
+        ORDER BY usuario
+    """)
+    usuarios = [row["usuario"] for row in c.fetchall()]
+
+    c.execute("""
+        SELECT DISTINCT acao
+        FROM auditoria
+        WHERE COALESCE(NULLIF(acao, ''), '') <> ''
+        ORDER BY acao
+    """)
+    acoes = [row["acao"] for row in c.fetchall()]
+    conn.close()
+
+    usuarios_unicos = set()
+    placas_unicas = set()
+
+    for item in registros:
+        item["acao_label"] = formatar_acao_auditoria(item.get("acao"))
+        item["usuario_exibicao"] = formatar_usuario_exibicao(
+            item.get("usuario_nome"),
+            item.get("usuario"),
+            fallback="Sistema",
+        )
+        item["criado_em_fmt"] = formatar_datahora(item.get("criado_em"))
+        item["entidade_label"] = normalizar_texto_campo(item.get("entidade")).replace("_", " ").capitalize() or "-"
+        detalhe_dict = {}
+        try:
+            detalhe_dict = json.loads(item.get("detalhes_json") or "{}")
+        except Exception:
+            detalhe_dict = {}
+        item["detalhes"] = detalhe_dict
+        item["detalhes_pretty"] = json.dumps(detalhe_dict, ensure_ascii=False, indent=2) if detalhe_dict else ""
+        if item.get("usuario"):
+            usuarios_unicos.add(item["usuario"])
+        if item.get("placa"):
+            placas_unicas.add(item["placa"])
+
+    resumo = {
+        "total_eventos": len(registros),
+        "usuarios_unicos": len(usuarios_unicos),
+        "placas_unicas": len(placas_unicas),
+        "ultimo_evento_em_fmt": registros[0]["criado_em_fmt"] if registros else "Nenhum evento",
+    }
+
+    return {
+        "registros": registros,
+        "usuarios": usuarios,
+        "acoes": [
+            {"value": item, "label": formatar_acao_auditoria(item)}
+            for item in acoes
+        ],
+        "filtros": {
+            "periodo": periodo,
+            "usuario": usuario,
+            "placa": placa,
+            "acao": acao,
+            "busca": busca,
+        },
+        "periodos": PERIODOS_AUDITORIA,
+        "resumo": resumo,
+    }
 
 def loop_worker_backup_banco():
     while True:
@@ -400,6 +1177,30 @@ MAPA_PERIODOS_FINANCEIRO = {
     "30dias": "ultimos 30 dias",
     "mes": "mes atual",
 }
+PERIODOS_AUDITORIA = [
+    {"value": "hoje", "label": "Hoje"},
+    {"value": "7dias", "label": "7 dias"},
+    {"value": "30dias", "label": "30 dias"},
+    {"value": "todos", "label": "Tudo"},
+]
+ACOES_AUDITORIA_LABELS = {
+    "abriu_checklist_finalizacao": "Abriu checklist de finalizacao",
+    "adicionou_fotos_detalhe": "Adicionou fotos de detalhe",
+    "alterou_propria_senha": "Alterou a propria senha",
+    "atualizou_emitente_fiscal": "Atualizou emitente fiscal",
+    "atualizou_integracao_fiscal": "Atualizou integracao fiscal",
+    "configurou_backup": "Configurou rotina de backup",
+    "criou_usuario": "Criou usuario",
+    "finalizou_atendimento": "Finalizou atendimento",
+    "gerou_backup_manual": "Gerou backup manual",
+    "gerou_nota_fiscal": "Gerou nota fiscal",
+    "iniciou_atendimento": "Iniciou atendimento",
+    "manutencao_arquivos": "Executou manutencao de arquivos",
+    "registrou_emissao_nota_fiscal": "Registrou emissao manual da nota",
+    "redefiniu_senha_usuario": "Redefiniu senha de usuario",
+    "restaurou_backup": "Restaurou backup",
+    "salvou_operacional": "Salvou dados operacionais",
+}
 TIPOS_INTEGRACAO_FISCAL = [
     {"value": "manual", "label": "Manual / sem integracao"},
     {"value": "nfse_nacional", "label": "NFS-e Padrao Nacional"},
@@ -470,10 +1271,18 @@ ALIASES_CAMPOS_SYNC = {
     "data": ["data", "data lavagem", "dia", "data servico"],
 }
 
+
+@app.context_processor
+def inject_global_template_context():
+    return {"app_version": APP_VERSION}
+
+
 sync_lock = Lock()
 sync_worker_iniciado = False
 backup_lock = Lock()
 backup_worker_iniciado = False
+maintenance_lock = Lock()
+maintenance_worker_iniciado = False
 
 def conectar():
     conn = sqlite3.connect(DATABASE_FILE)
@@ -534,6 +1343,17 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "servicos", "cera TEXT")
     adicionar_coluna_se_preciso(c, "servicos", "hidro_lataria TEXT")
     adicionar_coluna_se_preciso(c, "servicos", "hidro_vidros TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "criado_por_usuario TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "criado_por_nome TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "operacional_por_usuario TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "operacional_por_nome TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "finalizado_por_usuario TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "finalizado_por_nome TEXT")
+    adicionar_coluna_se_preciso(c, "fotos", "usuario TEXT")
+    adicionar_coluna_se_preciso(c, "fotos", "usuario_nome TEXT")
+    adicionar_coluna_se_preciso(c, "fotos", "tamanho_bytes INTEGER")
+    adicionar_coluna_se_preciso(c, "fotos", "largura INTEGER")
+    adicionar_coluna_se_preciso(c, "fotos", "altura INTEGER")
     adicionar_coluna_se_preciso(c, "usuarios", "nome TEXT")
     adicionar_coluna_se_preciso(c, "usuarios", "perfil TEXT")
     adicionar_coluna_se_preciso(c, "usuarios", "ativo INTEGER")
@@ -543,6 +1363,12 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "usuarios", "ultimo_login_em TEXT")
     adicionar_coluna_se_preciso(c, "usuarios", "senha_alteracao_obrigatoria INTEGER")
     adicionar_coluna_se_preciso(c, "usuarios", "senha_atualizada_em TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_backup", "frequencia TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_backup", "retencao_arquivos INTEGER")
+    adicionar_coluna_se_preciso(c, "configuracao_backup", "atualizado_em TEXT")
+    adicionar_coluna_se_preciso(c, "manutencao_arquivos", "ultimo_executado_em TEXT")
+    adicionar_coluna_se_preciso(c, "manutencao_arquivos", "ultima_mensagem TEXT")
+    adicionar_coluna_se_preciso(c, "manutencao_arquivos", "ultimo_resultado_json TEXT")
     adicionar_coluna_se_preciso(c, "integracao_fiscal", "token_api TEXT")
 
     c.execute("""
@@ -872,6 +1698,12 @@ def criar_todas_tabelas():
         cera TEXT,
         hidro_lataria TEXT,
         hidro_vidros TEXT,
+        criado_por_usuario TEXT,
+        criado_por_nome TEXT,
+        operacional_por_usuario TEXT,
+        operacional_por_nome TEXT,
+        finalizado_por_usuario TEXT,
+        finalizado_por_nome TEXT,
         FOREIGN KEY(veiculo_id) REFERENCES veiculos(id),
         FOREIGN KEY(tipo_id) REFERENCES tipos_servico(id)
     )
@@ -903,6 +1735,11 @@ def criar_todas_tabelas():
         servico_id INTEGER,
         tipo TEXT,
         caminho TEXT,
+        usuario TEXT,
+        usuario_nome TEXT,
+        tamanho_bytes INTEGER,
+        largura INTEGER,
+        altura INTEGER,
         criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(servico_id) REFERENCES servicos(id)
     )
@@ -935,6 +1772,20 @@ def criar_todas_tabelas():
         criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(servico_id) REFERENCES servicos(id),
         FOREIGN KEY(item_id) REFERENCES checklist_itens(id)
+    )
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS auditoria (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario_id INTEGER,
+        usuario TEXT,
+        usuario_nome TEXT,
+        acao TEXT NOT NULL,
+        entidade TEXT NOT NULL,
+        entidade_id INTEGER,
+        placa TEXT,
+        detalhes_json TEXT,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
 
@@ -1094,10 +1945,29 @@ def criar_todas_tabelas():
         atualizado_em TEXT
     )
     """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS configuracao_backup (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        frequencia TEXT DEFAULT 'diario',
+        retencao_arquivos INTEGER DEFAULT 15,
+        atualizado_em TEXT
+    )
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS manutencao_arquivos (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        ultimo_executado_em TEXT,
+        ultima_mensagem TEXT,
+        ultimo_resultado_json TEXT
+    )
+    """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_servico_status ON servicos(status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_servico_entrada ON servicos(entrada)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_veiculo_placa ON veiculos(placa)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_servico_checklist_servico ON servico_checklist(servico_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_fotos_servico_tipo ON fotos(servico_id, tipo)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_auditoria_entidade ON auditoria(entidade, entidade_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_auditoria_criado_em ON auditoria(criado_em)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_historico_sync_placa ON historico_lavagens_sync(placa)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_historico_sync_data ON historico_lavagens_sync(data_lavagem)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_orcamentos_numero ON orcamentos(numero)")
@@ -1263,7 +2133,13 @@ def registrar_falha_login(c, usuario_row):
 def limpar_status_login_usuario(c, usuario_id, registrar_login=False):
     atualizado_em = agora_iso() if registrar_login else None
     c.execute(
-        "UPDATE usuarios SET tentativas_login=0, bloqueado_ate=?, ultimo_login_em=COALESCE(?, ultimo_login_em) WHERE id=?",
+        """
+        UPDATE usuarios
+        SET tentativas_login=0,
+            bloqueado_ate=?,
+            ultimo_login_em=COALESCE(?, ultimo_login_em)
+        WHERE id=?
+        """,
         (None, atualizado_em, usuario_id)
     )
 
@@ -1719,7 +2595,10 @@ def avaliar_prontidao_integracao_fiscal(empresa, integracao):
                 faltantes.append("Endpoint de emissao da prefeitura")
 
         if tipo == "nfse_nacional":
-            avisos.append("No padrao nacional, valide as parametrizacoes do municipio e o fluxo de token/certificado antes de ativar.")
+            avisos.append(
+                "No padrao nacional, valide as parametrizacoes do municipio "
+                "e o fluxo de token/certificado antes de ativar."
+            )
 
         if tipo == "nfe_sefaz":
             if not empresa.get("inscricao_estadual"):
@@ -2400,10 +3279,13 @@ def gerar_pdf_nota_fiscal_buffer(nota):
     ))
 
     if nota.get("numero_nota"):
+        resumo_nota = (
+            f"Numero da nota: {nota['numero_nota']} | "
+            f"Serie: {nota.get('serie') or '-'} | "
+            f"Ambiente: {nota.get('ambiente') or '-'}"
+        )
         elementos.append(Paragraph(
-            xml_escape(
-                f"Numero da nota: {nota['numero_nota']} | Serie: {nota.get('serie') or '-'} | Ambiente: {nota.get('ambiente') or '-'}"
-            ),
+            xml_escape(resumo_nota),
             subtitulo_style
         ))
 
@@ -2443,9 +3325,20 @@ def gerar_pdf_nota_fiscal_buffer(nota):
         ["Veiculo", " / ".join(parte for parte in [nota.get("modelo"), nota.get("placa")] if parte) or "-"],
         ["Endereco", " - ".join(
             parte for parte in [
-                " ".join(parte for parte in [nota.get("endereco"), nota.get("numero_endereco")] if parte).strip(),
+                " ".join(
+                    parte for parte in [nota.get("endereco"), nota.get("numero_endereco")] if parte
+                ).strip(),
                 normalizar_texto_campo(nota.get("complemento")),
-                " / ".join(parte for parte in [nota.get("bairro"), " ".join(parte for parte in [nota.get("cidade"), nota.get("uf")] if parte).strip()] if parte),
+                " / ".join(
+                    parte
+                    for parte in [
+                        nota.get("bairro"),
+                        " ".join(
+                            parte for parte in [nota.get("cidade"), nota.get("uf")] if parte
+                        ).strip(),
+                    ]
+                    if parte
+                ),
                 formatar_cep(nota.get("cep")),
             ]
             if parte
@@ -2490,7 +3383,11 @@ def gerar_pdf_nota_fiscal_buffer(nota):
 
     elementos.append(Spacer(1, 12))
     elementos.append(Paragraph(
-        "Este PDF e um espelho de apoio para emissao e conferencia. A emissao oficial da NFS-e/NF-e depende do portal ou integracao fiscal habilitada para o seu CNPJ.",
+        (
+            "Este PDF e um espelho de apoio para emissao e conferencia. "
+            "A emissao oficial da NFS-e/NF-e depende do portal ou integracao "
+            "fiscal habilitada para o seu CNPJ."
+        ),
         normal,
     ))
 
@@ -2538,20 +3435,194 @@ def normalizar_texto_campo(valor):
 def normalizar_flag_sim_nao(valor):
     return "Sim" if normalizar_texto_comparacao(valor) == "sim" else "Nao"
 
+def resumo_usuario_logado():
+    if not has_request_context():
+        return usuario_sistema_interno()
+
+    return {
+        "id": session.get("usuario_id"),
+        "usuario": session.get("usuario") or "",
+        "nome": session.get("usuario_nome") or session.get("usuario") or "",
+    }
+
+def formatar_usuario_exibicao(nome=None, usuario=None, fallback="Nao informado"):
+    texto = normalizar_texto_campo(nome) or normalizar_texto_campo(usuario)
+    return texto or fallback
+
+def registrar_auditoria(acao, entidade, entidade_id=None, placa=None, detalhes=None, usuario=None):
+    usuario_info = usuario or resumo_usuario_logado()
+    detalhes_json = json.dumps(detalhes or {}, ensure_ascii=False, default=sanitizar_para_json)
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO auditoria (
+            usuario_id, usuario, usuario_nome, acao, entidade, entidade_id, placa, detalhes_json, criado_em
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        usuario_info.get("id"),
+        normalizar_texto_campo(usuario_info.get("usuario")),
+        normalizar_texto_campo(usuario_info.get("nome")),
+        normalizar_texto_campo(acao),
+        normalizar_texto_campo(entidade),
+        entidade_id,
+        normalizar_texto_campo(placa).upper(),
+        detalhes_json,
+        agora_iso(),
+    ))
+    conn.commit()
+    conn.close()
+
+def obter_resample_lanczos():
+    if not PILLOW_DISPONIVEL:
+        return None
+
+    if hasattr(Image, "Resampling"):
+        return Image.Resampling.LANCZOS
+
+    return getattr(Image, "LANCZOS", Image.BICUBIC)
+
+def salvar_arquivo_imagem_otimizado(foto):
+    pasta_destino = caminho_uploads_servicos_diretorio()
+    nome_seguro = secure_filename(foto.filename or "") or "foto"
+    nome_base, ext_original = os.path.splitext(nome_seguro)
+    nome_base = re.sub(r"[^A-Za-z0-9_-]+", "_", nome_base or "foto").strip("_") or "foto"
+    ext_original = (ext_original or ".jpg").lower()
+
+    if PILLOW_DISPONIVEL:
+        try:
+            foto.stream.seek(0)
+            imagem = Image.open(foto.stream)
+            imagem = ImageOps.exif_transpose(imagem)
+
+            largura_original, altura_original = imagem.size
+            if max(largura_original, altura_original) > FOTO_MAX_DIMENSAO:
+                imagem.thumbnail((FOTO_MAX_DIMENSAO, FOTO_MAX_DIMENSAO), obter_resample_lanczos())
+
+            if imagem.mode != "RGB":
+                imagem = imagem.convert("RGB")
+
+            destino = os.path.join(
+                pasta_destino,
+                f"{time.time_ns()}_{nome_base}.jpg",
+            )
+            imagem.save(
+                destino,
+                format="JPEG",
+                quality=FOTO_QUALIDADE_JPEG,
+                optimize=True,
+                progressive=True,
+            )
+            tamanho_bytes = os.path.getsize(destino)
+            largura, altura = imagem.size
+            return {
+                "caminho": destino,
+                "tamanho_bytes": tamanho_bytes,
+                "largura": largura,
+                "altura": altura,
+                "compactada": True,
+            }
+        except (UnidentifiedImageError, OSError, ValueError):
+            pass
+        except Exception:
+            pass
+
+    ext_fallback = ext_original if ext_original in {".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"} else ".jpg"
+    destino = os.path.join(
+        pasta_destino,
+        f"{time.time_ns()}_{nome_base}{ext_fallback}",
+    )
+    foto.stream.seek(0)
+    foto.save(destino)
+
+    largura = None
+    altura = None
+    if PILLOW_DISPONIVEL:
+        try:
+            with Image.open(destino) as imagem_salva:
+                largura, altura = imagem_salva.size
+        except Exception:
+            pass
+
+    return {
+        "caminho": destino,
+        "tamanho_bytes": os.path.getsize(destino),
+        "largura": largura,
+        "altura": altura,
+        "compactada": False,
+    }
+
+def resumir_uploaders_fotos(galeria_fotos):
+    resumo = {}
+
+    for tipo, fotos in (galeria_fotos or {}).items():
+        nomes = []
+        vistos = set()
+
+        for foto in fotos:
+            nome = formatar_usuario_exibicao(
+                foto.get("usuario_nome"),
+                foto.get("usuario"),
+                fallback="Nao identificado",
+            )
+            chave = normalizar_texto_comparacao(nome)
+            if chave in vistos:
+                continue
+            vistos.add(chave)
+            nomes.append(nome)
+
+        resumo[tipo] = ", ".join(nomes) if nomes else "Nao identificado"
+
+    return resumo
+
+def enriquecer_responsaveis_servico(servico):
+    servico["criado_por_nome_exibicao"] = formatar_usuario_exibicao(
+        servico.get("criado_por_nome"),
+        servico.get("criado_por_usuario"),
+        fallback="Nao identificado",
+    )
+    servico["operacional_por_nome_exibicao"] = formatar_usuario_exibicao(
+        servico.get("operacional_por_nome"),
+        servico.get("operacional_por_usuario"),
+        fallback="Nao registrado",
+    )
+    servico["finalizado_por_nome_exibicao"] = formatar_usuario_exibicao(
+        servico.get("finalizado_por_nome"),
+        servico.get("finalizado_por_usuario"),
+        fallback="Nao finalizado",
+    )
+    servico["resumo_uploaders_fotos"] = resumir_uploaders_fotos(servico.get("galeria_fotos") or {})
+    return servico
+
 def salvar_fotos_servico(cursor, servico_id, fotos, tipo):
     total_salvas = 0
+    usuario_info = resumo_usuario_logado()
 
     for foto in fotos or []:
         if not foto or not foto.filename or not arquivo_permitido(foto.filename):
             continue
 
-        nome = f"{time.time_ns()}_{secure_filename(foto.filename)}"
-        caminho = os.path.join(UPLOAD_FOLDER, nome)
-        foto.save(caminho)
+        arquivo_salvo = salvar_arquivo_imagem_otimizado(foto)
+        caminho = arquivo_salvo["caminho"]
 
         cursor.execute(
-            "INSERT INTO fotos (servico_id, tipo, caminho) VALUES (?, ?, ?)",
-            (servico_id, tipo, caminho)
+            """
+            INSERT INTO fotos (
+                servico_id, tipo, caminho, usuario, usuario_nome, tamanho_bytes, largura, altura
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                servico_id,
+                tipo,
+                caminho,
+                normalizar_texto_campo(usuario_info.get("usuario")),
+                normalizar_texto_campo(usuario_info.get("nome")),
+                arquivo_salvo.get("tamanho_bytes"),
+                arquivo_salvo.get("largura"),
+                arquivo_salvo.get("altura"),
+            )
         )
         total_salvas += 1
 
@@ -2572,6 +3643,10 @@ def caminho_foto_para_url(caminho):
     if texto.startswith("static/"):
         return "/" + quote(texto)
 
+    rel_static = caminho_relativo_static(texto)
+    if rel_static:
+        return "/" + quote(rel_static)
+
     return "/static/uploads/" + quote(os.path.basename(texto))
 
 def listar_fotos_servicos(ids_servicos):
@@ -2584,7 +3659,7 @@ def listar_fotos_servicos(ids_servicos):
     c = conn.cursor()
     placeholders = ",".join(["?"] * len(ids))
     c.execute(f"""
-        SELECT id, servico_id, tipo, caminho, criado_em
+        SELECT id, servico_id, tipo, caminho, criado_em, usuario, usuario_nome, tamanho_bytes, largura, altura
         FROM fotos
         WHERE servico_id IN ({placeholders})
         ORDER BY
@@ -2610,6 +3685,12 @@ def listar_fotos_servicos(ids_servicos):
         foto["arquivo_nome"] = os.path.basename(str(foto.get("caminho") or "").replace("\\", "/"))
         foto["tipo_label"] = labels.get(foto.get("tipo"), "Foto")
         foto["criado_em_fmt"] = formatar_datahora(foto.get("criado_em"))
+        foto["usuario_nome_exibicao"] = formatar_usuario_exibicao(
+            foto.get("usuario_nome"),
+            foto.get("usuario"),
+            fallback="Nao identificado",
+        )
+        foto["tamanho_fmt"] = formatar_tamanho_arquivo(foto.get("tamanho_bytes"))
 
         if not foto["url"]:
             continue
@@ -2627,10 +3708,12 @@ def contar_fotos_validas(fotos):
         if foto and foto.filename and arquivo_permitido(foto.filename)
     )
 
-def atualizar_campos_operacionais_servico(cursor, servico_id, form):
+def atualizar_campos_operacionais_servico(cursor, servico_id, form, usuario_info=None):
+    usuario_info = usuario_info or resumo_usuario_logado()
     cursor.execute("""
         UPDATE servicos
-        SET origem=?, guarita=?, observacoes=?, pneu=?, cera=?, hidro_lataria=?, hidro_vidros=?
+        SET origem=?, guarita=?, observacoes=?, pneu=?, cera=?, hidro_lataria=?, hidro_vidros=?,
+            operacional_por_usuario=?, operacional_por_nome=?
         WHERE id=?
     """, (
         normalizar_texto_campo(form.get("origem")),
@@ -2640,6 +3723,8 @@ def atualizar_campos_operacionais_servico(cursor, servico_id, form):
         normalizar_flag_sim_nao(form.get("cera")),
         normalizar_flag_sim_nao(form.get("hidro_lataria")),
         normalizar_flag_sim_nao(form.get("hidro_vidros")),
+        normalizar_texto_campo(usuario_info.get("usuario")),
+        normalizar_texto_campo(usuario_info.get("nome")),
         servico_id,
     ))
 
@@ -3053,11 +4138,26 @@ def montar_registros_historico_lavagens(df, mapeamento):
         if not placa:
             continue
 
-        cliente = limpar_valor_planilha(row.get(mapeamento.get("nome", ""), "")) if mapeamento.get("nome") else ""
-        carro = limpar_valor_planilha(row.get(mapeamento.get("modelo", ""), "")) if mapeamento.get("modelo") else ""
-        cor = limpar_valor_planilha(row.get(mapeamento.get("cor", ""), "")) if mapeamento.get("cor") else ""
-        servico = limpar_valor_planilha(row.get(mapeamento.get("servico", ""), "")) if mapeamento.get("servico") else ""
-        data_original = limpar_valor_planilha(row.get(mapeamento.get("data", ""), "")) if mapeamento.get("data") else ""
+        cliente = (
+            limpar_valor_planilha(row.get(mapeamento.get("nome", ""), ""))
+            if mapeamento.get("nome") else ""
+        )
+        carro = (
+            limpar_valor_planilha(row.get(mapeamento.get("modelo", ""), ""))
+            if mapeamento.get("modelo") else ""
+        )
+        cor = (
+            limpar_valor_planilha(row.get(mapeamento.get("cor", ""), ""))
+            if mapeamento.get("cor") else ""
+        )
+        servico = (
+            limpar_valor_planilha(row.get(mapeamento.get("servico", ""), ""))
+            if mapeamento.get("servico") else ""
+        )
+        data_original = (
+            limpar_valor_planilha(row.get(mapeamento.get("data", ""), ""))
+            if mapeamento.get("data") else ""
+        )
         data_lavagem = interpretar_data_planilha(data_original)
 
         if not any([cliente, carro, cor, servico]):
@@ -3256,10 +4356,22 @@ def importar_clientes_dataframe(df, mapeamento):
             estatisticas["linhas_ignoradas"] += 1
             continue
 
-        nome = limpar_valor_planilha(row.get(mapeamento.get("nome", ""), "")) if mapeamento.get("nome") else ""
-        telefone = limpar_valor_planilha(row.get(mapeamento.get("telefone", ""), "")) if mapeamento.get("telefone") else ""
-        modelo = limpar_valor_planilha(row.get(mapeamento.get("modelo", ""), "")) if mapeamento.get("modelo") else ""
-        cor = limpar_valor_planilha(row.get(mapeamento.get("cor", ""), "")) if mapeamento.get("cor") else ""
+        nome = (
+            limpar_valor_planilha(row.get(mapeamento.get("nome", ""), ""))
+            if mapeamento.get("nome") else ""
+        )
+        telefone = (
+            limpar_valor_planilha(row.get(mapeamento.get("telefone", ""), ""))
+            if mapeamento.get("telefone") else ""
+        )
+        modelo = (
+            limpar_valor_planilha(row.get(mapeamento.get("modelo", ""), ""))
+            if mapeamento.get("modelo") else ""
+        )
+        cor = (
+            limpar_valor_planilha(row.get(mapeamento.get("cor", ""), ""))
+            if mapeamento.get("cor") else ""
+        )
 
         c.execute("""
             SELECT id, placa, modelo, cor, cliente_id
@@ -3285,7 +4397,10 @@ def importar_clientes_dataframe(df, mapeamento):
             novo_nome = nome or cliente_existente["nome"] or ""
             novo_telefone = telefone or cliente_existente["telefone"] or ""
 
-            if novo_nome != (cliente_existente["nome"] or "") or novo_telefone != (cliente_existente["telefone"] or ""):
+            if (
+                novo_nome != (cliente_existente["nome"] or "") or
+                novo_telefone != (cliente_existente["telefone"] or "")
+            ):
                 c.execute("""
                     UPDATE clientes
                     SET nome=?, telefone=?
@@ -3859,6 +4974,7 @@ def preparar_sincronizacoes():
         return
 
     iniciar_worker_backup_banco()
+    iniciar_worker_manutencao_arquivos()
     iniciar_worker_sincronizacao()
 
     if session.get("usuario"):
@@ -4141,6 +5257,14 @@ def salvar_emitente_nota_fiscal():
         return redirect("/login")
 
     salvar_configuracao_empresa_form(request.form)
+    registrar_auditoria(
+        "atualizou_emitente_fiscal",
+        "nota_fiscal",
+        detalhes={
+            "cnpj": normalizar_documento_fiscal(request.form.get("cnpj")),
+            "razao_social": normalizar_texto_campo(request.form.get("razao_social")),
+        },
+    )
     definir_feedback_nota_fiscal("sucesso", "Dados do emitente fiscal salvos com sucesso.")
 
     origem_id = converter_inteiro(request.form.get("origem_orcamento_id"), 0)
@@ -4156,17 +5280,32 @@ def salvar_integracao_nota_fiscal():
 
     salvar_configuracao_integracao_fiscal_form(request.form)
     integracao = obter_configuracao_integracao_fiscal()
+    registrar_auditoria(
+        "atualizou_integracao_fiscal",
+        "nota_fiscal",
+        detalhes={
+            "tipo_integracao": integracao.get("tipo_integracao"),
+            "ambiente": integracao.get("ambiente"),
+            "ativo": bool(integracao.get("ativo")),
+        },
+    )
     prontidao = avaliar_prontidao_integracao_fiscal(obter_configuracao_empresa(), integracao)
 
     if prontidao["pronta"]:
         definir_feedback_nota_fiscal(
             "sucesso",
-            "Configuracao de integracao fiscal salva. O sistema ja esta preparado para avancar para homologacao futura.",
+            (
+                "Configuracao de integracao fiscal salva. O sistema ja esta "
+                "preparado para avancar para homologacao futura."
+            ),
         )
     elif integracao.get("tipo_integracao") == "manual":
         definir_feedback_nota_fiscal(
             "sucesso",
-            "Estrutura fiscal salva. O sistema segue em modo manual, mas a aba de nota fiscal ficou preparada para integracao futura.",
+            (
+                "Estrutura fiscal salva. O sistema segue em modo manual, "
+                "mas a aba de nota fiscal ficou preparada para integracao futura."
+            ),
         )
     else:
         definir_feedback_nota_fiscal(
@@ -4225,6 +5364,17 @@ def gerar_nota_fiscal():
         "desconto": request.form.get("desconto"),
     }
     nota = salvar_nota_fiscal(dados, itens, empresa)
+    registrar_auditoria(
+        "gerou_nota_fiscal",
+        "nota_fiscal",
+        entidade_id=nota["id"],
+        placa=nota.get("placa"),
+        detalhes={
+            "cliente": nota.get("cliente_nome"),
+            "valor_total": nota.get("valor_total"),
+            "status": nota.get("status"),
+        },
+    )
     buffer = gerar_pdf_nota_fiscal_buffer(nota)
 
     return send_file(
@@ -4288,6 +5438,15 @@ def registrar_emissao_nota_fiscal(id):
     conn.commit()
     conn.close()
 
+    registrar_auditoria(
+        "registrou_emissao_nota_fiscal",
+        "nota_fiscal",
+        entidade_id=id,
+        detalhes={
+            "numero_nota": numero_nota,
+            "serie": normalizar_texto_campo(request.form.get("serie")),
+        },
+    )
     definir_feedback_nota_fiscal("sucesso", "Emissao manual registrada com sucesso.")
     return redirect("/nota_fiscal")
 
@@ -4454,7 +5613,10 @@ def api_hud():
         "total": round(total, 2),
         "andamento": andamento,
         "atrasados": atrasados,
-        "ticket": round(ticket, 2)
+        "ticket": round(ticket, 2),
+        "versao": APP_VERSION,
+        "usuario": session.get("usuario") or "",
+        "usuario_nome": session.get("usuario_nome") or session.get("usuario") or "",
     }
 
 @app.route("/status_sync")
@@ -4574,7 +5736,11 @@ def criar_admin():
             senha_temporaria = gerar_senha_temporaria_segura()
             c.execute("""
                 UPDATE usuarios
-                SET senha=?, senha_alteracao_obrigatoria=1, senha_atualizada_em=?, tentativas_login=0, bloqueado_ate=NULL
+                SET senha=?,
+                    senha_alteracao_obrigatoria=1,
+                    senha_atualizada_em=?,
+                    tentativas_login=0,
+                    bloqueado_ate=NULL
                 WHERE usuario='admin'
             """, (
                 senha_hash_bcrypt(senha_temporaria),
@@ -4686,7 +5852,11 @@ def login():
             conn.close()
             return render_template(
                 "login.html",
-                erro=f"Login bloqueado temporariamente. {formatar_tempo_restante(bloqueado_ate.isoformat(timespec='seconds'))} para tentar de novo."
+                erro=(
+                    "Login bloqueado temporariamente. "
+                    f"{formatar_tempo_restante(bloqueado_ate.isoformat(timespec='seconds'))} "
+                    "para tentar de novo."
+                )
             )
 
         if not verificar_senha_usuario(senha, user["senha"]):
@@ -4721,7 +5891,11 @@ def login():
         if session.get("senha_alteracao_obrigatoria"):
             definir_feedback_configuracoes(
                 "erro",
-                "Por seguranca, troque sua senha antes de continuar. Senhas temporarias, padrao ou antigas nao ficam liberadas no sistema."
+                (
+                    "Por seguranca, troque sua senha antes de continuar. "
+                    "Senhas temporarias, padrao ou antigas nao ficam "
+                    "liberadas no sistema."
+                )
             )
             return redirect("/configuracoes")
         return redirect("/")
@@ -4741,6 +5915,8 @@ def configuracoes():
     sincronizar_sessao_usuario()
     pode_gerenciar_usuarios = usuario_admin() and not session.get("senha_alteracao_obrigatoria")
     usuarios = carregar_usuarios_configuracao() if pode_gerenciar_usuarios else []
+    backup_config = obter_configuracao_backup()
+    arquivos_status = obter_status_arquivos()
 
     return render_template(
         "configuracoes.html",
@@ -4757,7 +5933,110 @@ def configuracoes():
         usuarios=usuarios,
         admin_logado=pode_gerenciar_usuarios,
         backup_status=obter_status_backup_banco(),
+        backup_config=backup_config,
+        frequencias_backup=FREQUENCIAS_BACKUP,
+        backups_disponiveis=listar_arquivos_backup_banco(),
+        arquivos_status=arquivos_status,
     )
+
+@app.route("/configuracoes/backup", methods=["POST"])
+def salvar_configuracao_backup():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem alterar a rotina de backup.")
+        return redirect("/configuracoes")
+
+    configuracao = salvar_configuracao_backup_form(request.form)
+    registrar_auditoria(
+        "configurou_backup",
+        "backup",
+        detalhes={
+            "frequencia": configuracao["frequencia"],
+            "retencao_arquivos": configuracao["retencao_arquivos"],
+        },
+    )
+    definir_feedback_configuracoes(
+        "sucesso",
+        (
+            f"Rotina de backup atualizada para "
+            f"{configuracao['frequencia_label'].lower()} "
+            f"com retencao de {configuracao['retencao_arquivos']} arquivo(s)."
+        )
+    )
+    return redirect("/configuracoes")
+
+@app.route("/configuracoes/backup/agora", methods=["POST"])
+def gerar_backup_agora():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem gerar backups manuais.")
+        return redirect("/configuracoes")
+
+    sucesso, mensagem, caminho = criar_backup_banco(force=True)
+    if sucesso:
+        nome = os.path.basename(caminho) if caminho else ""
+        registrar_auditoria(
+            "gerou_backup_manual",
+            "backup",
+            placa="",
+            detalhes={"arquivo": nome},
+        )
+        definir_feedback_configuracoes("sucesso", f"{mensagem} {nome}".strip())
+    else:
+        definir_feedback_configuracoes("erro", mensagem)
+    return redirect("/configuracoes")
+
+@app.route("/configuracoes/backup/restaurar", methods=["POST"])
+def restaurar_backup_configuracoes():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem restaurar backups.")
+        return redirect("/configuracoes")
+
+    nome_backup = request.form.get("backup_nome") or ""
+    sucesso, mensagem = restaurar_backup_banco(nome_backup)
+    if sucesso:
+        registrar_auditoria(
+            "restaurou_backup",
+            "backup",
+            detalhes={"arquivo_restaurado": nome_backup},
+        )
+    definir_feedback_configuracoes("sucesso" if sucesso else "erro", mensagem)
+    return redirect("/configuracoes")
+
+@app.route("/configuracoes/arquivos/manutencao", methods=["POST"])
+def executar_manutencao_arquivos_configuracoes():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem executar a manutencao de arquivos.")
+        return redirect("/configuracoes")
+
+    sucesso, mensagem, _ = executar_manutencao_arquivos(
+        force=True,
+        registrar_log=True,
+        usuario=resumo_usuario_logado(),
+    )
+    if not sucesso and "ja esta em execucao" in mensagem.lower():
+        time.sleep(1)
+        sucesso, mensagem, _ = executar_manutencao_arquivos(
+            force=True,
+            registrar_log=True,
+            usuario=resumo_usuario_logado(),
+        )
+    definir_feedback_configuracoes("sucesso" if sucesso else "erro", mensagem)
+    return redirect("/configuracoes")
 
 @app.route("/configuracoes/senha", methods=["POST"])
 def atualizar_minha_senha():
@@ -4812,7 +6091,19 @@ def atualizar_minha_senha():
     conn.close()
 
     preencher_sessao_usuario(usuario_atualizado)
-    definir_feedback_configuracoes("sucesso", "Senha atualizada com sucesso. Seu acesso agora esta protegido com hash bcrypt e politica forte.")
+    registrar_auditoria(
+        "alterou_propria_senha",
+        "usuario",
+        entidade_id=usuario["id"],
+        detalhes={"usuario_alvo": usuario["usuario"]},
+    )
+    definir_feedback_configuracoes(
+        "sucesso",
+        (
+            "Senha atualizada com sucesso. Seu acesso agora esta protegido "
+            "com hash bcrypt e politica forte."
+        ),
+    )
     return redirect("/configuracoes")
 
 @app.route("/configuracoes/usuarios", methods=["POST"])
@@ -4867,7 +6158,18 @@ def criar_usuario_funcionario():
     conn.commit()
     conn.close()
 
-    definir_feedback_configuracoes("sucesso", f"Usuario {usuario} criado com sucesso. A troca de senha sera obrigatoria no primeiro login.")
+    registrar_auditoria(
+        "criou_usuario",
+        "usuario",
+        detalhes={"usuario_alvo": usuario, "perfil": perfil},
+    )
+    definir_feedback_configuracoes(
+        "sucesso",
+        (
+            f"Usuario {usuario} criado com sucesso. "
+            "A troca de senha sera obrigatoria no primeiro login."
+        ),
+    )
     return redirect("/configuracoes")
 
 @app.route("/configuracoes/usuarios/<int:usuario_id>/senha", methods=["POST"])
@@ -4909,7 +6211,19 @@ def redefinir_senha_usuario(usuario_id):
     conn.commit()
     conn.close()
 
-    definir_feedback_configuracoes("sucesso", f"Senha do usuario {alvo['usuario']} atualizada. Ele vai precisar trocar a senha no proximo login.")
+    registrar_auditoria(
+        "redefiniu_senha_usuario",
+        "usuario",
+        entidade_id=usuario_id,
+        detalhes={"usuario_alvo": alvo["usuario"]},
+    )
+    definir_feedback_configuracoes(
+        "sucesso",
+        (
+            f"Senha do usuario {alvo['usuario']} atualizada. "
+            "Ele vai precisar trocar a senha no proximo login."
+        ),
+    )
     return redirect("/configuracoes")
 
 @app.route("/configuracoes/usuarios/<int:usuario_id>/alternar", methods=["POST"])
@@ -4947,6 +6261,27 @@ def alternar_status_usuario(usuario_id):
         f"Usuario {alvo['usuario']} {'ativado' if novo_status else 'pausado'} com sucesso."
     )
     return redirect("/configuracoes")
+
+@app.route("/auditoria")
+def pagina_auditoria():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem acessar a auditoria.")
+        return redirect("/configuracoes")
+
+    contexto = carregar_contexto_auditoria(request.args)
+    return render_template(
+        "auditoria.html",
+        registros=contexto["registros"],
+        usuarios_auditoria=contexto["usuarios"],
+        acoes_auditoria=contexto["acoes"],
+        filtros=contexto["filtros"],
+        periodos_auditoria=contexto["periodos"],
+        resumo_auditoria=contexto["resumo"],
+    )
 
 @app.route("/clima")
 def clima():
@@ -5239,6 +6574,12 @@ def index():
                         servicos.cera,
                         servicos.hidro_lataria,
                         servicos.hidro_vidros,
+                        servicos.criado_por_usuario,
+                        servicos.criado_por_nome,
+                        servicos.operacional_por_usuario,
+                        servicos.operacional_por_nome,
+                        servicos.finalizado_por_usuario,
+                        servicos.finalizado_por_nome,
                         tipos_servico.nome AS tipo_nome
                     FROM servicos
                     LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
@@ -5293,6 +6634,7 @@ def index():
                     s_dict["fotos_entrada"] = len(s_dict["galeria_fotos"].get("entrada", []))
                     s_dict["fotos_detalhe"] = len(s_dict["galeria_fotos"].get("detalhe", []))
                     s_dict["fotos_saida"] = len(s_dict["galeria_fotos"].get("saida", []))
+                    enriquecer_responsaveis_servico(s_dict)
 
                     historico_formatado.append({
                         "servico": s_dict,
@@ -5615,7 +6957,12 @@ def salvar_sincronizacao_clientes():
         salvar_notificacao(mensagem_importacao, "sucesso")
         definir_feedback_clientes(
             "sucesso",
-            f"Sincronizacao salva. Link: {url_normalizada} | Proxima execucao: {formatar_datahora(proximo_sync_em)} ({formatar_tempo_restante(proximo_sync_em)}) | {mensagem_importacao}"
+            (
+                f"Sincronizacao salva. Link: {url_normalizada} | "
+                f"Proxima execucao: {formatar_datahora(proximo_sync_em)} "
+                f"({formatar_tempo_restante(proximo_sync_em)}) | "
+                f"{mensagem_importacao}"
+            )
         )
     except Exception as e:
         definir_feedback_clientes("erro", f"Erro ao salvar sincronizacao: {e}")
@@ -5746,6 +7093,7 @@ def servico():
         return redirect("/login")
 
     data = request.form
+    usuario_info = resumo_usuario_logado()
 
     from datetime import datetime
     agora = datetime.now(ZoneInfo("America/Sao_Paulo")).isoformat()
@@ -5796,9 +7144,10 @@ def servico():
         INSERT INTO servicos 
         (
             veiculo_id, tipo_id, valor, entrada, status, prioridade,
-            observacoes, origem, guarita, pneu, cera, hidro_lataria, hidro_vidros
+            observacoes, origem, guarita, pneu, cera, hidro_lataria, hidro_vidros,
+            criado_por_usuario, criado_por_nome
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         veiculo_id,
         tipo_id,
@@ -5813,6 +7162,8 @@ def servico():
         normalizar_flag_sim_nao(data.get("cera")),
         normalizar_flag_sim_nao(data.get("hidro_lataria")),
         normalizar_flag_sim_nao(data.get("hidro_vidros")),
+        normalizar_texto_campo(usuario_info.get("usuario")),
+        normalizar_texto_campo(usuario_info.get("nome")),
     ))
 
     servico_id = c.lastrowid
@@ -5820,11 +7171,25 @@ def servico():
     # 📸 FOTOS
     fotos_entrada = request.files.getlist("foto_entrada")
     fotos_detalhe = request.files.getlist("foto_detalhe")
-    salvar_fotos_servico(c, servico_id, fotos_entrada, "entrada")
-    salvar_fotos_servico(c, servico_id, fotos_detalhe, "detalhe")
+    entrada_salvas = salvar_fotos_servico(c, servico_id, fotos_entrada, "entrada")
+    detalhe_salvas = salvar_fotos_servico(c, servico_id, fotos_detalhe, "detalhe")
 
     conn.commit()
     conn.close()
+
+    registrar_auditoria(
+        "iniciou_atendimento",
+        "servico",
+        entidade_id=servico_id,
+        placa=placa,
+        detalhes={
+            "tipo_servico": tipo_nome,
+            "valor": valor,
+            "fotos_entrada": entrada_salvas,
+            "fotos_detalhe": detalhe_salvas,
+        },
+        usuario=usuario_info,
+    )
 
     definir_feedback_painel("sucesso", f"Atendimento da placa {placa} iniciado com sucesso.")
     return redirect("/painel")
@@ -5834,6 +7199,7 @@ def salvar_operacional_painel(id):
     if not session.get("usuario"):
         return redirect("/login")
 
+    usuario_info = resumo_usuario_logado()
     conn = conectar()
     c = conn.cursor()
 
@@ -5850,7 +7216,7 @@ def salvar_operacional_painel(id):
         definir_feedback_painel("erro", "Atendimento nao encontrado.")
         return redirect("/painel")
 
-    atualizar_campos_operacionais_servico(c, id, request.form)
+    atualizar_campos_operacionais_servico(c, id, request.form, usuario_info=usuario_info)
     fotos_detalhe = request.files.getlist("foto_detalhe")
     detalhes_salvos = salvar_fotos_servico(c, id, fotos_detalhe, "detalhe")
 
@@ -5860,6 +7226,16 @@ def salvar_operacional_painel(id):
     if acao == "finalizar":
         conn.commit()
         conn.close()
+        registrar_auditoria(
+            "abriu_checklist_finalizacao",
+            "servico",
+            entidade_id=id,
+            placa=placa,
+            detalhes={
+                "fotos_detalhe_adicionadas": detalhes_salvos,
+            },
+            usuario=usuario_info,
+        )
         mensagem = f"Checklist aberto para a placa {placa}."
         if detalhes_salvos:
             mensagem += f" {detalhes_salvos} foto(s) de detalhe salva(s)."
@@ -5874,6 +7250,23 @@ def salvar_operacional_painel(id):
     conn.commit()
     conn.close()
 
+    registrar_auditoria(
+        "salvou_operacional",
+        "servico",
+        entidade_id=id,
+        placa=placa,
+        detalhes={
+            "origem": normalizar_texto_campo(request.form.get("origem")),
+            "guarita": normalizar_texto_campo(request.form.get("guarita")),
+            "pneu": normalizar_texto_campo(request.form.get("pneu")),
+            "cera": normalizar_flag_sim_nao(request.form.get("cera")),
+            "hidro_lataria": normalizar_flag_sim_nao(request.form.get("hidro_lataria")),
+            "hidro_vidros": normalizar_flag_sim_nao(request.form.get("hidro_vidros")),
+            "fotos_detalhe_adicionadas": detalhes_salvos,
+        },
+        usuario=usuario_info,
+    )
+
     definir_feedback_painel("sucesso", mensagem)
     return redirect("/painel")
 
@@ -5882,6 +7275,7 @@ def checklist_servico(id):
     if not session.get("usuario"):
         return redirect("/login")
 
+    usuario_info = resumo_usuario_logado()
     servico = buscar_servico_operacional(id)
 
     if not servico:
@@ -5899,6 +7293,7 @@ def checklist_servico(id):
     servico["cor"] = servico.get("cor") or ""
     servico["tipo_nome"] = servico.get("tipo_nome") or "Servico"
     servico["valor_exibicao"] = formatar_valor_monetario(servico.get("valor"))
+    enriquecer_responsaveis_servico(servico)
     entrada = interpretar_datahora_sistema(servico.get("entrada"))
     servico["entrada_exibicao"] = (
         entrada.strftime("%d/%m/%Y %H:%M")
@@ -5950,14 +7345,31 @@ def checklist_servico(id):
                     VALUES (?, ?, ?, 1)
                 """, (id, item["id"], item["nome"]))
 
-            salvar_fotos_servico(c, id, fotos_saida, "saida")
+            fotos_saida_salvas = salvar_fotos_servico(c, id, fotos_saida, "saida")
             c.execute("""
                 UPDATE servicos
-                SET status='FINALIZADO', entrega=?
+                SET status='FINALIZADO', entrega=?, finalizado_por_usuario=?, finalizado_por_nome=?
                 WHERE id=?
-            """, (agora_iso(), id))
+            """, (
+                agora_iso(),
+                normalizar_texto_campo(usuario_info.get("usuario")),
+                normalizar_texto_campo(usuario_info.get("nome")),
+                id,
+            ))
             conn.commit()
             conn.close()
+
+            registrar_auditoria(
+                "finalizou_atendimento",
+                "servico",
+                entidade_id=id,
+                placa=servico["placa"],
+                detalhes={
+                    "checklist_itens": len(itens),
+                    "fotos_saida": fotos_saida_salvas,
+                },
+                usuario=usuario_info,
+            )
 
             definir_feedback_painel(
                 "sucesso",
@@ -5985,13 +7397,21 @@ def detalhe(id):
     if not session.get("usuario"):
         return redirect("/login")
 
+    usuario_info = resumo_usuario_logado()
     conn = conectar()
     c = conn.cursor()
 
-    salvar_fotos_servico(c, id, request.files.getlist("foto_detalhe"), "detalhe")
+    fotos_salvas = salvar_fotos_servico(c, id, request.files.getlist("foto_detalhe"), "detalhe")
 
     conn.commit()
     conn.close()
+    registrar_auditoria(
+        "adicionou_fotos_detalhe",
+        "servico",
+        entidade_id=id,
+        detalhes={"fotos_detalhe": fotos_salvas},
+        usuario=usuario_info,
+    )
     definir_feedback_painel("sucesso", "Fotos de detalhe salvas no painel.")
 
     return redirect("/painel")
@@ -6244,6 +7664,85 @@ def api_salvar_base():
         }), 400
 
 
+def listar_servicos_em_andamento_voz():
+    conn = conectar()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT
+            servicos.id,
+            servicos.entrada,
+            tipos_servico.nome AS tipo_nome,
+            veiculos.placa,
+            veiculos.modelo,
+            veiculos.cor,
+            clientes.nome AS cliente_nome
+        FROM servicos
+        LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
+        LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
+        LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
+        WHERE servicos.status='EM ANDAMENTO'
+        ORDER BY servicos.id DESC
+        """
+    )
+    servicos_db = c.fetchall()
+    conn.close()
+
+    agora_atual = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    servicos = []
+
+    for row in servicos_db:
+        item = dict(row)
+        entrada = interpretar_datahora_sistema(item.get("entrada"))
+
+        try:
+            minutos = int((agora_atual - entrada).total_seconds() / 60) if entrada else 0
+        except Exception:
+            minutos = 0
+
+        minutos = max(0, minutos)
+        horas = minutos // 60
+        minutos_restantes = minutos % 60
+
+        if horas > 0:
+            tempo_exibicao = f"{horas}h {minutos_restantes}min"
+        else:
+            tempo_exibicao = f"{minutos_restantes}min"
+
+        servicos.append(
+            {
+                "id": item.get("id"),
+                "placa": item.get("placa") or "",
+                "modelo": item.get("modelo") or "",
+                "cor": item.get("cor") or "",
+                "cliente_nome": item.get("cliente_nome") or "",
+                "servico": item.get("tipo_nome") or "Servico",
+                "minutos_em_andamento": minutos,
+                "tempo_exibicao": tempo_exibicao,
+                "entrada_exibicao": (
+                    entrada.strftime("%d/%m/%Y %H:%M")
+                    if entrada else (item.get("entrada") or "-")
+                ),
+            }
+        )
+
+    return servicos
+
+
+@app.route("/api/operacional/voz")
+def api_operacional_voz():
+    if not session.get("usuario"):
+        return jsonify({"status": "erro", "mensagem": "nao autorizado"}), 401
+
+    return jsonify(
+        {
+            "status": "ok",
+            "gerado_em": agora_iso(),
+            "servicos": listar_servicos_em_andamento_voz(),
+        }
+    )
+
+
 
 @app.route("/painel")
 def painel():
@@ -6333,6 +7832,7 @@ def painel():
         s_dict["fotos_detalhe"] = len(s_dict["galeria_fotos"].get("detalhe", []))
         s_dict["fotos_saida"] = len(s_dict["galeria_fotos"].get("saida", []))
         s_dict["tem_fotos"] = bool(s_dict["fotos_entrada"] or s_dict["fotos_detalhe"] or s_dict["fotos_saida"])
+        enriquecer_responsaveis_servico(s_dict)
 
         servicos.append(s_dict)
 

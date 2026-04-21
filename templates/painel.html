@@ -3,6 +3,7 @@
 {% block title %}Painel{% endblock %}
 {% block titulo %}Painel Operacional{% endblock %}
 {% block subtitulo %}Controle dos servicos em andamento{% endblock %}
+{% block global_voice_controls %}{% endblock %}
 
 {% block actions %}
 <a href="/" class="button-link">
@@ -24,7 +25,7 @@
         <button type="button" id="vozToggleButton">Avisos por voz: ativados</button>
         <button type="button" id="vozTesteButton">Testar voz</button>
     </div>
-    <p class="muted-text top-spacing" id="vozStatusTexto">A cada 10 minutos, o painel avisa em portugues do Brasil quais veiculos continuam em atendimento e ha quantos minutos estao na operacao.</p>
+    <p class="muted-text top-spacing" id="vozStatusTexto">A cada 10 minutos, o sistema avisa em portugues do Brasil quais veiculos continuam em atendimento e ha quantos minutos estao na operacao.</p>
 </div>
 
 <div class="page-grid top-spacing">
@@ -54,6 +55,7 @@
     <p class="muted-text">Contato: {{ s.cliente_telefone }}</p>
     {% endif %}
 
+    <p class="muted-text">Entrada por: {{ s.criado_por_nome_exibicao }}{% if s.operacional_por_nome_exibicao != "Nao registrado" %} | Operacional por: {{ s.operacional_por_nome_exibicao }}{% endif %}</p>
     <p class="muted-text">Fotos: entrada {{ s.fotos_entrada }} | detalhe {{ s.fotos_detalhe }} | saida {{ s.fotos_saida }}</p>
 
     {% if s.tem_fotos %}
@@ -62,10 +64,10 @@
         {% set fotos = s.galeria_fotos.get(tipo, []) %}
         {% if fotos %}
         <div class="photo-gallery-group">
-            <p class="photo-gallery-label">{{ titulo }} ({{ fotos|length }})</p>
+            <p class="photo-gallery-label">{{ titulo }} ({{ fotos|length }}){% if s.resumo_uploaders_fotos.get(tipo) %} - por {{ s.resumo_uploaders_fotos.get(tipo) }}{% endif %}</p>
             <div class="photo-gallery-track">
                 {% for foto in fotos %}
-                <a href="{{ foto.url }}" target="_blank" rel="noopener" class="photo-thumb-link" title="{{ titulo }} {{ loop.index }}">
+                <a href="{{ foto.url }}" target="_blank" rel="noopener" class="photo-thumb-link" title="{{ titulo }} {{ loop.index }} - {{ foto.usuario_nome_exibicao }}">
                     <img src="{{ foto.url }}" alt="{{ titulo }} {{ loop.index }}" class="photo-thumb-image">
                 </a>
                 {% endfor %}
@@ -147,247 +149,5 @@
     <p class="muted-text">Nenhum atendimento em andamento no momento.</p>
 </div>
 {% endif %}
-
-<script>
-const PAINEL_VOZ_ATIVA_KEY = "wagenPainelVozAtiva";
-const PAINEL_VOZ_ALERTAS_KEY = "wagenPainelVozAlertas";
-const painelRenderizadoEm = Date.now();
-
-function suportaVozPainel() {
-    return "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
-}
-
-function obterCardsServicos() {
-    return Array.from(document.querySelectorAll(".js-servico-card"));
-}
-
-function obterBotaoVoz() {
-    return document.getElementById("vozToggleButton");
-}
-
-function obterBotaoTesteVoz() {
-    return document.getElementById("vozTesteButton");
-}
-
-function obterStatusVoz() {
-    return document.getElementById("vozStatusTexto");
-}
-
-function vozPainelAtiva() {
-    const salvo = localStorage.getItem(PAINEL_VOZ_ATIVA_KEY);
-    return salvo === null ? true : salvo === "1";
-}
-
-function salvarEstadoVozPainel(ativo) {
-    localStorage.setItem(PAINEL_VOZ_ATIVA_KEY, ativo ? "1" : "0");
-}
-
-function obterHistoricoAlertas() {
-    try {
-        return JSON.parse(localStorage.getItem(PAINEL_VOZ_ALERTAS_KEY) || "{}");
-    } catch (e) {
-        return {};
-    }
-}
-
-function salvarHistoricoAlertas(mapa) {
-    localStorage.setItem(PAINEL_VOZ_ALERTAS_KEY, JSON.stringify(mapa));
-}
-
-function limparHistoricoAlertasAntigos(idsAtivos) {
-    const historico = obterHistoricoAlertas();
-    const filtrado = {};
-
-    idsAtivos.forEach((id) => {
-        if (Object.prototype.hasOwnProperty.call(historico, id)) {
-            filtrado[id] = historico[id];
-        }
-    });
-
-    salvarHistoricoAlertas(filtrado);
-    return filtrado;
-}
-
-function formatarTempoPainel(minutosTotais) {
-    const minutos = Math.max(0, Number(minutosTotais) || 0);
-    const horas = Math.floor(minutos / 60);
-    const resto = minutos % 60;
-
-    if (!horas) {
-        return `${minutos}min`;
-    }
-
-    if (!resto) {
-        return `${horas}h`;
-    }
-
-    return `${horas}h ${resto}min`;
-}
-
-function obterMinutosAtuais(card) {
-    const base = Number(card.dataset.baseMinutos || 0);
-    const decorridos = Math.floor((Date.now() - painelRenderizadoEm) / 60000);
-    return Math.max(0, base + decorridos);
-}
-
-function atualizarTemposPainel() {
-    obterCardsServicos().forEach((card) => {
-        const destino = card.querySelector(".js-tempo-espera");
-        if (destino) {
-            destino.textContent = formatarTempoPainel(obterMinutosAtuais(card));
-        }
-    });
-}
-
-function obterVozPtBr() {
-    const vozes = window.speechSynthesis.getVoices();
-    return (
-        vozes.find((voz) => (voz.lang || "").toLowerCase().startsWith("pt-br")) ||
-        vozes.find((voz) => (voz.lang || "").toLowerCase().startsWith("pt")) ||
-        null
-    );
-}
-
-function atualizarStatusControlesVoz() {
-    const botao = obterBotaoVoz();
-    const botaoTeste = obterBotaoTesteVoz();
-    const status = obterStatusVoz();
-
-    if (!botao || !botaoTeste || !status) {
-        return;
-    }
-
-    if (!suportaVozPainel()) {
-        botao.disabled = true;
-        botaoTeste.disabled = true;
-        botao.textContent = "Avisos por voz indisponiveis";
-        status.textContent = "Este navegador nao oferece suporte a voz em portugues pelo recurso nativo.";
-        return;
-    }
-
-    const ativa = vozPainelAtiva();
-    botao.textContent = ativa ? "Avisos por voz: ativados" : "Avisos por voz: pausados";
-    botaoTeste.disabled = false;
-    status.textContent = ativa
-        ? "Os avisos automaticos estao ativos. O painel fala os veiculos em atendimento a cada novo bloco de 10 minutos."
-        : "Os avisos automaticos estao pausados. Clique para reativar quando quiser ouvir os lembretes do painel.";
-}
-
-function montarNomeVeiculo(card) {
-    const modelo = (card.dataset.modelo || "").trim();
-    const placa = (card.dataset.placa || "").trim();
-
-    if (modelo && placa) {
-        return `${modelo}, placa ${placa}`;
-    }
-
-    if (modelo) {
-        return modelo;
-    }
-
-    return `placa ${placa || "sem identificacao"}`;
-}
-
-function falarNoPainel(texto) {
-    if (!suportaVozPainel() || !vozPainelAtiva() || !texto) {
-        return;
-    }
-
-    const mensagem = new SpeechSynthesisUtterance(texto);
-    mensagem.lang = "pt-BR";
-    mensagem.rate = 1;
-    mensagem.pitch = 1;
-    mensagem.volume = 1;
-
-    const voz = obterVozPtBr();
-    if (voz) {
-        mensagem.voice = voz;
-    }
-
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(mensagem);
-}
-
-function verificarAlertasOperacionais() {
-    if (!suportaVozPainel() || !vozPainelAtiva()) {
-        return;
-    }
-
-    const cards = obterCardsServicos();
-    const idsAtivos = cards.map((card) => card.dataset.servicoId);
-    const historico = limparHistoricoAlertasAntigos(idsAtivos);
-    const mensagens = [];
-
-    cards.forEach((card) => {
-        const servicoId = card.dataset.servicoId;
-        const minutos = obterMinutosAtuais(card);
-        const bloco = Math.floor(minutos / 10);
-        const ultimoBloco = Number(historico[servicoId] || 0);
-
-        if (bloco >= 1 && bloco > ultimoBloco) {
-            mensagens.push(`${montarNomeVeiculo(card)} esta em atendimento ha ${minutos} minutos.`);
-            historico[servicoId] = bloco;
-        }
-    });
-
-    salvarHistoricoAlertas(historico);
-
-    if (mensagens.length) {
-        falarNoPainel(`Atencao. ${mensagens.join(" ")}`);
-    }
-}
-
-function alternarAvisosVozPainel() {
-    const novoEstado = !vozPainelAtiva();
-    salvarEstadoVozPainel(novoEstado);
-    atualizarStatusControlesVoz();
-
-    if (novoEstado) {
-        falarNoPainel("Avisos por voz ativados no painel operacional.");
-        verificarAlertasOperacionais();
-    } else if (suportaVozPainel()) {
-        window.speechSynthesis.cancel();
-    }
-}
-
-function testarAvisoVozPainel() {
-    if (!suportaVozPainel()) {
-        return;
-    }
-
-    falarNoPainel("Teste de voz do painel operacional ativado com sucesso.");
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-    atualizarTemposPainel();
-    atualizarStatusControlesVoz();
-
-    const botao = obterBotaoVoz();
-    const botaoTeste = obterBotaoTesteVoz();
-
-    if (botao) {
-        botao.addEventListener("click", alternarAvisosVozPainel);
-    }
-
-    if (botaoTeste) {
-        botaoTeste.addEventListener("click", testarAvisoVozPainel);
-    }
-
-    limparHistoricoAlertasAntigos(obterCardsServicos().map((card) => card.dataset.servicoId));
-
-    setInterval(() => {
-        atualizarTemposPainel();
-        verificarAlertasOperacionais();
-    }, 30000);
-
-    verificarAlertasOperacionais();
-});
-
-if (suportaVozPainel()) {
-    window.speechSynthesis.onvoiceschanged = () => {
-        atualizarStatusControlesVoz();
-    };
-}
-</script>
 
 {% endblock %}

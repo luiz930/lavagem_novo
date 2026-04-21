@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}Auditoria{% endblock %}
+{% block titulo %}Auditoria do Sistema{% endblock %}
+{% block subtitulo %}Rastreabilidade por usuario, placa, acao e periodo{% endblock %}
+
+{% block actions %}
+<a href="/configuracoes" class="button-link">
+    <button type="button">Voltar</button>
+</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="page-grid">
+    <div class="page-card">
+        <p class="pill-label">Eventos</p>
+        <h2 class="section-title top-spacing">{{ resumo_auditoria.total_eventos }}</h2>
+        <p class="muted-text">Eventos encontrados com os filtros atuais.</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Usuarios</p>
+        <h2 class="section-title top-spacing">{{ resumo_auditoria.usuarios_unicos }}</h2>
+        <p class="muted-text">Usuarios diferentes na consulta atual.</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Placas</p>
+        <h2 class="section-title top-spacing">{{ resumo_auditoria.placas_unicas }}</h2>
+        <p class="muted-text">Placas relacionadas aos eventos filtrados.</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Ultimo evento</p>
+        <h2 class="section-title top-spacing">{{ resumo_auditoria.ultimo_evento_em_fmt }}</h2>
+        <p class="muted-text">Registro mais recente dentro da consulta atual.</p>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <h2 class="section-title">Filtros</h2>
+
+    <form method="GET" class="stack-form stack-form--wide top-spacing">
+        <div class="field-grid">
+            <select name="periodo">
+                {% for item in periodos_auditoria %}
+                <option value="{{ item.value }}" {% if filtros.periodo == item.value %}selected{% endif %}>{{ item.label }}</option>
+                {% endfor %}
+            </select>
+
+            <select name="usuario">
+                <option value="">Todos os usuarios</option>
+                {% for item in usuarios_auditoria %}
+                <option value="{{ item }}" {% if filtros.usuario == item %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+
+            <select name="acao">
+                <option value="">Todas as acoes</option>
+                {% for item in acoes_auditoria %}
+                <option value="{{ item.value }}" {% if filtros.acao == item.value %}selected{% endif %}>{{ item.label }}</option>
+                {% endfor %}
+            </select>
+
+            <input name="placa" placeholder="Filtrar por placa" value="{{ filtros.placa }}">
+            <input name="busca" placeholder="Buscar em detalhes ou entidade" value="{{ filtros.busca }}">
+        </div>
+
+        <div class="actions-row actions-row--left">
+            <button type="submit">Aplicar filtros</button>
+            <a href="/auditoria" class="button-link">
+                <button type="button">Limpar filtros</button>
+            </a>
+        </div>
+    </form>
+</div>
+
+<div class="top-spacing">
+    <h2 class="section-title">Historico</h2>
+
+    <div class="list-grid">
+        {% for item in registros %}
+        <div class="page-card">
+            <div class="actions-row actions-row--left">
+                <span class="pill-label">{{ item.acao_label }}</span>
+                <span class="status-badge status-badge--muted">{{ item.criado_em_fmt }}</span>
+                {% if item.placa %}
+                <span class="status-badge status-badge--warning">{{ item.placa }}</span>
+                {% endif %}
+            </div>
+
+            <p class="top-spacing"><b>{{ item.usuario_exibicao }}</b></p>
+            <p class="muted-text">Usuario: {{ item.usuario or "sistema" }}</p>
+            <p class="muted-text">Entidade: {{ item.entidade_label }}{% if item.entidade_id %} #{{ item.entidade_id }}{% endif %}</p>
+
+            {% if item.detalhes %}
+            <details class="top-spacing">
+                <summary>Ver detalhes</summary>
+                <pre class="audit-json">{{ item.detalhes_pretty }}</pre>
+            </details>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="page-card page-card--soft">
+            <p class="muted-text">Nenhum evento encontrado com os filtros atuais.</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+{% endblock %}

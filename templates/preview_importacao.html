@@ -139,8 +139,12 @@ label {
 </div>
 
 <footer class="site-footer">
-    Desenvolvido por Luiz Henrique | Wagen Estetica Automotiva | Direitos Reservados.
+    Desenvolvido por Luiz Henrique | Wagen Estetica Automotiva | {{ app_version }} | Direitos Reservados.
 </footer>
+
+{% if session.get("usuario") %}
+<script src="/static/operacional_voz.js"></script>
+{% endif %}
 
 </body>
 </html>

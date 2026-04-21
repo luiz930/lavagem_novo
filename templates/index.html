@@ -731,6 +731,40 @@ input[type="file"] {
     padding: 10px;
 }
 
+.voice-widget {
+    position: fixed;
+    right: 18px;
+    bottom: 138px;
+    width: min(88vw, 280px);
+    padding: 10px 10px 9px;
+    border-radius: 14px;
+    border: 1px solid rgba(250, 204, 21, 0.26);
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(17, 24, 39, 0.98));
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
+    z-index: 9998;
+    text-align: left;
+}
+
+.voice-widget-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.voice-widget-actions button {
+    margin: 0;
+    padding: 9px 12px;
+    font-size: 0.95rem;
+    border-radius: 12px;
+}
+
+.voice-widget-status {
+    margin: 8px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: rgba(255, 255, 255, 0.82);
+}
+
 .notificacao {
     padding: 8px;
     border-bottom: 1px solid #333;
@@ -754,6 +788,24 @@ input[type="file"] {
     #btn-sino {
         width: 44px;
         height: 44px;
+    }
+
+    .voice-widget {
+        right: 12px;
+        bottom: 12px;
+        width: min(92vw, 260px);
+    }
+
+    .voice-widget-actions {
+        flex-direction: column;
+    }
+
+    .voice-widget-actions button {
+        width: 100%;
+    }
+
+    #relogio {
+        margin-bottom: 172px;
     }
 }
 
@@ -783,6 +835,7 @@ input[type="file"] {
 <a href="/financeiro"><button><span>&#128176;</span> Financeiro</button></a>
 <a href="/pneu"><button><span>&#128736;</span> Pneus</button></a>
 <a href="/clima"><button><span>&#9729;</span> Clima</button></a>
+<a href="/auditoria"><button><span>&#128269;</span> Auditoria</button></a>
 <a href="/configuracoes"><button><span>&#9881;</span> Configurações</button></a>
 <a href="/logout">
     <button style="
@@ -804,6 +857,16 @@ input[type="file"] {
     </button>
 
     <div id="dropdown-notificacoes" class="hidden"></div>
+</div>
+
+<div class="voice-widget">
+    <div class="voice-widget-actions">
+        <button type="button" id="vozToggleButton">Avisos por voz: ativados</button>
+        <button type="button" id="vozTesteButton">Testar voz</button>
+    </div>
+    <p class="voice-widget-status" id="vozStatusTexto">
+        A cada 10 minutos, o sistema avisa em portugues do Brasil quais veiculos continuam em atendimento e ha quantos minutos estao na operacao.
+    </p>
 </div>
 
 <!-- MAIN -->
@@ -979,6 +1042,7 @@ input[type="file"] {
 {% endif %}
 <p>Status: {{s.status}}</p>
 <p>Tempo: {{item.tempo_str}}</p>
+<p class="muted-text">Entrada por: {{ s.criado_por_nome_exibicao }}{% if s.finalizado_por_nome_exibicao != "Nao finalizado" %} | Finalizado por: {{ s.finalizado_por_nome_exibicao }}{% endif %}</p>
 
 <div class="historico-summary">
 Operacional:
@@ -1022,6 +1086,21 @@ Hidro vidros {{ "Sim" if s.hidro_vidros == "Sim" else "Nao" }}
         {{ "Sim" if s.hidro_vidros == "Sim" else "Nao" }}
     </div>
 
+    <div class="historico-meta-item">
+        <strong>Entrada por</strong>
+        {{ s.criado_por_nome_exibicao }}
+    </div>
+
+    <div class="historico-meta-item">
+        <strong>Operacional por</strong>
+        {{ s.operacional_por_nome_exibicao }}
+    </div>
+
+    <div class="historico-meta-item">
+        <strong>Finalizado por</strong>
+        {{ s.finalizado_por_nome_exibicao }}
+    </div>
+
     <div class="historico-meta-item historico-meta-item--wide">
         <strong>Checklist</strong>
         {{ s.checklist_resumo or "Sem checklist salvo" }}
@@ -1041,10 +1120,10 @@ Hidro vidros {{ "Sim" if s.hidro_vidros == "Sim" else "Nao" }}
             {% set fotos = s.galeria_fotos.get(tipo, []) %}
             {% if fotos %}
             <div class="historico-gallery-group">
-                <span class="historico-gallery-label">{{ titulo }} ({{ fotos|length }})</span>
+                <span class="historico-gallery-label">{{ titulo }} ({{ fotos|length }}){% if s.resumo_uploaders_fotos.get(tipo) %} - por {{ s.resumo_uploaders_fotos.get(tipo) }}{% endif %}</span>
                 <div class="historico-gallery-track">
                     {% for foto in fotos %}
-                    <a href="{{ foto.url }}" target="_blank" rel="noopener" class="historico-thumb-link" title="{{ titulo }} {{ loop.index }}">
+                    <a href="{{ foto.url }}" target="_blank" rel="noopener" class="historico-thumb-link" title="{{ titulo }} {{ loop.index }} - {{ foto.usuario_nome_exibicao }}">
                         <img src="{{ foto.url }}" alt="{{ titulo }} {{ loop.index }}" class="historico-thumb-image">
                     </a>
                     {% endfor %}
@@ -1075,7 +1154,7 @@ Hidro vidros {{ "Sim" if s.hidro_vidros == "Sim" else "Nao" }}
 </div>
 
 <footer class="site-footer">
-Desenvolvido por Luiz Henrique | Wagen Estetica Automotiva | Direitos Reservados.
+Desenvolvido por Luiz Henrique | Wagen Estetica Automotiva | {{ app_version }} | Direitos Reservados.
 </footer>
 
 <script>
@@ -1266,7 +1345,7 @@ carregarNotificacoes();
 </script>
 
 <script>
-const APP_VERSION = "{{version}}";
+const APP_VERSION = "{{ app_version }}";
 let climaTexto = "🌤️ Carregando...";
 let sugestaoTexto = "";
 
@@ -1274,7 +1353,9 @@ let hudData = {
     total: 0,
     andamento: 0,
     atrasados: 0,
-    ticket: 0
+    ticket: 0,
+    usuario_nome: "",
+    versao: APP_VERSION
 };
 
 let alertaAtivo = false;
@@ -1343,7 +1424,11 @@ function atualizarRelogio() {
 
     "<br>" +
 
-    "🧠 " + APP_VERSION;
+    "👤 Usuario: " + (hudData.usuario_nome || "-") +
+
+    "<br>" +
+
+    "🧠 " + (hudData.versao || APP_VERSION);
 
     // 🔥 ALERTA
     if (hudData.atrasados > 0) {
@@ -1395,6 +1480,9 @@ async function limparNotificacoes() {
     carregarNotificacoes();
 }
 </script>
+
+<script src="/static/photo_upload.js"></script>
+<script src="/static/operacional_voz.js"></script>
 
 </body>
 </html>

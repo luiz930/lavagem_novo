@@ -191,6 +191,38 @@ body.responsive-page.sidebar-open {
     margin-left: 250px;
 }
 
+.voice-widget {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    width: min(88vw, 280px);
+    padding: 10px 10px 9px;
+    border-radius: 14px;
+    border: 1px solid rgba(250, 204, 21, 0.26);
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(17, 24, 39, 0.98));
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
+    z-index: 2500;
+}
+
+.voice-widget-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.voice-widget-actions button {
+    margin: 0;
+    padding: 9px 12px;
+    font-size: 0.95rem;
+    border-radius: 12px;
+}
+
+.voice-widget-status {
+    margin: 8px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
 .responsive-main {
     transition: margin-left 0.3s ease;
 }
@@ -248,6 +280,20 @@ body.responsive-page.sidebar-open {
     .main-content.shift {
         margin-left: 0;
     }
+
+    .voice-widget {
+        right: 12px;
+        bottom: 12px;
+        width: min(92vw, 260px);
+    }
+
+    .voice-widget-actions {
+        flex-direction: column;
+    }
+
+    .voice-widget-actions button {
+        width: 100%;
+    }
 }
 </style>
 
@@ -274,6 +320,7 @@ body.responsive-page.sidebar-open {
         <a href="{{ url_for('itens_checklist') }}"><button><span>&#9745;</span> Itens Checklist</button></a>
         <a href="{{ url_for('pagina_orcamento') }}"><button><span>&#128196;</span> Orcamentos</button></a>
         <a href="{{ url_for('financeiro') }}"><button><span>&#128176;</span> Financeiro</button></a>
+        <a href="{{ url_for('pagina_auditoria') }}"><button><span>&#128269;</span> Auditoria</button></a>
         <a href="{{ url_for('cadastrar_pneu') }}"><button><span>&#128736;</span> Pneus</button></a>
         <a href="{{ url_for('clima') }}"><button><span>&#9729;</span> Clima</button></a>
         <a href="{{ url_for('configuracoes') }}"><button><span>&#9881;</span> Configuracoes</button></a>
@@ -288,6 +335,20 @@ body.responsive-page.sidebar-open {
 <button class="menu-btn" onclick="toggleSidebar()">&#9776;</button>
 
 {% endif %}
+
+{% block global_voice_controls %}
+{% if session.get("usuario") %}
+<div class="voice-widget">
+    <div class="voice-widget-actions">
+        <button type="button" id="vozToggleButton">Avisos por voz: ativados</button>
+        <button type="button" id="vozTesteButton">Testar voz</button>
+    </div>
+    <p class="muted-text voice-widget-status" id="vozStatusTexto">
+        A cada 10 minutos, o sistema avisa em portugues do Brasil quais veiculos continuam em atendimento e ha quantos minutos estao na operacao.
+    </p>
+</div>
+{% endif %}
+{% endblock %}
 
 <div id="main" class="main-content responsive-main {% if session.get('usuario') %}{% else %}no-sidebar{% endif %}">
 
@@ -313,7 +374,7 @@ body.responsive-page.sidebar-open {
 </div>
 
 <footer class="site-footer">
-    Desenvolvido por Luiz Henrique | Wagen Estetica Automotiva | Direitos Reservados.
+    Desenvolvido por Luiz Henrique | Wagen Estetica Automotiva | {{ app_version }} | Direitos Reservados.
 </footer>
 
 </div>
@@ -343,6 +404,11 @@ function toggleSidebar() {
     }
 }
 </script>
+
+<script src="/static/photo_upload.js"></script>
+{% if session.get("usuario") %}
+<script src="/static/operacional_voz.js"></script>
+{% endif %}
 
 </body>
 </html>

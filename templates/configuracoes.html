@@ -49,17 +49,131 @@
     </div>
 </div>
 
-<div class="page-card top-spacing">
-    <p class="pill-label">Backup automatico</p>
-    <h2 class="section-title top-spacing">Protecao do banco</h2>
-    <p><b>Status:</b> Ativo</p>
-    <p><b>Ultimo backup:</b> {{ backup_status.ultimo_backup_em_fmt }}</p>
-    <p><b>Quantidade salva:</b> {{ backup_status.quantidade }} arquivo(s)</p>
-    <p><b>Retencao:</b> ultimos {{ backup_status.retencao }} backups</p>
-    <p class="muted-text">Pasta: {{ backup_status.pasta }}</p>
-    {% if backup_status.ultimo_backup_nome %}
-    <p class="muted-text">Arquivo mais recente: {{ backup_status.ultimo_backup_nome }}</p>
+<div class="page-grid top-spacing">
+    <div class="page-card">
+        <p class="pill-label">Backup automatico</p>
+        <h2 class="section-title top-spacing">Protecao do banco</h2>
+        <p><b>Status:</b> Ativo</p>
+        <p><b>Frequencia atual:</b> {{ backup_status.frequencia_label }}</p>
+        <p><b>Proximo backup previsto:</b> {{ backup_status.proximo_backup_em_fmt }}</p>
+        <p><b>Ultimo backup:</b> {{ backup_status.ultimo_backup_em_fmt }}</p>
+        <p><b>Tamanho do ultimo backup:</b> {{ backup_status.ultimo_backup_tamanho_fmt }}</p>
+        <p><b>Quantidade salva:</b> {{ backup_status.quantidade }} arquivo(s)</p>
+        <p><b>Retencao:</b> ultimos {{ backup_status.retencao }} backups</p>
+        <p class="muted-text">Pasta: {{ backup_status.pasta }}</p>
+        {% if backup_status.ultimo_backup_nome %}
+        <p class="muted-text">Arquivo mais recente: {{ backup_status.ultimo_backup_nome }}</p>
+        {% endif %}
+    </div>
+
+    {% if admin_logado %}
+    <div class="page-card">
+        <h2 class="section-title">Configurar rotina</h2>
+        <p class="muted-text">Defina a frequencia automatica, quantos arquivos manter e gere backups manuais quando quiser.</p>
+
+        <form action="/configuracoes/backup" method="POST" class="stack-form stack-form--wide top-spacing">
+            <div class="field-grid">
+                <select name="frequencia" required>
+                    {% for item in frequencias_backup %}
+                    <option value="{{ item.value }}" {% if backup_config.frequencia == item.value %}selected{% endif %}>{{ item.label }}</option>
+                    {% endfor %}
+                </select>
+                <input
+                    name="retencao_arquivos"
+                    type="number"
+                    min="1"
+                    max="120"
+                    step="1"
+                    value="{{ backup_config.retencao_arquivos }}"
+                    placeholder="Qtd de backups"
+                    required
+                >
+            </div>
+
+            <div class="actions-row actions-row--left">
+                <button type="submit">Salvar rotina</button>
+            </div>
+        </form>
+
+        <div class="actions-row actions-row--left top-spacing">
+            <form action="/configuracoes/backup/agora" method="POST">
+                <button type="submit">Gerar backup agora</button>
+            </form>
+        </div>
+
+        <p class="muted-text top-spacing">Na restauracao, o sistema cria um backup preventivo automatico antes de sobrescrever o banco atual.</p>
+    </div>
     {% endif %}
+</div>
+
+<div class="top-spacing">
+    <h2 class="section-title">Backups disponiveis</h2>
+
+    <div class="list-grid">
+        {% for item in backups_disponiveis %}
+        <div class="page-card">
+            <p><b>{{ item.nome }}</b></p>
+            <p class="muted-text">Criado em: {{ item.modificado_em_fmt }}</p>
+            <p class="muted-text">Tamanho: {{ item.tamanho_fmt }}</p>
+
+            {% if admin_logado %}
+            <div class="actions-row actions-row--left top-spacing">
+                <form action="/configuracoes/backup/restaurar" method="POST" onsubmit="return confirm('Restaurar este backup agora? O banco atual sera substituido, mas um backup preventivo sera criado antes.');">
+                    <input type="hidden" name="backup_nome" value="{{ item.nome }}">
+                    <button type="submit">Restaurar este backup</button>
+                </form>
+            </div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="page-card page-card--soft">
+            <p class="muted-text">Nenhum backup encontrado ainda.</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="page-grid top-spacing">
+    <div class="page-card">
+        <p class="pill-label">Arquivos</p>
+        <h2 class="section-title top-spacing">Uso de disco</h2>
+        <p><b>Sistema:</b> {{ arquivos_status.armazenamento.sistema.tamanho_fmt }}</p>
+        <p><b>Banco:</b> {{ arquivos_status.armazenamento.banco.tamanho_fmt }}</p>
+        <p><b>Backups:</b> {{ arquivos_status.armazenamento.backups.tamanho_fmt }} ({{ arquivos_status.armazenamento.backups.arquivos }} arquivo(s))</p>
+        <p><b>Uploads ativos:</b> {{ arquivos_status.armazenamento.uploads.tamanho_fmt }} ({{ arquivos_status.armazenamento.uploads.arquivos }} arquivo(s))</p>
+        <p><b>Orfaos em quarentena:</b> {{ arquivos_status.armazenamento.orfaos.tamanho_fmt }} ({{ arquivos_status.armazenamento.orfaos.arquivos }} arquivo(s))</p>
+        <p><b>Miniaturas temporarias:</b> {{ arquivos_status.armazenamento.thumbs.tamanho_fmt }} ({{ arquivos_status.armazenamento.thumbs.arquivos }} arquivo(s))</p>
+        <p><b>Disco livre:</b> {{ arquivos_status.armazenamento.disco.livre_fmt }}</p>
+        <p class="muted-text">Uploads: {{ arquivos_status.uploads_pasta }}</p>
+        <p class="muted-text">Orfaos: {{ arquivos_status.orfaos_pasta }}</p>
+    </div>
+
+    <div class="page-card">
+        <h2 class="section-title">Manutencao automatica</h2>
+        <p><b>Ultima execucao:</b> {{ arquivos_status.ultimo_executado_em_fmt }}</p>
+        <p class="muted-text">{{ arquivos_status.ultima_mensagem }}</p>
+
+        {% set ultimo_resultado = arquivos_status.ultimo_resultado or {} %}
+        <div class="top-spacing">
+            <p><b>Orfaos movidos:</b> {{ ultimo_resultado.orfaos_movidos or 0 }}</p>
+            <p><b>Orfaos removidos:</b> {{ ultimo_resultado.orfaos_removidos or 0 }}</p>
+            <p><b>Miniaturas limpas:</b> {{ ultimo_resultado.thumbs_removidas or 0 }}</p>
+            <p><b>Diretorios limpos:</b> {{ ultimo_resultado.diretorios_limpos or 0 }}</p>
+        </div>
+
+        <p class="muted-text top-spacing">A rotina roda automaticamente uma vez por dia para mover uploads sem referencia para quarentena, limpar miniaturas antigas e remover diretorios vazios.</p>
+
+        {% if admin_logado %}
+        <div class="actions-row actions-row--left top-spacing">
+            <form action="/configuracoes/arquivos/manutencao" method="POST">
+                <button type="submit">Executar manutencao agora</button>
+            </form>
+            <a href="/auditoria" class="button-link">
+                <button type="button">Abrir auditoria</button>
+            </a>
+        </div>
+        {% endif %}
+    </div>
 </div>
 
 {% if admin_logado %}

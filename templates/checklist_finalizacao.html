@@ -25,6 +25,7 @@
     <p><b>Veiculo:</b> {{ servico.placa }}{% if servico.modelo %} - {{ servico.modelo }}{% endif %}{% if servico.cor %} / {{ servico.cor }}{% endif %}</p>
     <p><b>Entrada:</b> {{ servico.entrada_exibicao }}</p>
     <p><b>Valor:</b> R$ {{ servico.valor_exibicao }}</p>
+    <p class="muted-text">Entrada por: {{ servico.criado_por_nome_exibicao }}{% if servico.operacional_por_nome_exibicao != "Nao registrado" %} | Operacional por: {{ servico.operacional_por_nome_exibicao }}{% endif %}</p>
 
     {% if servico.origem or servico.guarita %}
     <p class="muted-text">
