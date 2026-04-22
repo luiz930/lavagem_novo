@@ -663,6 +663,26 @@ def caminho_absoluto_usuario_foto(caminho):
 
     return os.path.normpath(os.path.join(caminho_uploads_perfis_absoluto(), os.path.basename(texto)))
 
+def caminho_relativo_usuario_foto(nome_arquivo):
+    nome = os.path.basename(str(nome_arquivo or "").replace("\\", "/").strip())
+    if not nome:
+        return ""
+
+    return f"static/uploads/perfis/{nome}"
+
+def normalizar_registro_usuario_foto(caminho):
+    texto = str(caminho or "").strip()
+    if not texto:
+        return ""
+
+    rel_static = caminho_relativo_static(texto)
+    if rel_static:
+        nome_rel = rel_static.replace("\\", "/")
+        if nome_rel.startswith("static/uploads/perfis/"):
+            return nome_rel
+
+    return caminho_relativo_usuario_foto(texto)
+
 def url_foto_usuario(caminho):
     return caminho_foto_para_url(caminho) if str(caminho or "").strip() else ""
 
@@ -678,6 +698,77 @@ def remover_foto_perfil_antiga(caminho):
         os.remove(caminho_abs)
     except Exception:
         pass
+
+def localizar_arquivo_em_subpastas(pasta_base, nome_arquivo):
+    nome = os.path.basename(str(nome_arquivo or "").replace("\\", "/").strip())
+    if not nome or not os.path.exists(pasta_base):
+        return ""
+
+    for raiz, _, arquivos in os.walk(pasta_base):
+        if nome in arquivos:
+            return os.path.join(raiz, nome)
+
+    return ""
+
+def reparar_registros_foto_perfil():
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, foto_perfil
+        FROM usuarios
+        WHERE foto_perfil IS NOT NULL AND TRIM(foto_perfil) <> ''
+    """)
+    usuarios = c.fetchall()
+    atualizacoes = []
+
+    for usuario in usuarios:
+        registro_atual = str(usuario["foto_perfil"] or "").strip()
+        registro_normalizado = normalizar_registro_usuario_foto(registro_atual)
+        caminho_atual = caminho_absoluto_usuario_foto(registro_atual)
+        caminho_normalizado = caminho_absoluto_usuario_foto(registro_normalizado)
+
+        if caminho_normalizado and os.path.exists(caminho_normalizado):
+            if registro_atual != registro_normalizado:
+                atualizacoes.append((registro_normalizado, usuario["id"]))
+            continue
+
+        if caminho_atual and os.path.exists(caminho_atual):
+            if registro_atual != registro_normalizado:
+                atualizacoes.append((registro_normalizado, usuario["id"]))
+            continue
+
+        encontrado_em_orfaos = localizar_arquivo_em_subpastas(
+            caminho_uploads_orfaos_absoluto(),
+            registro_atual,
+        )
+        if not encontrado_em_orfaos:
+            continue
+
+        destino = caminho_absoluto_usuario_foto(registro_normalizado)
+        if not destino:
+            continue
+
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        try:
+            if os.path.normcase(os.path.normpath(encontrado_em_orfaos)) != os.path.normcase(
+                os.path.normpath(destino)
+            ):
+                if os.path.exists(destino):
+                    os.remove(destino)
+                shutil.move(encontrado_em_orfaos, destino)
+            atualizacoes.append((registro_normalizado, usuario["id"]))
+        except Exception:
+            continue
+
+    if atualizacoes:
+        c.executemany(
+            "UPDATE usuarios SET foto_perfil=? WHERE id=?",
+            atualizacoes,
+        )
+        conn.commit()
+
+    conn.close()
+    return len(atualizacoes)
 
 def coletar_metricas_diretorio(pasta, ignorar_subpastas=None):
     base = os.path.abspath(pasta)
@@ -880,6 +971,15 @@ def executar_manutencao_arquivos(force=False, registrar_log=True, usuario=None):
             caminho_ref = normalizar_caminho_arquivo(row["caminho"])
             if caminho_ref:
                 referenced.add(caminho_ref)
+        c.execute("""
+            SELECT foto_perfil
+            FROM usuarios
+            WHERE foto_perfil IS NOT NULL AND TRIM(foto_perfil) <> ''
+        """)
+        for row in c.fetchall():
+            caminho_ref = caminho_absoluto_usuario_foto(row["foto_perfil"])
+            if caminho_ref:
+                referenced.add(normalizar_caminho_arquivo(caminho_ref))
         conn.close()
 
         orfaos_movidos = 0
@@ -1648,6 +1748,10 @@ def atualizar_banco():
     c.execute("CREATE INDEX IF NOT EXISTS idx_retornos_clientes_status ON retornos_clientes(status, proximo_contato_em)")
 
     conn.commit()
+    try:
+        reparar_registros_foto_perfil()
+    except Exception:
+        pass
     conn.close()
 
 def init_db():
@@ -3650,7 +3754,7 @@ def salvar_foto_perfil_usuario(foto, identificador="usuario"):
                 optimize=True,
                 progressive=True,
             )
-            return destino
+            return caminho_relativo_usuario_foto(destino)
         except (UnidentifiedImageError, OSError, ValueError):
             raise ValueError("Nao consegui processar a foto enviada. Tente outra imagem.")
         except Exception:
@@ -3663,7 +3767,7 @@ def salvar_foto_perfil_usuario(foto, identificador="usuario"):
     )
     foto.stream.seek(0)
     foto.save(destino)
-    return destino
+    return caminho_relativo_usuario_foto(destino)
 
 def salvar_arquivo_imagem_otimizado(foto):
     pasta_destino = caminho_uploads_servicos_diretorio()
