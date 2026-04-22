@@ -112,6 +112,45 @@ body.responsive-page.sidebar-open {
     padding: 2px 4px 0;
 }
 
+.sidebar-home-link,
+.sidebar-group {
+    display: grid;
+    gap: 10px;
+}
+
+.sidebar-home-link {
+    margin-bottom: 4px;
+}
+
+.sidebar-home-link button {
+    background: linear-gradient(135deg, #facc15, #f59e0b);
+    color: #111827;
+    border-color: rgba(250, 204, 21, 0.72);
+    box-shadow: 0 14px 24px rgba(250, 204, 21, 0.18);
+}
+
+.sidebar-home-link button:hover {
+    transform: translateX(4px);
+    filter: saturate(1.04);
+}
+
+.sidebar-group {
+    padding: 12px;
+    border-radius: 18px;
+    border: 1px solid rgba(250, 204, 21, 0.14);
+    background: linear-gradient(180deg, rgba(17, 24, 39, 0.78), rgba(15, 23, 42, 0.72));
+}
+
+.sidebar-group-label {
+    margin: 0;
+    padding: 0 4px;
+    color: rgba(250, 204, 21, 0.82);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 1.7px;
+    text-transform: uppercase;
+}
+
 .sidebar-nav a {
     width: 100%;
     text-decoration: none;
@@ -313,17 +352,34 @@ body.responsive-page.sidebar-open {
     </div>
 
     <div class="sidebar-nav">
-        <a href="{{ url_for('pagina_nota_fiscal') }}"><button><span>&#128220;</span> Emissao de nota fiscal</button></a>
-        <a href="{{ url_for('painel') }}"><button><span>&#128202;</span> Painel</button></a>
-        <a href="{{ url_for('clientes') }}"><button><span>&#128100;</span> Clientes</button></a>
-        <a href="{{ url_for('cadastrar_servico') }}"><button><span>&#129532;</span> Servicos</button></a>
-        <a href="{{ url_for('itens_checklist') }}"><button><span>&#9745;</span> Itens Checklist</button></a>
-        <a href="{{ url_for('pagina_orcamento') }}"><button><span>&#128196;</span> Orcamentos</button></a>
-        <a href="{{ url_for('financeiro') }}"><button><span>&#128176;</span> Financeiro</button></a>
-        <a href="{{ url_for('pagina_auditoria') }}"><button><span>&#128269;</span> Auditoria</button></a>
-        <a href="{{ url_for('cadastrar_pneu') }}"><button><span>&#128736;</span> Pneus</button></a>
-        <a href="{{ url_for('clima') }}"><button><span>&#9729;</span> Clima</button></a>
-        <a href="{{ url_for('configuracoes') }}"><button><span>&#9881;</span> Configuracoes</button></a>
+        <div class="sidebar-home-link">
+            <a href="{{ url_for('index') }}"><button><span>&#127968;</span> Inicio</button></a>
+        </div>
+
+        <div class="sidebar-group">
+            <p class="sidebar-group-label">Operacao</p>
+            <a href="{{ url_for('painel') }}"><button><span>&#128202;</span> Painel</button></a>
+            <a href="{{ url_for('clientes') }}"><button><span>&#128100;</span> Clientes</button></a>
+            <a href="{{ url_for('pagina_retornos') }}"><button><span>&#128197;</span> Retornos</button></a>
+            <a href="{{ url_for('cadastrar_servico') }}"><button><span>&#129532;</span> Servicos</button></a>
+            <a href="{{ url_for('itens_checklist') }}"><button><span>&#9745;</span> Itens Checklist</button></a>
+            <a href="{{ url_for('cadastrar_pneu') }}"><button><span>&#128736;</span> Pneus</button></a>
+        </div>
+
+        <div class="sidebar-group">
+            <p class="sidebar-group-label">Gestao</p>
+            <a href="{{ url_for('financeiro') }}"><button><span>&#128176;</span> Financeiro</button></a>
+            <a href="{{ url_for('pagina_orcamento') }}"><button><span>&#128196;</span> Orcamentos</button></a>
+            <a href="{{ url_for('pagina_nota_fiscal') }}"><button><span>&#128220;</span> Emissao de nota fiscal</button></a>
+        </div>
+
+        <div class="sidebar-group">
+            <p class="sidebar-group-label">Apoio / Administracao</p>
+            <a href="{{ url_for('clima') }}"><button><span>&#9729;</span> Clima</button></a>
+            <a href="{{ url_for('pagina_auditoria') }}"><button><span>&#128269;</span> Auditoria</button></a>
+            <a href="{{ url_for('configuracoes') }}"><button><span>&#9881;</span> Configuracoes</button></a>
+        </div>
+
         <a href="{{ url_for('logout') }}">
             <button style="background: linear-gradient(135deg, #dc2626, #b91c1c); color: white; border: 1px solid rgba(255, 0, 0, 0.4);">
                 <span>&#128682;</span> Sair

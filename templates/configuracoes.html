@@ -204,11 +204,38 @@
         <div class="field-grid">
             <input name="nome" placeholder="Nome do funcionario" required>
             <input name="usuario" placeholder="Login do funcionario" required>
-            <input name="senha" type="password" placeholder="Senha inicial forte" autocomplete="new-password" required>
+            <div class="password-toggle-row">
+                <input
+                    id="novo-funcionario-senha"
+                    class="password-toggle-input"
+                    name="senha"
+                    type="password"
+                    placeholder="Senha inicial forte"
+                    autocomplete="new-password"
+                    minlength="10"
+                    title="Use no minimo 10 caracteres, com letra maiuscula, minuscula, numero e simbolo."
+                    required
+                >
+                <button
+                    type="button"
+                    class="password-toggle-button"
+                    data-password-target="novo-funcionario-senha"
+                >
+                    Mostrar senha
+                </button>
+            </div>
             <select name="perfil">
                 <option value="funcionario">Funcionario</option>
                 <option value="admin">Administrador</option>
             </select>
+        </div>
+
+        <div class="password-guidelines">
+            <p><b>Como criar uma senha forte para esse novo acesso:</b></p>
+            <p>Use no minimo 10 caracteres.</p>
+            <p>Combine letra maiuscula, letra minuscula, numero e simbolo.</p>
+            <p>Evite nome da empresa, nome do funcionario, login, datas de aniversario e sequencias como `123456` ou `abc123`.</p>
+            <p>Prefira uma frase-senha unica, facil de lembrar e dificil de adivinhar.</p>
         </div>
 
         <input type="file" name="foto_perfil" accept="image/*">
@@ -298,5 +325,18 @@
     </div>
 </div>
 {% endif %}
+
+<script>
+document.querySelectorAll("[data-password-target]").forEach((button) => {
+    button.addEventListener("click", () => {
+        const input = document.getElementById(button.dataset.passwordTarget);
+        if (!input) return;
+
+        const mostrando = input.type === "text";
+        input.type = mostrando ? "password" : "text";
+        button.textContent = mostrando ? "Mostrar senha" : "Ocultar senha";
+    });
+});
+</script>
 
 {% endblock %}

@@ -10,7 +10,24 @@
 
 <form method="POST" class="stack-form">
 <input name="usuario" placeholder="Usuario" autocomplete="username" required>
-<input name="senha" type="password" placeholder="Senha" autocomplete="current-password" required>
+<div class="password-toggle-row">
+    <input
+        id="login-senha"
+        class="password-toggle-input"
+        name="senha"
+        type="password"
+        placeholder="Senha"
+        autocomplete="current-password"
+        required
+    >
+    <button
+        type="button"
+        class="password-toggle-button"
+        data-password-target="login-senha"
+    >
+        Mostrar senha
+    </button>
+</div>
 <button type="submit">Entrar</button>
 </form>
 
@@ -19,5 +36,18 @@
 {% endif %}
 
 </div>
+
+<script>
+document.querySelectorAll("[data-password-target]").forEach((button) => {
+    button.addEventListener("click", () => {
+        const input = document.getElementById(button.dataset.passwordTarget);
+        if (!input) return;
+
+        const mostrando = input.type === "text";
+        input.type = mostrando ? "password" : "text";
+        button.textContent = mostrando ? "Mostrar senha" : "Ocultar senha";
+    });
+});
+</script>
 
 {% endblock %}

@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block title %}Retornos{% endblock %}
+{% block titulo %}Central de Retornos{% endblock %}
+{% block subtitulo %}Contato comercial, observacoes e reagendamentos{% endblock %}
+
+{% block actions %}
+<a href="/" class="button-link">
+    <button type="button">Voltar</button>
+</a>
+<a href="/retornos" class="button-link">
+    <button type="button">Atualizar lista</button>
+</a>
+{% endblock %}
+
+{% block content %}
+
+{% if feedback %}
+<div class="page-card {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
+</div>
+{% endif %}
+
+<div class="page-grid top-spacing">
+    <div class="page-card">
+        <p class="pill-label">Acao agora</p>
+        <h2 class="section-title top-spacing">{{ resumo_retornos.acao_agora }}</h2>
+        <p class="muted-text">Carros que pedem contato comercial neste momento.</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Reagendados</p>
+        <h2 class="section-title top-spacing">{{ resumo_retornos.reagendados }}</h2>
+        <p class="muted-text">Clientes com proximo contato programado.</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Contatados</p>
+        <h2 class="section-title top-spacing">{{ resumo_retornos.contatados }}</h2>
+        <p class="muted-text">Retornos que ja receberam contato recente.</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Sem interesse</p>
+        <h2 class="section-title top-spacing">{{ resumo_retornos.sem_interesse }}</h2>
+        <p class="muted-text">Clientes pausados temporariamente na central.</p>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <h2 class="section-title">Filtros</h2>
+
+    <form method="GET" class="stack-form stack-form--wide top-spacing">
+        <div class="field-grid">
+            <select name="status">
+                {% for item in status_retorno_opcoes %}
+                <option value="{{ item.value }}" {% if filtros.status == item.value %}selected{% endif %}>{{ item.label }}</option>
+                {% endfor %}
+            </select>
+
+            <input name="busca" placeholder="Buscar por placa, cliente, carro ou observacao" value="{{ filtros.busca }}">
+        </div>
+
+        <div class="actions-row actions-row--left">
+            <button type="submit">Aplicar filtros</button>
+            <a href="/retornos" class="button-link">
+                <button type="button">Limpar filtros</button>
+            </a>
+        </div>
+    </form>
+</div>
+
+<div class="top-spacing">
+    <h2 class="section-title">Lista de retornos</h2>
+
+    <div class="list-grid top-spacing">
+        {% for item in retornos %}
+        <div class="page-card return-card">
+            <div class="return-card-top">
+                <div>
+                    <div class="actions-row actions-row--left">
+                        <span class="pill-label">{{ item.placa }}</span>
+                        <span class="status-badge status-badge--warning">{{ item.faixa_label }}</span>
+                        {% if item.mostrar_na_agenda %}
+                        <span class="status-badge status-badge--warning">Acao agora</span>
+                        {% elif item.status_retorno == "contatado" %}
+                        <span class="status-badge status-badge--success">{{ item.status_retorno_label }}</span>
+                        {% elif item.status_retorno == "sem_interesse" %}
+                        <span class="status-badge status-badge--danger">{{ item.status_retorno_label }}</span>
+                        {% else %}
+                        <span class="status-badge status-badge--muted">{{ item.status_retorno_label }}</span>
+                        {% endif %}
+                    </div>
+                    <h3 class="section-title top-spacing">{{ item.cliente or "Cliente nao identificado" }}</h3>
+                    <p class="muted-text">{{ item.carro or "Carro nao informado" }}{% if item.cor %} / {{ item.cor }}{% endif %}</p>
+                </div>
+
+                <div class="return-status-panel">
+                    <p><b>Status:</b> {{ item.status_resumo }}</p>
+                    <p><b>Ultima lavagem:</b> {{ item.ultima_lavagem }} (ha {{ item.dias_desde }} dias)</p>
+                    <p><b>Servico anterior:</b> {{ item.servico or "Nao informado" }}</p>
+                    <p><b>Responsavel:</b> {{ item.usuario_responsavel }}</p>
+                    {% if item.ultimo_contato_em_fmt %}
+                    <p><b>Ultimo contato:</b> {{ item.ultimo_contato_em_fmt }}</p>
+                    {% endif %}
+                    {% if item.proximo_contato_em_fmt %}
+                    <p><b>Proximo contato:</b> {{ item.proximo_contato_em_fmt }}{% if item.proximo_contato_restante %} ({{ item.proximo_contato_restante }}){% endif %}</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="return-meta-grid top-spacing">
+                <div class="return-meta-item">
+                    <span class="muted-text">Telefone</span>
+                    <strong>{{ item.telefone or "Nao informado" }}</strong>
+                </div>
+                <div class="return-meta-item">
+                    <span class="muted-text">Prioridade</span>
+                    <strong>{{ item.prioridade_label }}</strong>
+                </div>
+                <div class="return-meta-item">
+                    <span class="muted-text">Origem</span>
+                    <strong>{{ item.origem }}</strong>
+                </div>
+                <div class="return-meta-item">
+                    <span class="muted-text">Reagendamento</span>
+                    <strong>{% if item.reagendado_dias %}{{ item.reagendado_dias }} dia(s){% else %}Nao programado{% endif %}</strong>
+                </div>
+            </div>
+
+            <div class="return-suggestion-box top-spacing">
+                <p><b>Sugestao de contato:</b> {{ item.sugestao_contato or "Sem sugestao automatica no momento." }}</p>
+                <p><b>Recomendacoes:</b> {{ item.recomendacoes|join(", ") if item.recomendacoes else "Sem recomendacoes no momento." }}</p>
+            </div>
+
+            <form method="POST" action="/retornos/atualizar" class="top-spacing">
+                <input type="hidden" name="placa" value="{{ item.placa }}">
+                <input type="hidden" name="retorno_url" value="{{ retorno_url_atual }}">
+
+                <label for="observacao-{{ loop.index }}" class="muted-text">Observacao comercial</label>
+                <textarea
+                    id="observacao-{{ loop.index }}"
+                    name="observacao"
+                    class="top-spacing"
+                    placeholder="Ex.: cliente pediu retorno na semana que vem, prefere WhatsApp, sem interesse por agora..."
+                >{{ item.observacao }}</textarea>
+
+                <div class="return-actions">
+                    <button type="submit" name="acao" value="salvar_observacao" class="button-secondary">
+                        Salvar observacao
+                    </button>
+
+                    {% if item.whatsapp_url %}
+                    <a href="{{ item.whatsapp_url }}" class="button-link" target="_blank" rel="noopener noreferrer">
+                        <button type="button">Abrir WhatsApp</button>
+                    </a>
+                    {% endif %}
+
+                    <button type="submit" name="acao" value="contatado">Marcar contatado</button>
+                    <button type="submit" name="acao" value="reagendar_7">Reagendar 7 dias</button>
+                    <button type="submit" name="acao" value="reagendar_15">Reagendar 15 dias</button>
+                    <button type="submit" name="acao" value="sem_interesse" class="button-danger">
+                        Sem interesse
+                    </button>
+
+                    {% if item.status_retorno != "pendente" %}
+                    <button type="submit" name="acao" value="reativar" class="button-secondary">
+                        Reativar retorno
+                    </button>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+        {% else %}
+        <div class="page-card page-card--soft empty-state">
+            <p>Nenhum retorno encontrado com os filtros atuais.</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+{% endblock %}

@@ -50,6 +50,21 @@ UPLOADS_PERFIS_FOLDER = os.path.join(UPLOAD_FOLDER, "perfis")
 BACKUP_RETENCAO_PADRAO = 15
 AGENDA_RETORNO_MARCOS = (15, 30, 45)
 AGENDA_RETORNO_LIMITE_ITENS = 18
+STATUS_RETORNO_PADRAO = "pendente"
+STATUS_RETORNO_OPCOES = [
+    {"value": "acao_agora", "label": "Acao agora"},
+    {"value": "todos", "label": "Todos"},
+    {"value": "pendente", "label": "Pendentes"},
+    {"value": "reagendado", "label": "Reagendados"},
+    {"value": "contatado", "label": "Contatados"},
+    {"value": "sem_interesse", "label": "Sem interesse"},
+]
+STATUS_RETORNO_LABELS = {
+    "pendente": "Pendente",
+    "contatado": "Contatado",
+    "reagendado": "Reagendado",
+    "sem_interesse": "Sem interesse",
+}
 FREQUENCIAS_BACKUP = [
     {"value": "diario", "label": "Diario"},
     {"value": "semanal", "label": "Semanal"},
@@ -1253,9 +1268,14 @@ ACOES_AUDITORIA_LABELS = {
     "gerou_nota_fiscal": "Gerou nota fiscal",
     "iniciou_atendimento": "Iniciou atendimento",
     "manutencao_arquivos": "Executou manutencao de arquivos",
+    "marcou_retorno_como_contatado": "Marcou retorno como contatado",
+    "marcou_retorno_sem_interesse": "Marcou retorno como sem interesse",
     "registrou_emissao_nota_fiscal": "Registrou emissao manual da nota",
+    "reativou_retorno": "Reativou retorno",
+    "reagendou_retorno": "Reagendou retorno",
     "redefiniu_senha_usuario": "Redefiniu senha de usuario",
     "restaurou_backup": "Restaurou backup",
+    "salvou_observacao_retorno": "Salvou observacao de retorno",
     "salvou_operacional": "Salvou dados operacionais",
 }
 TIPOS_INTEGRACAO_FISCAL = [
@@ -1499,6 +1519,22 @@ def atualizar_banco():
     )
     """)
     c.execute("""
+    CREATE TABLE IF NOT EXISTS retornos_clientes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        placa TEXT NOT NULL UNIQUE,
+        status TEXT DEFAULT 'pendente',
+        observacao TEXT,
+        proximo_contato_em TEXT,
+        ultimo_contato_em TEXT,
+        ultima_acao TEXT,
+        reagendado_dias INTEGER,
+        usuario TEXT,
+        usuario_nome TEXT,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    c.execute("""
     CREATE TABLE IF NOT EXISTS configuracao_empresa (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         razao_social TEXT,
@@ -1608,6 +1644,8 @@ def atualizar_banco():
     """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_historico_sync_placa ON historico_lavagens_sync(placa)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_historico_sync_data ON historico_lavagens_sync(data_lavagem)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_retornos_clientes_placa ON retornos_clientes(placa)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_retornos_clientes_status ON retornos_clientes(status, proximo_contato_em)")
 
     conn.commit()
     conn.close()
@@ -1864,6 +1902,22 @@ def criar_todas_tabelas():
         FOREIGN KEY(sync_id) REFERENCES sincronizacoes_clientes(id)
     )
     """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS retornos_clientes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        placa TEXT NOT NULL UNIQUE,
+        status TEXT DEFAULT 'pendente',
+        observacao TEXT,
+        proximo_contato_em TEXT,
+        ultimo_contato_em TEXT,
+        ultima_acao TEXT,
+        reagendado_dias INTEGER,
+        usuario TEXT,
+        usuario_nome TEXT,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
     # ⚡ ÍNDICES (performance)
     c.execute("""
@@ -2029,6 +2083,8 @@ def criar_todas_tabelas():
     c.execute("CREATE INDEX IF NOT EXISTS idx_auditoria_criado_em ON auditoria(criado_em)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_historico_sync_placa ON historico_lavagens_sync(placa)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_historico_sync_data ON historico_lavagens_sync(data_lavagem)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_retornos_clientes_placa ON retornos_clientes(placa)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_retornos_clientes_status ON retornos_clientes(status, proximo_contato_em)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_orcamentos_numero ON orcamentos(numero)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_orcamentos_criado_em ON orcamentos(criado_em)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_orcamento_itens_orcamento ON orcamento_itens(orcamento_id)")
@@ -2087,6 +2143,9 @@ def definir_feedback_orcamento(tipo, mensagem):
 
 def definir_feedback_nota_fiscal(tipo, mensagem):
     session["nota_fiscal_feedback"] = {"tipo": tipo, "mensagem": mensagem}
+
+def definir_feedback_retornos(tipo, mensagem):
+    session["retornos_feedback"] = {"tipo": tipo, "mensagem": mensagem}
 
 def limpar_preview_sincronizacao():
     session.pop("clientes_sync_preview", None)
@@ -4616,13 +4675,206 @@ def mesclar_dados_retorno(principal, apoio=None):
     dados["data_ref"] = (principal or {}).get("data_ref") or (apoio or {}).get("data_ref")
     return dados
 
-def listar_agenda_retorno_lavagens(limite=AGENDA_RETORNO_LIMITE_ITENS):
+def normalizar_status_retorno(valor):
+    chave = normalizar_texto_comparacao(valor).replace(" ", "_")
+    return chave if chave in STATUS_RETORNO_LABELS else STATUS_RETORNO_PADRAO
+
+def normalizar_filtro_retorno(valor):
+    chave = normalizar_texto_comparacao(valor).replace(" ", "_")
+    validos = {item["value"] for item in STATUS_RETORNO_OPCOES}
+    return chave if chave in validos else "acao_agora"
+
+def buscar_contatos_clientes_por_placa(placas):
+    placas = [normalizar_texto_campo(item).upper() for item in placas if normalizar_texto_campo(item)]
+
+    if not placas:
+        return {}
+
+    conn = conectar()
+    c = conn.cursor()
+    placeholders = ",".join(["?"] * len(placas))
+    c.execute(f"""
+        SELECT
+            UPPER(veiculos.placa) AS placa,
+            clientes.nome AS cliente_nome,
+            clientes.telefone,
+            veiculos.modelo AS carro,
+            veiculos.cor AS cor
+        FROM veiculos
+        LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
+        WHERE UPPER(veiculos.placa) IN ({placeholders})
+    """, tuple(placas))
+    rows = [dict(item) for item in c.fetchall()]
+    conn.close()
+
+    return {
+        item["placa"]: item
+        for item in rows
+        if item.get("placa")
+    }
+
+def carregar_estados_retornos(placas=None):
+    conn = conectar()
+    c = conn.cursor()
+
+    if placas:
+        placas = [normalizar_texto_campo(item).upper() for item in placas if normalizar_texto_campo(item)]
+        if not placas:
+            conn.close()
+            return {}
+
+        placeholders = ",".join(["?"] * len(placas))
+        c.execute(
+            f"SELECT * FROM retornos_clientes WHERE placa IN ({placeholders})",
+            tuple(placas),
+        )
+    else:
+        c.execute("SELECT * FROM retornos_clientes")
+
+    rows = [dict(item) for item in c.fetchall()]
+    conn.close()
+
+    for item in rows:
+        item["placa"] = normalizar_texto_campo(item.get("placa")).upper()
+        item["status"] = normalizar_status_retorno(item.get("status"))
+
+    return {
+        item["placa"]: item
+        for item in rows
+        if item.get("placa")
+    }
+
+def construir_link_whatsapp_retorno(telefone, mensagem=""):
+    telefone_limpo = re.sub(r"\D", "", str(telefone or ""))
+
+    if not telefone_limpo:
+        return ""
+
+    if len(telefone_limpo) in {10, 11} and not telefone_limpo.startswith("55"):
+        telefone_limpo = "55" + telefone_limpo
+
+    if not telefone_limpo:
+        return ""
+
+    mensagem = normalizar_texto_campo(mensagem)
+    if mensagem:
+        return f"https://wa.me/{telefone_limpo}?text={quote(mensagem)}"
+
+    return f"https://wa.me/{telefone_limpo}"
+
+def retorno_exige_acao_agora(status, proximo_contato_dt=None):
+    status = normalizar_status_retorno(status)
+
+    if status == "sem_interesse":
+        return False
+
+    if status == "contatado":
+        return False
+
+    if status == "reagendado" and proximo_contato_dt and proximo_contato_dt > agora():
+        return False
+
+    return True
+
+def descrever_status_retorno_item(item):
+    status = normalizar_status_retorno(item.get("status_retorno"))
+    proximo_fmt = item.get("proximo_contato_em_fmt")
+
+    if status == "reagendado":
+        if item.get("reagendamento_vencido"):
+            return f"Reagendamento vencido desde {proximo_fmt}"
+        if item.get("proximo_contato_em"):
+            return f"Reagendado para {proximo_fmt}"
+        return "Reagendado sem data definida"
+
+    if status == "contatado":
+        if item.get("ultimo_contato_em_fmt"):
+            return f"Cliente contatado em {item['ultimo_contato_em_fmt']}"
+        return "Cliente contatado"
+
+    if status == "sem_interesse":
+        return "Cliente sem interesse no momento"
+
+    return "Acao comercial pendente"
+
+def enriquecer_item_retorno_comercial(item, estado=None, contato=None):
+    item = dict(item or {})
+    estado = estado or {}
+    contato = contato or {}
+
+    if contato.get("cliente_nome") and not item.get("cliente"):
+        item["cliente"] = contato.get("cliente_nome")
+
+    if contato.get("carro") and not item.get("carro"):
+        item["carro"] = contato.get("carro")
+
+    if contato.get("cor") and not item.get("cor"):
+        item["cor"] = contato.get("cor")
+
+    item["telefone"] = normalizar_texto_campo(contato.get("telefone"))
+    item["cliente"] = normalizar_texto_campo(item.get("cliente"))
+    item["carro"] = normalizar_texto_campo(item.get("carro"))
+    item["cor"] = normalizar_texto_campo(item.get("cor"))
+    item["servico"] = normalizar_texto_campo(item.get("servico"))
+    item["origem"] = normalizar_texto_campo(item.get("origem")) or "historico"
+
+    status_retorno = normalizar_status_retorno(estado.get("status"))
+    proximo_contato_em = normalizar_texto_campo(estado.get("proximo_contato_em"))
+    ultimo_contato_em = normalizar_texto_campo(estado.get("ultimo_contato_em"))
+    proximo_contato_dt = interpretar_datahora_sistema(proximo_contato_em)
+    ultimo_contato_dt = interpretar_datahora_sistema(ultimo_contato_em)
+
+    item["status_retorno"] = status_retorno
+    item["status_retorno_label"] = STATUS_RETORNO_LABELS.get(status_retorno, "Pendente")
+    item["observacao"] = normalizar_texto_campo(estado.get("observacao"))
+    item["proximo_contato_em"] = proximo_contato_em
+    item["proximo_contato_em_fmt"] = formatar_datahora(proximo_contato_em) if proximo_contato_em else ""
+    item["proximo_contato_restante"] = formatar_tempo_restante(proximo_contato_em) if proximo_contato_em else ""
+    item["ultimo_contato_em"] = ultimo_contato_em
+    item["ultimo_contato_em_fmt"] = formatar_datahora(ultimo_contato_em) if ultimo_contato_em else ""
+    item["usuario_responsavel"] = formatar_usuario_exibicao(
+        estado.get("usuario_nome"),
+        estado.get("usuario"),
+        fallback="Nao definido",
+    )
+    item["ultima_acao_retorno"] = normalizar_texto_campo(estado.get("ultima_acao"))
+    item["reagendado_dias"] = int(estado.get("reagendado_dias") or 0)
+    item["reagendamento_vencido"] = (
+        status_retorno == "reagendado" and (
+            not proximo_contato_dt or proximo_contato_dt <= agora()
+        )
+    )
+    item["mostrar_na_agenda"] = retorno_exige_acao_agora(status_retorno, proximo_contato_dt)
+    item["status_resumo"] = descrever_status_retorno_item(item)
+    item["whatsapp_url"] = construir_link_whatsapp_retorno(
+        item.get("telefone"),
+        item.get("sugestao_contato"),
+    )
+    item["busca_texto"] = normalizar_texto_comparacao(
+        " ".join(
+            str(parte or "")
+            for parte in (
+                item.get("placa"),
+                item.get("cliente"),
+                item.get("carro"),
+                item.get("cor"),
+                item.get("telefone"),
+                item.get("servico"),
+                item.get("observacao"),
+                item.get("status_retorno_label"),
+            )
+        )
+    )
+    return item
+
+def montar_itens_retornos_comerciais():
     historico_sync = listar_ultimas_lavagens_sync()
     historico_local = listar_ultimas_lavagens_locais()
     placas = sorted(set(historico_sync.keys()) | set(historico_local.keys()))
 
+    contatos = buscar_contatos_clientes_por_placa(placas)
+    estados = carregar_estados_retornos(placas)
     itens = []
-    contadores = {"15": 0, "30": 0, "45": 0}
     hoje = agora().date()
 
     for placa in placas:
@@ -4658,26 +4910,130 @@ def listar_agenda_retorno_lavagens(limite=AGENDA_RETORNO_LIMITE_ITENS):
         item["ultima_lavagem"] = data_ref.strftime("%d/%m/%Y")
         item["recomendacoes"] = recomendacoes
         item["sugestao_contato"] = montar_sugestao_contato_retorno(item)
-        itens.append(item)
-        contadores[str(faixa)] += 1
+        itens.append(
+            enriquecer_item_retorno_comercial(
+                item,
+                estado=estados.get(placa),
+                contato=contatos.get(placa),
+            )
+        )
 
-    prioridade = {45: 0, 30: 1, 15: 2}
+    prioridade_faixa = {45: 0, 30: 1, 15: 2}
+    prioridade_status = {"pendente": 0, "reagendado": 1, "contatado": 2, "sem_interesse": 3}
     itens.sort(
         key=lambda item: (
-            prioridade.get(item.get("faixa_alerta"), 3),
+            0 if item.get("mostrar_na_agenda") else 1,
+            prioridade_status.get(item.get("status_retorno"), 9),
+            prioridade_faixa.get(item.get("faixa_alerta"), 9),
             -(item.get("dias_desde") or 0),
             item.get("placa") or "",
         )
     )
+    return itens
+
+def carregar_contexto_retornos(args):
+    filtro_status = normalizar_filtro_retorno(args.get("status"))
+    busca = normalizar_texto_campo(args.get("busca"))
+    busca_norm = normalizar_texto_comparacao(busca)
+    itens = montar_itens_retornos_comerciais()
+
+    resumo = {
+        "total": len(itens),
+        "acao_agora": sum(1 for item in itens if item.get("mostrar_na_agenda")),
+        "reagendados": sum(1 for item in itens if item.get("status_retorno") == "reagendado"),
+        "contatados": sum(1 for item in itens if item.get("status_retorno") == "contatado"),
+        "sem_interesse": sum(1 for item in itens if item.get("status_retorno") == "sem_interesse"),
+    }
+
+    if busca_norm:
+        itens = [
+            item for item in itens
+            if busca_norm in item.get("busca_texto", "")
+        ]
+
+    if filtro_status == "acao_agora":
+        itens = [item for item in itens if item.get("mostrar_na_agenda")]
+    elif filtro_status != "todos":
+        itens = [item for item in itens if item.get("status_retorno") == filtro_status]
+
+    return {
+        "itens": itens,
+        "resumo": resumo,
+        "filtros": {
+            "status": filtro_status,
+            "busca": busca,
+        },
+        "status_opcoes": STATUS_RETORNO_OPCOES,
+    }
+
+def listar_agenda_retorno_lavagens(limite=AGENDA_RETORNO_LIMITE_ITENS):
+    itens = [item for item in montar_itens_retornos_comerciais() if item.get("mostrar_na_agenda")]
+    contadores = {"15": 0, "30": 0, "45": 0}
+
+    for item in itens:
+        faixa = str(item.get("faixa_alerta") or "")
+        if faixa in contadores:
+            contadores[faixa] += 1
 
     total = len(itens)
+    limite = max(1, int(limite or AGENDA_RETORNO_LIMITE_ITENS))
     return {
         "total": total,
-        "itens": itens[:max(1, int(limite or AGENDA_RETORNO_LIMITE_ITENS))],
+        "itens": itens[:limite],
         "contadores": contadores,
         "ultima_atualizacao": agora_iso(),
-        "restantes": max(0, total - min(total, max(1, int(limite or AGENDA_RETORNO_LIMITE_ITENS)))),
+        "restantes": max(0, total - min(total, limite)),
     }
+
+def proximo_contato_retorno_por_dias(dias):
+    referencia = agora() + timedelta(days=max(1, int(dias or 1)))
+    referencia = referencia.replace(hour=9, minute=0, second=0, microsecond=0)
+    return referencia.isoformat(timespec="seconds")
+
+def upsert_retorno_cliente(
+    placa,
+    status,
+    observacao="",
+    proximo_contato_em="",
+    ultimo_contato_em="",
+    ultima_acao="",
+    reagendado_dias=0,
+    usuario=None,
+):
+    usuario_info = usuario or resumo_usuario_logado()
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO retornos_clientes (
+            placa, status, observacao, proximo_contato_em, ultimo_contato_em,
+            ultima_acao, reagendado_dias, usuario, usuario_nome, criado_em, atualizado_em
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(placa) DO UPDATE SET
+            status=excluded.status,
+            observacao=excluded.observacao,
+            proximo_contato_em=excluded.proximo_contato_em,
+            ultimo_contato_em=excluded.ultimo_contato_em,
+            ultima_acao=excluded.ultima_acao,
+            reagendado_dias=excluded.reagendado_dias,
+            usuario=excluded.usuario,
+            usuario_nome=excluded.usuario_nome,
+            atualizado_em=excluded.atualizado_em
+    """, (
+        normalizar_texto_campo(placa).upper(),
+        normalizar_status_retorno(status),
+        normalizar_texto_campo(observacao),
+        normalizar_texto_campo(proximo_contato_em),
+        normalizar_texto_campo(ultimo_contato_em),
+        normalizar_texto_campo(ultima_acao),
+        int(reagendado_dias or 0),
+        normalizar_texto_campo(usuario_info.get("usuario")),
+        normalizar_texto_campo(usuario_info.get("nome")),
+        agora_iso(),
+        agora_iso(),
+    ))
+    conn.commit()
+    conn.close()
 
 def obter_mapeamento_sync_por_form(form):
     return {
@@ -5987,12 +6343,56 @@ def api_hud():
             pass
 
     conn.close()
+    itens_retornos = []
+    retornos_acao_agora = 0
+    retornos_reagendados_vencidos = 0
+    retornos_contatados_hoje = 0
+
+    try:
+        itens_retornos = montar_itens_retornos_comerciais()
+        hoje_data = agora.date()
+        retornos_acao_agora = sum(
+            1 for item in itens_retornos if item.get("mostrar_na_agenda")
+        )
+        retornos_reagendados_vencidos = sum(
+            1 for item in itens_retornos if item.get("reagendamento_vencido")
+        )
+        retornos_contatados_hoje = sum(
+            1
+            for item in itens_retornos
+            if (
+                item.get("status_retorno") == "contatado" and
+                interpretar_datahora_sistema(item.get("ultimo_contato_em")) and
+                interpretar_datahora_sistema(item.get("ultimo_contato_em")).date() == hoje_data
+            )
+        )
+    except Exception as erro:
+        print("ERRO HUD RETORNOS:", erro)
+
+    if retornos_acao_agora > 0:
+        mensagem_retornos_hud = (
+            f"Painel retornos requer atencao: {retornos_acao_agora} cliente(s)"
+        )
+        if retornos_reagendados_vencidos > 0:
+            mensagem_retornos_hud += (
+                f" | {retornos_reagendados_vencidos} reagendado(s) vencido(s)"
+            )
+    elif retornos_contatados_hoje > 0:
+        mensagem_retornos_hud = (
+            f"Painel retornos em dia | {retornos_contatados_hoje} contato(s) hoje"
+        )
+    else:
+        mensagem_retornos_hud = "Painel retornos em dia"
 
     return {
         "total": round(total, 2),
         "andamento": andamento,
         "atrasados": atrasados,
         "ticket": round(ticket, 2),
+        "retornos_acao_agora": retornos_acao_agora,
+        "retornos_reagendados_vencidos": retornos_reagendados_vencidos,
+        "retornos_contatados_hoje": retornos_contatados_hoje,
+        "retornos_mensagem": mensagem_retornos_hud,
         "versao": APP_VERSION,
         "usuario": session.get("usuario") or "",
         "usuario_nome": session.get("usuario_nome") or session.get("usuario") or "",
@@ -6804,6 +7204,148 @@ def alternar_status_usuario(usuario_id):
         f"Usuario {alvo['usuario']} {'ativado' if novo_status else 'pausado'} com sucesso."
     )
     return redirect("/configuracoes")
+
+@app.route("/retornos")
+def pagina_retornos():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    contexto = carregar_contexto_retornos(request.args)
+    retorno_url_atual = request.path
+
+    if request.query_string:
+        retorno_url_atual = request.full_path.rstrip("?")
+
+    return render_template(
+        "retornos.html",
+        retornos=contexto["itens"],
+        resumo_retornos=contexto["resumo"],
+        filtros=contexto["filtros"],
+        status_retorno_opcoes=contexto["status_opcoes"],
+        feedback=session.pop("retornos_feedback", None),
+        retorno_url_atual=retorno_url_atual,
+    )
+
+@app.route("/retornos/atualizar", methods=["POST"])
+def atualizar_retorno_cliente():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    placa = normalizar_texto_campo(request.form.get("placa")).upper()
+    acao = normalizar_texto_campo(request.form.get("acao"))
+    retorno_url = normalizar_texto_campo(request.form.get("retorno_url"))
+
+    if not retorno_url.startswith("/retornos"):
+        retorno_url = "/retornos"
+
+    if not placa:
+        definir_feedback_retornos("erro", "Informe a placa para atualizar o retorno.")
+        return redirect(retorno_url)
+
+    estado_atual = carregar_estados_retornos([placa]).get(placa, {})
+    status_atual = normalizar_status_retorno(estado_atual.get("status"))
+    observacao_atual = normalizar_texto_campo(estado_atual.get("observacao"))
+    observacao_form = normalizar_texto_campo(request.form.get("observacao"))
+    observacao_final = observacao_form or observacao_atual
+    proximo_contato_atual = normalizar_texto_campo(estado_atual.get("proximo_contato_em"))
+    ultimo_contato_atual = normalizar_texto_campo(estado_atual.get("ultimo_contato_em"))
+    reagendado_dias_atual = int(estado_atual.get("reagendado_dias") or 0)
+    ultima_acao_atual = normalizar_texto_campo(estado_atual.get("ultima_acao"))
+
+    payload = {
+        "status": status_atual,
+        "observacao": observacao_final,
+        "proximo_contato_em": proximo_contato_atual,
+        "ultimo_contato_em": ultimo_contato_atual,
+        "ultima_acao": ultima_acao_atual,
+        "reagendado_dias": reagendado_dias_atual,
+    }
+    acao_auditoria = ""
+    mensagem_sucesso = ""
+
+    if acao == "salvar_observacao":
+        payload["ultima_acao"] = ultima_acao_atual or "observacao"
+        acao_auditoria = "salvou_observacao_retorno"
+        mensagem_sucesso = "Observacao do retorno salva com sucesso."
+    elif acao == "contatado":
+        payload.update({
+            "status": "contatado",
+            "ultimo_contato_em": agora_iso(),
+            "proximo_contato_em": "",
+            "ultima_acao": "contatado",
+            "reagendado_dias": 0,
+        })
+        acao_auditoria = "marcou_retorno_como_contatado"
+        mensagem_sucesso = "Retorno marcado como contatado."
+    elif acao == "sem_interesse":
+        payload.update({
+            "status": "sem_interesse",
+            "ultimo_contato_em": agora_iso(),
+            "proximo_contato_em": "",
+            "ultima_acao": "sem_interesse",
+            "reagendado_dias": 0,
+        })
+        acao_auditoria = "marcou_retorno_sem_interesse"
+        mensagem_sucesso = "Retorno marcado como sem interesse."
+    elif acao == "reagendar_7":
+        payload.update({
+            "status": "reagendado",
+            "ultimo_contato_em": agora_iso(),
+            "proximo_contato_em": proximo_contato_retorno_por_dias(7),
+            "ultima_acao": "reagendar_7",
+            "reagendado_dias": 7,
+        })
+        acao_auditoria = "reagendou_retorno"
+        mensagem_sucesso = "Retorno reagendado para 7 dias."
+    elif acao == "reagendar_15":
+        payload.update({
+            "status": "reagendado",
+            "ultimo_contato_em": agora_iso(),
+            "proximo_contato_em": proximo_contato_retorno_por_dias(15),
+            "ultima_acao": "reagendar_15",
+            "reagendado_dias": 15,
+        })
+        acao_auditoria = "reagendou_retorno"
+        mensagem_sucesso = "Retorno reagendado para 15 dias."
+    elif acao == "reativar":
+        payload.update({
+            "status": "pendente",
+            "proximo_contato_em": "",
+            "ultima_acao": "reativado",
+            "reagendado_dias": 0,
+        })
+        acao_auditoria = "reativou_retorno"
+        mensagem_sucesso = "Retorno reativado e colocado novamente como pendente."
+    else:
+        definir_feedback_retornos("erro", "Acao de retorno nao reconhecida.")
+        return redirect(retorno_url)
+
+    upsert_retorno_cliente(
+        placa,
+        payload["status"],
+        observacao=payload["observacao"],
+        proximo_contato_em=payload["proximo_contato_em"],
+        ultimo_contato_em=payload["ultimo_contato_em"],
+        ultima_acao=payload["ultima_acao"],
+        reagendado_dias=payload["reagendado_dias"],
+        usuario=resumo_usuario_logado(),
+    )
+    registrar_auditoria(
+        acao_auditoria,
+        "retorno",
+        placa=placa,
+        detalhes={
+            "status": payload["status"],
+            "observacao": payload["observacao"],
+            "proximo_contato_em": payload["proximo_contato_em"],
+            "ultimo_contato_em": payload["ultimo_contato_em"],
+            "reagendado_dias": payload["reagendado_dias"],
+        },
+    )
+    definir_feedback_retornos("sucesso", mensagem_sucesso)
+    return redirect(retorno_url)
 
 @app.route("/auditoria")
 def pagina_auditoria():

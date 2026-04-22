@@ -95,6 +95,17 @@ body.responsive-page {
     box-shadow: 0 14px 24px rgba(239, 68, 68, 0.14);
 }
 
+.responsive-page .button-secondary {
+    background: linear-gradient(180deg, rgba(31, 41, 55, 0.96), rgba(17, 24, 39, 0.98));
+    color: var(--text);
+    border-color: rgba(250, 204, 21, 0.24);
+    box-shadow: none;
+}
+
+.responsive-page .button-secondary:hover {
+    border-color: rgba(250, 204, 21, 0.52);
+}
+
 .page-shell {
     width: min(100%, 1120px);
     margin: 0 auto;
@@ -333,6 +344,12 @@ body.responsive-page {
     color: var(--muted);
 }
 
+.status-badge--danger {
+    border-color: rgba(239, 68, 68, 0.35);
+    color: #fecaca;
+    background: rgba(239, 68, 68, 0.14);
+}
+
 .audit-json {
     margin: 12px 0 0;
     padding: 14px;
@@ -399,6 +416,24 @@ body.responsive-page {
     margin-top: 6px;
 }
 
+.password-guidelines {
+    margin-top: 10px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(250, 204, 21, 0.18);
+    background: rgba(15, 23, 42, 0.7);
+    color: var(--muted);
+}
+
+.password-guidelines p {
+    margin: 0;
+    line-height: 1.55;
+}
+
+.password-guidelines p + p {
+    margin-top: 6px;
+}
+
 .voice-widget {
     position: fixed;
     right: 18px;
@@ -453,6 +488,24 @@ body.responsive-page {
 .stack-form button {
     width: 100%;
     margin: 0;
+}
+
+.password-toggle-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: stretch;
+}
+
+.password-toggle-row .password-toggle-input {
+    max-width: none;
+}
+
+.password-toggle-row .password-toggle-button {
+    width: auto;
+    min-width: 118px;
+    padding: 0 14px;
+    white-space: nowrap;
 }
 
 .inline-toggle {
@@ -589,6 +642,97 @@ input[type="file"] {
 
 .summary-card--budget {
     padding: 20px;
+}
+
+.return-card {
+    display: grid;
+    gap: 0;
+}
+
+.return-card-top {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+.return-status-panel {
+    flex: 1 1 320px;
+    width: 100%;
+    max-width: 360px;
+    display: grid;
+    gap: 8px;
+    padding: 14px 16px;
+    border-radius: 18px;
+    background: rgba(15, 23, 42, 0.78);
+    border: 1px solid rgba(250, 204, 21, 0.18);
+}
+
+.return-status-panel p {
+    margin: 0;
+    color: var(--muted);
+}
+
+.return-status-panel b {
+    color: var(--text);
+}
+
+.return-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 12px;
+}
+
+.return-meta-item {
+    display: grid;
+    gap: 6px;
+    padding: 14px;
+    border-radius: 16px;
+    background: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(250, 204, 21, 0.14);
+}
+
+.return-meta-item strong {
+    color: var(--text);
+}
+
+.return-suggestion-box {
+    display: grid;
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: 18px;
+    background: rgba(17, 24, 39, 0.74);
+    border: 1px solid rgba(250, 204, 21, 0.14);
+}
+
+.return-suggestion-box p {
+    margin: 0;
+}
+
+.return-card textarea {
+    min-height: 112px;
+    resize: vertical;
+}
+
+.return-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.return-actions > * {
+    flex: 1 1 180px;
+    min-width: 0;
+}
+
+.return-actions .button-link {
+    display: flex;
+}
+
+.return-actions .button-link button {
+    width: 100%;
 }
 
 .summary-grid--budget {

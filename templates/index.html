@@ -191,6 +191,45 @@ input, select {
     padding: 2px 4px 0;
 }
 
+.sidebar-home-link,
+.sidebar-group {
+    display: grid;
+    gap: 10px;
+}
+
+.sidebar-home-link {
+    margin-bottom: 4px;
+}
+
+.sidebar-home-link button {
+    background: linear-gradient(135deg, #facc15, #f59e0b);
+    color: #111827;
+    border-color: rgba(250, 204, 21, 0.72);
+    box-shadow: 0 14px 24px rgba(250, 204, 21, 0.18);
+}
+
+.sidebar-home-link button:hover {
+    transform: translateX(4px);
+    filter: saturate(1.04);
+}
+
+.sidebar-group {
+    padding: 12px;
+    border-radius: 18px;
+    border: 1px solid rgba(250, 204, 21, 0.14);
+    background: linear-gradient(180deg, rgba(17, 24, 39, 0.78), rgba(15, 23, 42, 0.72));
+}
+
+.sidebar-group-label {
+    margin: 0;
+    padding: 0 4px;
+    color: rgba(250, 204, 21, 0.82);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 1.7px;
+    text-transform: uppercase;
+}
+
 .sidebar-nav a {
     width: 100%;
     text-decoration: none;
@@ -555,18 +594,79 @@ input[type="file"] {
     border: 2px solid #facc15;
     border-radius: 10px;
 
-    padding: 10px 12px;
+    padding: 12px 12px 10px;
 
     font-size: 12px;
     line-height: 1.45;
 
     box-shadow: 0 0 12px rgba(250, 204, 21, 0.28);
 
-    width: 262px;
-    max-width: min(86vw, 262px);
+    width: 276px;
+    max-width: min(88vw, 276px);
 
     text-align: left;
     z-index: 9999;
+}
+
+#relogio.hud-compact {
+    width: 230px;
+    max-width: min(80vw, 230px);
+    padding: 12px 11px 10px;
+    line-height: 1.35;
+}
+
+#relogio.hud-expanded {
+    width: 276px;
+    max-width: min(88vw, 276px);
+}
+
+.hud-toggle-button {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    border: 1px solid rgba(250, 204, 21, 0.45);
+    background: rgba(17, 24, 39, 0.92);
+    color: #facc15;
+    padding: 0;
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: none;
+    cursor: pointer;
+}
+
+.hud-toggle-button:hover {
+    background: rgba(31, 41, 55, 0.98);
+    box-shadow: 0 0 10px rgba(250, 204, 21, 0.18);
+}
+
+.hud-content {
+    display: grid;
+    gap: 6px;
+    padding-right: 34px;
+}
+
+.hud-line {
+    display: block;
+    word-break: break-word;
+}
+
+.hud-line--multiline {
+    white-space: pre-line;
+    line-height: 1.38;
+}
+
+.hud-line--compact {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* ================= TABLET / MOBILE ================= */
@@ -616,14 +716,24 @@ input[type="file"] {
     }
 
     #relogio {
-        position: static;
-        width: min(100%, 260px);
+        position: relative;
+        width: min(100%, 272px);
         max-width: 100%;
         margin: 16px auto 0;
-        padding: 9px 11px;
+        padding: 12px 11px 10px;
         text-align: center;
         line-height: 1.45;
         font-size: 12px;
+    }
+
+    #relogio.hud-compact {
+        width: min(100%, 238px);
+        max-width: 100%;
+    }
+
+    #relogio.hud-expanded {
+        width: min(100%, 272px);
+        max-width: 100%;
     }
 
     #dropdown-notificacoes {
@@ -817,6 +927,19 @@ input[type="file"] {
 
 .agenda-header strong {
     font-size: 14px;
+}
+
+.agenda-header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.agenda-header-actions button {
+    margin: 0;
+    padding: 7px 10px;
+    font-size: 11px;
+    border-radius: 10px;
 }
 
 .agenda-summary {
@@ -1045,17 +1168,33 @@ input[type="file"] {
 </div>
 
 <div class="sidebar-nav">
-<a href="/nota_fiscal"><button><span>&#128220;</span> Emissao de nota fiscal</button></a>
+<div class="sidebar-home-link">
+<a href="/"><button><span>&#127968;</span> Inicio</button></a>
+</div>
+
+<div class="sidebar-group">
+<p class="sidebar-group-label">Operacao</p>
 <a href="/painel"><button><span>&#128202;</span> Painel</button></a>
 <a href="/clientes"><button><span>&#128100;</span> Clientes</button></a>
+<a href="/retornos"><button><span>&#128197;</span> Retornos</button></a>
 <a href="/cadastrar_servico"><button><span>&#129532;</span> Servicos</button></a>
 <a href="/itens"><button><span>&#9745;</span> Itens Checklist</button></a>
-<a href="/orcamento"><button><span>&#128196;</span> Orçamentos</button></a>
-<a href="/financeiro"><button><span>&#128176;</span> Financeiro</button></a>
 <a href="/pneu"><button><span>&#128736;</span> Pneus</button></a>
+</div>
+
+<div class="sidebar-group">
+<p class="sidebar-group-label">Gestao</p>
+<a href="/financeiro"><button><span>&#128176;</span> Financeiro</button></a>
+<a href="/orcamento"><button><span>&#128196;</span> Orçamentos</button></a>
+<a href="/nota_fiscal"><button><span>&#128220;</span> Emissao de nota fiscal</button></a>
+</div>
+
+<div class="sidebar-group">
+<p class="sidebar-group-label">Apoio / Administracao</p>
 <a href="/clima"><button><span>&#9729;</span> Clima</button></a>
 <a href="/auditoria"><button><span>&#128269;</span> Auditoria</button></a>
 <a href="/configuracoes"><button><span>&#9881;</span> Configurações</button></a>
+</div>
 <a href="/logout">
     <button style="
         background: linear-gradient(135deg, #dc2626, #b91c1c);
@@ -1492,6 +1631,92 @@ let agendaRetornoData = {
     contadores: { "15": 0, "30": 0, "45": 0 },
     restantes: 0
 };
+const AGENDA_RETORNO_STORAGE_KEY = "wagen_agenda_retorno_dispensada_v2";
+
+function carregarAgendaRetornoDispensada() {
+    try {
+        const raw = localStorage.getItem(AGENDA_RETORNO_STORAGE_KEY);
+        const dados = raw ? JSON.parse(raw) : {};
+        return dados && typeof dados === "object" ? dados : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function salvarAgendaRetornoDispensada() {
+    try {
+        localStorage.setItem(
+            AGENDA_RETORNO_STORAGE_KEY,
+            JSON.stringify(agendaRetornoDispensada)
+        );
+    } catch (e) {
+        console.log("Erro ao salvar agenda dispensada");
+    }
+}
+
+function chaveAgendaRetorno(item) {
+    return [
+        item.placa || "",
+        item.ultima_lavagem || "",
+        item.faixa_alerta || ""
+    ].join("|");
+}
+
+function obterItensAgendaRetornoVisiveis() {
+    return (agendaRetornoData.itens || []).filter(item => {
+        return !agendaRetornoDispensada[chaveAgendaRetorno(item)];
+    });
+}
+
+function normalizarAgendaRetornoDispensada() {
+    const chavesAtuais = new Set((agendaRetornoData.itens || []).map(chaveAgendaRetorno));
+    let mudou = false;
+
+    Object.keys(agendaRetornoDispensada).forEach(chave => {
+        if (!chavesAtuais.has(chave)) {
+            delete agendaRetornoDispensada[chave];
+            mudou = true;
+        }
+    });
+
+    if (mudou) {
+        salvarAgendaRetornoDispensada();
+    }
+}
+
+function resumirItensAgendaRetorno(itens) {
+    const contadores = { "15": 0, "30": 0, "45": 0 };
+
+    itens.forEach(item => {
+        const chave = String(item.faixa_alerta || "");
+        if (Object.prototype.hasOwnProperty.call(contadores, chave)) {
+            contadores[chave] += 1;
+        }
+    });
+
+    return contadores;
+}
+
+function limparAgendaRetorno() {
+    const itensVisiveis = obterItensAgendaRetornoVisiveis();
+
+    if (!itensVisiveis.length) {
+        return;
+    }
+
+    if (!confirm("Deseja limpar as notificacoes atuais da agenda?")) {
+        return;
+    }
+
+    itensVisiveis.forEach(item => {
+        agendaRetornoDispensada[chaveAgendaRetorno(item)] = true;
+    });
+
+    salvarAgendaRetornoDispensada();
+    renderizarAgendaRetorno();
+}
+
+let agendaRetornoDispensada = carregarAgendaRetornoDispensada();
 
 function garantirAgendaRetornoUI() {
     const container = document.getElementById("sino-container");
@@ -1604,20 +1829,50 @@ function renderizarAgendaRetorno() {
     }
 
     dropdown.innerHTML = "";
-    const itensAgenda = agendaRetornoData.itens || [];
+    const itensAgenda = obterItensAgendaRetornoVisiveis();
+    const itensPreview = itensAgenda.slice(0, 3);
+    const contadoresAgenda = resumirItensAgendaRetorno(itensAgenda);
     const totalAgenda = itensAgenda.length;
 
     const header = document.createElement("div");
     header.className = "agenda-header";
-    header.innerHTML = `
-        <strong>Agenda de retornos</strong>
-        <span class="agenda-chip">${totalAgenda} carro(s)</span>
-    `;
+    header.innerHTML = "<strong>Agenda de retornos</strong>";
+
+    const headerActions = document.createElement("div");
+    headerActions.className = "agenda-header-actions";
+
+    const contador = document.createElement("span");
+    contador.className = "agenda-chip";
+    contador.textContent = `${totalAgenda} carro(s)`;
+    headerActions.appendChild(contador);
+
+    const abrirCentral = document.createElement("button");
+    abrirCentral.type = "button";
+    abrirCentral.textContent = "Abrir central";
+    abrirCentral.onclick = () => {
+        window.location.href = "/retornos";
+    };
+    headerActions.appendChild(abrirCentral);
+
+    const limpar = document.createElement("button");
+    limpar.type = "button";
+    limpar.textContent = totalAgenda ? "Limpar notificacoes" : "Sem alertas";
+    limpar.disabled = totalAgenda === 0;
+
+    if (totalAgenda > 0) {
+        limpar.onclick = limparAgendaRetorno;
+    } else {
+        limpar.style.opacity = "0.65";
+        limpar.style.cursor = "default";
+    }
+
+    headerActions.appendChild(limpar);
+    header.appendChild(headerActions);
     dropdown.appendChild(header);
 
     const resumo = document.createElement("div");
     resumo.className = "agenda-summary";
-    formatarResumoAgenda(agendaRetornoData.contadores).forEach(item => {
+    formatarResumoAgenda(contadoresAgenda).forEach(item => {
         const chip = document.createElement("span");
         chip.className = "agenda-chip";
         chip.textContent = `${item.label}: ${item.total}`;
@@ -1629,20 +1884,22 @@ function renderizarAgendaRetorno() {
         const vazio = document.createElement("div");
         vazio.className = "agenda-empty";
         vazio.textContent = (
-            "Nenhum carro entrou nas faixas de 15, 30 ou 45 dias agora. " +
+            "Nenhuma notificacao ativa na agenda agora. " +
             "Quando houver retorno pendente, ele aparece aqui."
         );
         dropdown.appendChild(vazio);
     } else {
-        itensAgenda.forEach(item => {
+        itensPreview.forEach(item => {
             dropdown.appendChild(montarCardAgendaRetorno(item));
         });
 
-        if (agendaRetornoData.restantes > 0) {
+        const itensRestantes = Math.max(0, totalAgenda - itensPreview.length);
+
+        if (itensRestantes > 0) {
             const restante = document.createElement("div");
             restante.className = "agenda-empty";
             restante.textContent = (
-                `Ha mais ${agendaRetornoData.restantes} carro(s) pendente(s) nesta agenda.`
+                `Ha mais ${itensRestantes} carro(s) pendente(s). Abra a central para ver tudo.`
             );
             dropdown.appendChild(restante);
         }
@@ -1699,6 +1956,7 @@ async function carregarAgendaRetorno() {
 
         if (dados && !dados.erro) {
             agendaRetornoData = dados;
+            normalizarAgendaRetornoDispensada();
             renderizarAgendaRetorno();
         }
     } catch (e) {
@@ -1755,6 +2013,10 @@ let hudData = {
     andamento: 0,
     atrasados: 0,
     ticket: 0,
+    retornos_acao_agora: 0,
+    retornos_reagendados_vencidos: 0,
+    retornos_contatados_hoje: 0,
+    retornos_mensagem: "Painel retornos em dia",
     usuario_nome: "",
     usuario_iniciais: "",
     usuario_foto_url: "",
@@ -1763,6 +2025,10 @@ let hudData = {
 
 let alertaAtivo = false;
 let audioAlerta = new Audio("https://actions.google.com/sounds/v1/alarms/beep_short.ogg");
+const HUD_STORAGE_KEY = "wagen_hud_expandido_v1";
+const HUD_AUTO_COLLAPSE_MS = 30000;
+let hudExpandido = carregarEstadoHudExpandido();
+let hudAutoCollapseTimer = null;
 
 function obterIniciaisUsuario(nome) {
     const texto = String(nome || "").trim();
@@ -1812,6 +2078,115 @@ function atualizarAvatarUsuario() {
     avatar.textContent = hudData.usuario_iniciais || obterIniciaisUsuario(hudData.usuario_nome);
 }
 
+function carregarEstadoHudExpandido() {
+    try {
+        return localStorage.getItem(HUD_STORAGE_KEY) === "1";
+    } catch (e) {
+        return false;
+    }
+}
+
+function salvarEstadoHudExpandido() {
+    try {
+        localStorage.setItem(HUD_STORAGE_KEY, hudExpandido ? "1" : "0");
+    } catch (e) {
+        console.log("Erro HUD storage");
+    }
+}
+
+function limparTemporizadorHud() {
+    if (hudAutoCollapseTimer) {
+        clearTimeout(hudAutoCollapseTimer);
+        hudAutoCollapseTimer = null;
+    }
+}
+
+function agendarRecolhimentoHud() {
+    limparTemporizadorHud();
+
+    if (!hudExpandido) {
+        return;
+    }
+
+    hudAutoCollapseTimer = setTimeout(() => {
+        hudExpandido = false;
+        salvarEstadoHudExpandido();
+        atualizarRelogio();
+    }, HUD_AUTO_COLLAPSE_MS);
+}
+
+function toggleHudModo() {
+    hudExpandido = !hudExpandido;
+    salvarEstadoHudExpandido();
+    agendarRecolhimentoHud();
+    atualizarRelogio();
+}
+
+function escaparHudHtml(valor) {
+    return String(valor || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function montarResumoRetornosCompacto() {
+    const pendentes = Number(hudData.retornos_acao_agora || 0);
+    const vencidos = Number(hudData.retornos_reagendados_vencidos || 0);
+    const contatadosHoje = Number(hudData.retornos_contatados_hoje || 0);
+
+    if (pendentes > 0) {
+        return vencidos > 0
+            ? `Retornos: ${pendentes} atencao | ${vencidos} vencido(s)`
+            : `Retornos: ${pendentes} atencao`;
+    }
+
+    if (contatadosHoje > 0) {
+        return `Retornos: ${contatadosHoje} contato(s) hoje`;
+    }
+
+    return "Retornos: em dia";
+}
+
+function montarTextoClimaHud() {
+    const partes = [
+        String(climaTexto || "").trim(),
+        String(sugestaoTexto || "").trim(),
+    ].filter(Boolean);
+
+    return partes.join("\n") || "Clima indisponivel";
+}
+
+function montarLinhasHud(agora) {
+    const dataAtual = agora.toLocaleDateString("pt-BR");
+    const horaAtual = agora.toLocaleTimeString("pt-BR");
+
+    if (!hudExpandido) {
+        return [
+            { texto: `📅 ${dataAtual} • ${horaAtual}`, compacta: true },
+            {
+                texto: `⚙️ ${hudData.andamento} • 🚨 ${hudData.atrasados} • 💰 R$ ${hudData.total}`,
+                compacta: true,
+            },
+            { texto: `📞 ${montarResumoRetornosCompacto()}`, compacta: true },
+            { texto: montarTextoClimaHud(), multilinha: true },
+        ];
+    }
+
+    return [
+        { texto: `📅 ${dataAtual} ⏰ ${horaAtual}` },
+        { texto: montarTextoClimaHud(), multilinha: true },
+        { texto: `💰 Hoje: R$ ${hudData.total}` },
+        { texto: `⚙️ Em andamento: ${hudData.andamento}` },
+        { texto: `🚨 Atrasados: ${hudData.atrasados}` },
+        { texto: `💵 Ticket: R$ ${hudData.ticket}` },
+        { texto: `📅 ${hudData.retornos_mensagem || "Painel retornos em dia"}` },
+        { texto: `👤 Usuario: ${hudData.usuario_nome || "-"}` },
+        { texto: `🧠 ${hudData.versao || APP_VERSION}` },
+    ];
+}
+
 async function atualizarHUD() {
     try {
         const res = await fetch("/api/hud");
@@ -1850,37 +2225,24 @@ function atualizarRelogio() {
 
     if (!el) return;
 
+    el.classList.toggle("hud-compact", !hudExpandido);
+    el.classList.toggle("hud-expanded", hudExpandido);
+
+    const simbolo = hudExpandido ? "-" : "+";
+    const label = hudExpandido ? "Ocultar detalhes do HUD" : "Mostrar HUD completo";
+    const linhas = montarLinhasHud(agora);
+
     el.innerHTML =
-    "📅 " + agora.toLocaleDateString('pt-BR') +
-    " ⏰ " + agora.toLocaleTimeString('pt-BR') +
-
-    "<br>" +
-
-    climaTexto + " " + sugestaoTexto +
-
-    "<br>" +
-
-    "💰 Hoje: R$ " + hudData.total +
-
-    "<br>" +
-
-    "⚙️ Em andamento: " + hudData.andamento +
-
-    "<br>" +
-
-    "🚨 Atrasados: " + hudData.atrasados +
-
-    "<br>" +
-
-    "💵 Ticket: R$ " + hudData.ticket +
-
-    "<br>" +
-
-    "👤 Usuario: " + (hudData.usuario_nome || "-") +
-
-    "<br>" +
-
-    "🧠 " + (hudData.versao || APP_VERSION);
+        `<button type="button" class="hud-toggle-button" onclick="toggleHudModo()" aria-label="${escaparHudHtml(label)}" title="${escaparHudHtml(label)}">${simbolo}</button>` +
+        `<div class="hud-content">` +
+        linhas
+            .map(item => {
+                const classeCompacta = item.compacta ? " hud-line--compact" : "";
+                const classeMultiline = item.multilinha ? " hud-line--multiline" : "";
+                return `<span class="hud-line${classeCompacta}${classeMultiline}">${escaparHudHtml(item.texto)}</span>`;
+            })
+            .join("") +
+        `</div>`;
 
     // 🔥 ALERTA
     if (hudData.atrasados > 0) {
@@ -1912,6 +2274,7 @@ setInterval(atualizarHUD, 5000);
 // INICIAR
 atualizarClima();
 atualizarHUD();
+agendarRecolhimentoHud();
 atualizarRelogio();
 </script>
 
