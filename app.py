@@ -2355,10 +2355,12 @@ BANCO_ONLINE_STATUS_CACHE = {
     "resultado": {},
 }
 BANCO_ONLINE_STATUS_CACHE_TTL = 30
+SCHEMA_BANCO_ONLINE_GARANTIDO = False
 
 
 def atualizar_configuracao_banco_runtime(database_url=None, senha=None, backend=None):
     global DATABASE_URL_RAW, SUPABASE_DB_PASSWORD, DATABASE_BACKEND_RAW
+    global SCHEMA_BANCO_ONLINE_GARANTIDO
 
     if database_url is not None:
         DATABASE_URL_RAW = str(database_url).strip()
@@ -2375,6 +2377,7 @@ def atualizar_configuracao_banco_runtime(database_url=None, senha=None, backend=
 
     BANCO_ONLINE_STATUS_CACHE["testado_em"] = 0.0
     BANCO_ONLINE_STATUS_CACHE["resultado"] = {}
+    SCHEMA_BANCO_ONLINE_GARANTIDO = False
 
 
 def modo_banco_preferido():
@@ -2526,6 +2529,24 @@ def diagnosticar_banco_online(force=False):
 
 def banco_online_ativo():
     return bool(diagnosticar_banco_online().get("conectado"))
+
+
+def garantir_schema_banco_online(force=False):
+    global SCHEMA_BANCO_ONLINE_GARANTIDO
+
+    if not banco_online_ativo():
+        return False
+    if SCHEMA_BANCO_ONLINE_GARANTIDO and not force:
+        return True
+
+    try:
+        criar_todas_tabelas()
+        SCHEMA_BANCO_ONLINE_GARANTIDO = True
+        return True
+    except Exception as e:
+        SCHEMA_BANCO_ONLINE_GARANTIDO = False
+        print("AVISO: nao foi possivel garantir o schema online:", e)
+        return False
 
 
 def desmontar_url_postgres(url):
@@ -2718,7 +2739,9 @@ def salvar_configuracao_banco_form(form):
         "SUPABASE_DATABASE_URL": url_atual,
     })
 
-    diagnosticar_banco_online(force=True)
+    status = diagnosticar_banco_online(force=True)
+    if status.get("conectado") and modo == "postgres":
+        garantir_schema_banco_online(force=True)
     return obter_status_banco_online()
 
 
@@ -7021,18 +7044,25 @@ def sincronizar_fontes_pendentes():
 
     try:
         while True:
-            conn = conectar()
-            c = conn.cursor()
-            c.execute("""
-                SELECT id
-                FROM sincronizacoes_clientes
-                WHERE ativo=1
-                  AND (proximo_sync_em IS NULL OR proximo_sync_em<=?)
-                ORDER BY id
-                LIMIT 1
-            """, (agora_iso(),))
-            pendente = c.fetchone()
-            conn.close()
+            try:
+                conn = conectar()
+                c = conn.cursor()
+                c.execute("""
+                    SELECT id
+                    FROM sincronizacoes_clientes
+                    WHERE ativo=1
+                      AND (proximo_sync_em IS NULL OR proximo_sync_em<=?)
+                    ORDER BY id
+                    LIMIT 1
+                """, (agora_iso(),))
+                pendente = c.fetchone()
+                conn.close()
+            except Exception as e:
+                texto_erro = str(e)
+                if banco_online_ativo() and "sincronizacoes_clientes" in texto_erro and "does not exist" in texto_erro:
+                    if garantir_schema_banco_online(force=True):
+                        continue
+                raise
 
             if not pendente:
                 break
@@ -7102,9 +7132,13 @@ def preparar_sincronizacoes():
     iniciar_worker_backup_banco()
     iniciar_worker_manutencao_arquivos()
     iniciar_worker_sincronizacao()
+    garantir_schema_banco_online()
 
     if session.get("usuario"):
-        sincronizar_fontes_pendentes()
+        try:
+            sincronizar_fontes_pendentes()
+        except Exception as e:
+            print("AVISO SYNC PENDENTE:", e)
 
 @app.before_request
 def exigir_troca_senha_obrigatoria():
