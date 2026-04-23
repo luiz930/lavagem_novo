@@ -8047,9 +8047,9 @@ def carregar_usuarios_configuracao():
                senha_alteracao_obrigatoria, foto_perfil
         FROM usuarios
         ORDER BY
-            CASE WHEN perfil='admin' THEN 0 ELSE 1 END,
-            nome COLLATE NOCASE,
-            usuario COLLATE NOCASE
+            CASE WHEN LOWER(COALESCE(perfil, ''))='admin' THEN 0 ELSE 1 END,
+            LOWER(COALESCE(nome, usuario, '')),
+            LOWER(COALESCE(usuario, nome, ''))
     """)
     usuarios = [dict(row) for row in c.fetchall()]
     conn.close()
