@@ -2234,8 +2234,13 @@ def arquivo_planilha_permitido(filename):
     )
 
 def adicionar_coluna_se_preciso(cursor, tabela, definicao_coluna):
+    backend = getattr(cursor, "backend", None)
+    sql = f"ALTER TABLE {tabela} ADD COLUMN {definicao_coluna}"
+    if backend == "postgres":
+        sql = f"ALTER TABLE {tabela} ADD COLUMN IF NOT EXISTS {definicao_coluna}"
+
     try:
-        cursor.execute(f"ALTER TABLE {tabela} ADD COLUMN {definicao_coluna}")
+        cursor.execute(sql)
     except Exception:
         conn = getattr(cursor, "_cursor", None)
         conn = getattr(conn, "connection", None) or getattr(cursor, "connection", None)
@@ -2570,6 +2575,7 @@ def garantir_schema_banco_online(force=False):
 
     try:
         criar_todas_tabelas()
+        atualizar_banco()
         SCHEMA_BANCO_ONLINE_GARANTIDO = True
         return True
     except Exception as e:
@@ -3143,6 +3149,8 @@ def criar_todas_tabelas():
         proximo_sync_em TEXT,
         ultimo_status TEXT,
         ultima_mensagem TEXT,
+        ultimo_hash TEXT,
+        colunas_ultima_sync TEXT,
         criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
         atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP
     )
@@ -3218,6 +3226,8 @@ def criar_todas_tabelas():
         proximo_sync_em TEXT,
         ultimo_status TEXT,
         ultima_mensagem TEXT,
+        ultimo_hash TEXT,
+        colunas_ultima_sync TEXT,
         criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
         atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP
     )
@@ -8292,6 +8302,7 @@ def migrar_banco_para_supabase():
         return redirect("/configuracoes")
 
     try:
+        garantir_schema_banco_online(force=True)
         importar_sqlite_para_banco_atual(caminho_banco_absoluto())
         criar_backup_banco(force=True, tipo_backup="banco")
         registrar_auditoria(
