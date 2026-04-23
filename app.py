@@ -416,6 +416,16 @@ class CursorCompat:
         self.backend = backend
         self.lastrowid = getattr(cursor, "lastrowid", None)
 
+    def _rollback_if_postgres(self):
+        if self.backend != "postgres":
+            return
+        conn = getattr(self._cursor, "connection", None)
+        if conn and hasattr(conn, "rollback"):
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
     def execute(self, sql, params=None):
         sql = str(sql or "")
         if self.backend == "postgres":
@@ -424,11 +434,19 @@ class CursorCompat:
             sql_exec = re.sub(r"\?", "%s", sql)
             if sql_exec.lstrip().upper().startswith("INSERT") and "RETURNING" not in sql_exec.upper():
                 sql_exec = f"{sql_exec} RETURNING id"
+                try:
+                    self._cursor.execute(sql_exec, parametros)
+                    resultado = self._cursor.fetchone()
+                    self.lastrowid = resultado[0] if resultado else None
+                    return self
+                except Exception:
+                    self._rollback_if_postgres()
+                    raise
+            try:
                 self._cursor.execute(sql_exec, parametros)
-                resultado = self._cursor.fetchone()
-                self.lastrowid = resultado[0] if resultado else None
-                return self
-            self._cursor.execute(sql_exec, parametros)
+            except Exception:
+                self._rollback_if_postgres()
+                raise
             self.lastrowid = getattr(self._cursor, "lastrowid", None)
             return self
 
@@ -441,7 +459,11 @@ class CursorCompat:
         if self.backend == "postgres":
             sql = traduzir_sql_para_postgres(sql)
             sql = re.sub(r"\?", "%s", sql)
-        self._cursor.executemany(sql, seq_of_params)
+        try:
+            self._cursor.executemany(sql, seq_of_params)
+        except Exception:
+            self._rollback_if_postgres()
+            raise
         self.lastrowid = getattr(self._cursor, "lastrowid", None)
         return self
 
@@ -2215,6 +2237,13 @@ def adicionar_coluna_se_preciso(cursor, tabela, definicao_coluna):
     try:
         cursor.execute(f"ALTER TABLE {tabela} ADD COLUMN {definicao_coluna}")
     except Exception:
+        conn = getattr(cursor, "_cursor", None)
+        conn = getattr(conn, "connection", None) or getattr(cursor, "connection", None)
+        if conn and hasattr(conn, "rollback"):
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         pass
 
 app = Flask(__name__)
