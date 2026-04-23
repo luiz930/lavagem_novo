@@ -71,8 +71,9 @@
 <div class="page-grid top-spacing">
     <div class="page-card">
         <p class="pill-label">Backup automatico</p>
-        <h2 class="section-title top-spacing">Protecao do banco</h2>
+        <h2 class="section-title top-spacing">Protecao do sistema</h2>
         <p><b>Status:</b> Ativo</p>
+        <p><b>Modo atual:</b> {{ backup_status.tipo_backup_label }}</p>
         <p><b>Frequencia atual:</b> {{ backup_status.frequencia_label }}</p>
         <p><b>Proximo backup previsto:</b> {{ backup_status.proximo_backup_em_fmt }}</p>
         <p><b>Ultimo backup:</b> {{ backup_status.ultimo_backup_em_fmt }}</p>
@@ -88,13 +89,18 @@
     {% if admin_logado %}
     <div class="page-card">
         <h2 class="section-title">Configurar rotina</h2>
-        <p class="muted-text">Defina a frequencia automatica, quantos arquivos manter e gere backups manuais quando quiser.</p>
+        <p class="muted-text">Defina a frequencia automatica, o modo do backup, quantos arquivos manter e gere backups manuais quando quiser.</p>
 
         <form action="/configuracoes/backup" method="POST" class="stack-form stack-form--wide top-spacing">
             <div class="field-grid">
                 <select name="frequencia" required>
                     {% for item in frequencias_backup %}
                     <option value="{{ item.value }}" {% if backup_config.frequencia == item.value %}selected{% endif %}>{{ item.label }}</option>
+                    {% endfor %}
+                </select>
+                <select name="tipo_backup" required>
+                    {% for item in tipos_backup %}
+                    <option value="{{ item.value }}" {% if backup_config.tipo_backup == item.value %}selected{% endif %}>{{ item.label }}</option>
                     {% endfor %}
                 </select>
                 <input
@@ -120,7 +126,7 @@
             </form>
         </div>
 
-        <p class="muted-text top-spacing">Na restauracao, o sistema cria um backup preventivo automatico antes de sobrescrever o banco atual.</p>
+        <p class="muted-text top-spacing">No modo sistema completo, o backup inclui banco principal, usuarios, fotos, perfis, uploads e arquivos locais de dados. Na restauracao, o sistema cria um backup preventivo automatico antes de sobrescrever o conteudo atual.</p>
     </div>
     {% endif %}
 </div>
@@ -132,6 +138,7 @@
         {% for item in backups_disponiveis %}
         <div class="page-card">
             <p><b>{{ item.nome }}</b></p>
+            <p class="muted-text">Tipo: {{ item.tipo_backup_label }}</p>
             <p class="muted-text">Criado em: {{ item.modificado_em_fmt }}</p>
             <p class="muted-text">Tamanho: {{ item.tamanho_fmt }}</p>
 

@@ -10,6 +10,8 @@ import hashlib
 import re
 import secrets
 import string
+import tempfile
+import zipfile
 from threading import Thread
 from io import BytesIO
 from threading import Lock, Thread
@@ -48,6 +50,7 @@ UPLOADS_THUMBS_FOLDER = os.path.join(UPLOAD_FOLDER, "thumbs")
 UPLOADS_SERVICOS_FOLDER = os.path.join(UPLOAD_FOLDER, "servicos")
 UPLOADS_PERFIS_FOLDER = os.path.join(UPLOAD_FOLDER, "perfis")
 BACKUP_RETENCAO_PADRAO = 15
+BACKUP_TIPO_PADRAO = "completo"
 AGENDA_RETORNO_MARCOS = (15, 30, 45)
 AGENDA_RETORNO_LIMITE_ITENS = 18
 STATUS_RETORNO_PADRAO = "pendente"
@@ -69,6 +72,10 @@ FREQUENCIAS_BACKUP = [
     {"value": "diario", "label": "Diario"},
     {"value": "semanal", "label": "Semanal"},
     {"value": "mensal", "label": "Mensal"},
+]
+TIPOS_BACKUP = [
+    {"value": "completo", "label": "Sistema completo"},
+    {"value": "banco", "label": "Somente banco"},
 ]
 FOTO_MAX_DIMENSAO = 1600
 FOTO_QUALIDADE_JPEG = 82
@@ -225,14 +232,32 @@ def caminho_diretorio_backup():
     os.makedirs(BACKUP_FOLDER, exist_ok=True)
     return os.path.abspath(BACKUP_FOLDER)
 
-def nome_arquivo_backup_banco(datahora=None):
+def normalizar_tipo_backup(valor):
+    tipo = str(valor or BACKUP_TIPO_PADRAO).strip().lower()
+    return tipo if tipo in {"banco", "completo"} else BACKUP_TIPO_PADRAO
+
+def label_tipo_backup(valor):
+    tipo = normalizar_tipo_backup(valor)
+    return next(
+        (item["label"] for item in TIPOS_BACKUP if item["value"] == tipo),
+        "Sistema completo",
+    )
+
+def nome_arquivo_backup(datahora=None, tipo_backup=BACKUP_TIPO_PADRAO):
     datahora = datahora or agora()
-    return f"database_v2_{datahora.strftime('%Y%m%d_%H%M%S')}.db"
+    tipo = normalizar_tipo_backup(tipo_backup)
+    prefixo = "sistema_completo" if tipo == "completo" else "database_v2"
+    extensao = ".zip" if tipo == "completo" else ".db"
+    return f"{prefixo}_{datahora.strftime('%Y%m%d_%H%M%S')}{extensao}"
+
+def nome_arquivo_backup_banco(datahora=None):
+    return nome_arquivo_backup(datahora, "banco")
 
 def configuracao_backup_padrao():
     return {
         "id": 1,
         "frequencia": "diario",
+        "tipo_backup": BACKUP_TIPO_PADRAO,
         "retencao_arquivos": BACKUP_RETENCAO_PADRAO,
         "atualizado_em": "",
     }
@@ -250,6 +275,7 @@ def obter_configuracao_backup():
 
     frequencia = str(dados.get("frequencia") or "diario").strip().lower()
     dados["frequencia"] = frequencia if frequencia in {"diario", "semanal", "mensal"} else "diario"
+    dados["tipo_backup"] = normalizar_tipo_backup(dados.get("tipo_backup"))
 
     try:
         retencao = int(dados.get("retencao_arquivos") or BACKUP_RETENCAO_PADRAO)
@@ -261,12 +287,14 @@ def obter_configuracao_backup():
         (item["label"] for item in FREQUENCIAS_BACKUP if item["value"] == dados["frequencia"]),
         "Diario",
     )
+    dados["tipo_backup_label"] = label_tipo_backup(dados["tipo_backup"])
     return dados
 
 def salvar_configuracao_backup_form(form):
     frequencia = str(form.get("frequencia") or "diario").strip().lower()
     if frequencia not in {"diario", "semanal", "mensal"}:
         frequencia = "diario"
+    tipo_backup = normalizar_tipo_backup(form.get("tipo_backup"))
 
     try:
         retencao = int(form.get("retencao_arquivos") or BACKUP_RETENCAO_PADRAO)
@@ -278,14 +306,16 @@ def salvar_configuracao_backup_form(form):
     conn = conectar()
     c = conn.cursor()
     c.execute("""
-        INSERT INTO configuracao_backup (id, frequencia, retencao_arquivos, atualizado_em)
-        VALUES (1, ?, ?, ?)
+        INSERT INTO configuracao_backup (id, frequencia, tipo_backup, retencao_arquivos, atualizado_em)
+        VALUES (1, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             frequencia=excluded.frequencia,
+            tipo_backup=excluded.tipo_backup,
             retencao_arquivos=excluded.retencao_arquivos,
             atualizado_em=excluded.atualizado_em
     """, (
         frequencia,
+        tipo_backup,
         retencao,
         agora_iso(),
     ))
@@ -349,27 +379,40 @@ def formatar_tamanho_arquivo(tamanho_bytes):
         return f"{valor / (1024 ** 2):.1f} MB"
     return f"{valor / (1024 ** 3):.1f} GB"
 
-def caminho_backup_unico(datahora=None, sufixo=""):
-    base_nome = nome_arquivo_backup_banco(datahora).replace(".db", "")
+def caminho_backup_unico(datahora=None, sufixo="", tipo_backup=BACKUP_TIPO_PADRAO):
+    nome_base_original = nome_arquivo_backup(datahora, tipo_backup)
+    base_nome, extensao = os.path.splitext(nome_base_original)
     if sufixo:
         base_nome = f"{base_nome}_{sufixo}"
 
     pasta = caminho_diretorio_backup()
-    destino = os.path.join(pasta, f"{base_nome}.db")
+    destino = os.path.join(pasta, f"{base_nome}{extensao}")
     contador = 1
 
     while os.path.exists(destino):
-        destino = os.path.join(pasta, f"{base_nome}_{contador}.db")
+        destino = os.path.join(pasta, f"{base_nome}_{contador}{extensao}")
         contador += 1
 
     return destino
 
-def listar_arquivos_backup_banco():
+def identificar_tipo_backup_por_nome(nome):
+    texto = str(nome or "").strip()
+    if texto.startswith("sistema_completo_") and texto.endswith(".zip"):
+        return "completo"
+    if texto.startswith("database_v2_") and texto.endswith(".db"):
+        return "banco"
+    return ""
+
+def listar_arquivos_backup_banco(tipo_backup=None):
     pasta = caminho_diretorio_backup()
     backups = []
+    filtro_tipo = normalizar_tipo_backup(tipo_backup) if tipo_backup else ""
 
     for nome in os.listdir(pasta):
-        if not nome.startswith("database_v2_") or not nome.endswith(".db"):
+        tipo_item = identificar_tipo_backup_por_nome(nome)
+        if not tipo_item:
+            continue
+        if filtro_tipo and tipo_item != filtro_tipo:
             continue
 
         caminho = os.path.join(pasta, nome)
@@ -381,6 +424,8 @@ def listar_arquivos_backup_banco():
         backups.append({
             "nome": nome,
             "caminho": caminho,
+            "tipo_backup": tipo_item,
+            "tipo_backup_label": label_tipo_backup(tipo_item),
             "modificado_em": stat.st_mtime,
             "modificado_dt": modificado_dt,
             "modificado_em_iso": modificado_dt.isoformat(timespec="seconds"),
@@ -392,8 +437,8 @@ def listar_arquivos_backup_banco():
     backups.sort(key=lambda item: item["modificado_em"], reverse=True)
     return backups
 
-def limpar_backups_antigos_banco():
-    backups = listar_arquivos_backup_banco()
+def limpar_backups_antigos_banco(tipo_backup=None):
+    backups = listar_arquivos_backup_banco(tipo_backup)
     retencao = obter_configuracao_backup()["retencao_arquivos"]
     removidos = 0
 
@@ -406,9 +451,121 @@ def limpar_backups_antigos_banco():
 
     return removidos
 
+def listar_fontes_backup_completo():
+    fontes = []
+
+    for nome_banco in ("database_v2.db", "database.db"):
+        caminho_banco = os.path.abspath(nome_banco)
+        if os.path.isfile(caminho_banco):
+            fontes.append((caminho_banco, nome_banco))
+
+    uploads_path = caminho_uploads_absoluto()
+    if os.path.isdir(uploads_path):
+        fontes.append((uploads_path, "static/uploads"))
+
+    static_base = caminho_static_absoluto()
+    if os.path.isdir(static_base):
+        for nome in os.listdir(static_base):
+            caminho = os.path.join(static_base, nome)
+            if not os.path.isfile(caminho):
+                continue
+            if os.path.splitext(nome)[1].lower() not in {".xlsx", ".xls", ".csv"}:
+                continue
+            fontes.append((caminho, f"static/{nome}"))
+
+    for nome_local in (".env", ".flaskenv"):
+        caminho_local = os.path.abspath(nome_local)
+        if os.path.isfile(caminho_local):
+            fontes.append((caminho_local, nome_local))
+
+    return fontes
+
+def escrever_zip_backup_completo(destino_path):
+    fontes = listar_fontes_backup_completo()
+    if not fontes:
+        raise ValueError("Nenhum dado elegivel foi encontrado para o backup completo.")
+
+    manifesto = {
+        "tipo_backup": "completo",
+        "gerado_em": agora_iso(),
+        "arquivos": [],
+    }
+
+    with zipfile.ZipFile(
+        destino_path,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=6,
+    ) as arquivo_zip:
+        for origem_path, destino_rel in fontes:
+            if os.path.isdir(origem_path):
+                for raiz, _, arquivos in os.walk(origem_path):
+                    for nome_arquivo in arquivos:
+                        caminho_arquivo = os.path.join(raiz, nome_arquivo)
+                        rel_interno = os.path.relpath(caminho_arquivo, origem_path).replace("\\", "/")
+                        arcname = f"{destino_rel}/{rel_interno}"
+                        arquivo_zip.write(caminho_arquivo, arcname)
+                        manifesto["arquivos"].append(arcname)
+                continue
+
+            arquivo_zip.write(origem_path, destino_rel)
+            manifesto["arquivos"].append(destino_rel)
+
+        arquivo_zip.writestr(
+            "manifesto_backup.json",
+            json.dumps(manifesto, ensure_ascii=False, indent=2),
+        )
+
+def restaurar_arquivo_simples(caminho_origem, caminho_destino):
+    os.makedirs(os.path.dirname(caminho_destino), exist_ok=True)
+    shutil.copy2(caminho_origem, caminho_destino)
+
+def restaurar_backup_completo_zip(caminho_backup_zip):
+    with tempfile.TemporaryDirectory(prefix="restore_backup_") as pasta_temp:
+        with zipfile.ZipFile(caminho_backup_zip, "r") as arquivo_zip:
+            arquivo_zip.extractall(pasta_temp)
+
+        banco_extraido = os.path.join(pasta_temp, "database_v2.db")
+        if os.path.isfile(banco_extraido):
+            origem_db = sqlite3.connect(f"file:{banco_extraido}?mode=ro", uri=True)
+            destino_db = sqlite3.connect(caminho_banco_absoluto())
+            try:
+                with destino_db:
+                    origem_db.backup(destino_db)
+            finally:
+                origem_db.close()
+                destino_db.close()
+
+        banco_legado = os.path.join(pasta_temp, "database.db")
+        if os.path.isfile(banco_legado):
+            restaurar_arquivo_simples(banco_legado, os.path.abspath("database.db"))
+
+        uploads_extraidos = os.path.join(pasta_temp, "static", "uploads")
+        if os.path.isdir(uploads_extraidos):
+            uploads_destino = caminho_uploads_absoluto()
+            if os.path.isdir(uploads_destino):
+                shutil.rmtree(uploads_destino)
+            shutil.copytree(uploads_extraidos, uploads_destino)
+
+        static_extraido = os.path.join(pasta_temp, "static")
+        if os.path.isdir(static_extraido):
+            for nome in os.listdir(static_extraido):
+                caminho_origem = os.path.join(static_extraido, nome)
+                if os.path.isdir(caminho_origem):
+                    continue
+                if os.path.splitext(nome)[1].lower() not in {".xlsx", ".xls", ".csv"}:
+                    continue
+                restaurar_arquivo_simples(caminho_origem, os.path.join(caminho_static_absoluto(), nome))
+
+        for nome_local in (".env", ".flaskenv"):
+            caminho_origem = os.path.join(pasta_temp, nome_local)
+            if os.path.isfile(caminho_origem):
+                restaurar_arquivo_simples(caminho_origem, os.path.abspath(nome_local))
+
 def obter_status_backup_banco():
     configuracao = obter_configuracao_backup()
-    backups = listar_arquivos_backup_banco()
+    tipo_backup = configuracao["tipo_backup"]
+    backups = listar_arquivos_backup_banco(tipo_backup)
     ultimo = backups[0] if backups else None
     caminho_ultimo = ultimo["caminho"] if ultimo else ""
     proximo_backup_dt = (
@@ -423,6 +580,8 @@ def obter_status_backup_banco():
         "retencao": configuracao["retencao_arquivos"],
         "frequencia": configuracao["frequencia"],
         "frequencia_label": configuracao["frequencia_label"],
+        "tipo_backup": tipo_backup,
+        "tipo_backup_label": configuracao["tipo_backup_label"],
         "quantidade": len(backups),
         "ultimo_backup": caminho_ultimo,
         "ultimo_backup_nome": os.path.basename(caminho_ultimo) if caminho_ultimo else "",
@@ -436,7 +595,7 @@ def obter_status_backup_banco():
         ),
     }
 
-def criar_backup_banco(force=False):
+def criar_backup_banco(force=False, tipo_backup=None):
     if not backup_lock.acquire(blocking=False):
         return False, "Backup ja esta em execucao.", None
 
@@ -444,13 +603,10 @@ def criar_backup_banco(force=False):
     destino = None
 
     try:
-        caminho_origem = caminho_banco_absoluto()
-        if not os.path.exists(caminho_origem):
-            return False, "Banco principal nao encontrado para backup.", None
-
         agora_atual = agora()
         configuracao = obter_configuracao_backup()
-        backups = listar_arquivos_backup_banco()
+        tipo_efetivo = normalizar_tipo_backup(tipo_backup or configuracao["tipo_backup"])
+        backups = listar_arquivos_backup_banco(tipo_efetivo)
         ultimo_backup = backups[0] if backups else None
 
         if (
@@ -460,21 +616,34 @@ def criar_backup_banco(force=False):
         ):
             return (
                 True,
-                f"Backup {configuracao['frequencia_label'].lower()} ja criado no periodo atual.",
+                (
+                    f"Backup {configuracao['frequencia_label'].lower()} "
+                    f"{label_tipo_backup(tipo_efetivo).lower()} ja criado no periodo atual."
+                ),
                 ultimo_backup["caminho"],
             )
 
-        destino_path = caminho_backup_unico(agora_atual)
+        destino_path = caminho_backup_unico(agora_atual, tipo_backup=tipo_efetivo)
+
+        if tipo_efetivo == "completo":
+            escrever_zip_backup_completo(destino_path)
+            limpar_backups_antigos_banco(tipo_efetivo)
+            return True, "Backup completo do sistema criado com sucesso.", destino_path
+
+        caminho_origem = caminho_banco_absoluto()
+        if not os.path.exists(caminho_origem):
+            return False, "Banco principal nao encontrado para backup.", None
+
         origem = sqlite3.connect(f"file:{caminho_origem}?mode=ro", uri=True)
         destino = sqlite3.connect(destino_path)
 
         with destino:
             origem.backup(destino)
 
-        limpar_backups_antigos_banco()
+        limpar_backups_antigos_banco(tipo_efetivo)
         return True, "Backup automatico do banco criado com sucesso.", destino_path
     except Exception as e:
-        return False, f"Erro ao criar backup do banco: {e}", None
+        return False, f"Erro ao criar backup: {e}", None
     finally:
         try:
             if origem:
@@ -504,7 +673,10 @@ def restaurar_backup_banco(nome_arquivo_backup):
     restore_lock = False
 
     try:
-        sucesso_backup, mensagem_backup, caminho_backup = criar_backup_banco(force=True)
+        sucesso_backup, mensagem_backup, caminho_backup = criar_backup_banco(
+            force=True,
+            tipo_backup=selecionado["tipo_backup"],
+        )
         if not sucesso_backup:
             return False, f"Nao foi possivel criar o backup preventivo antes da restauracao. {mensagem_backup}"
 
@@ -514,16 +686,19 @@ def restaurar_backup_banco(nome_arquivo_backup):
             return False, "Ja existe um backup ou restauracao em andamento. Tente novamente em instantes."
 
         restore_lock = True
-        origem = sqlite3.connect(f"file:{selecionado['caminho']}?mode=ro", uri=True)
-        destino = sqlite3.connect(caminho_banco_absoluto())
+        if selecionado["tipo_backup"] == "completo":
+            restaurar_backup_completo_zip(selecionado["caminho"])
+        else:
+            origem = sqlite3.connect(f"file:{selecionado['caminho']}?mode=ro", uri=True)
+            destino = sqlite3.connect(caminho_banco_absoluto())
 
-        with destino:
-            origem.backup(destino)
+            with destino:
+                origem.backup(destino)
 
-        origem.close()
-        origem = None
-        destino.close()
-        destino = None
+            origem.close()
+            origem = None
+            destino.close()
+            destino = None
 
         init_db()
 
@@ -663,26 +838,6 @@ def caminho_absoluto_usuario_foto(caminho):
 
     return os.path.normpath(os.path.join(caminho_uploads_perfis_absoluto(), os.path.basename(texto)))
 
-def caminho_relativo_usuario_foto(nome_arquivo):
-    nome = os.path.basename(str(nome_arquivo or "").replace("\\", "/").strip())
-    if not nome:
-        return ""
-
-    return f"static/uploads/perfis/{nome}"
-
-def normalizar_registro_usuario_foto(caminho):
-    texto = str(caminho or "").strip()
-    if not texto:
-        return ""
-
-    rel_static = caminho_relativo_static(texto)
-    if rel_static:
-        nome_rel = rel_static.replace("\\", "/")
-        if nome_rel.startswith("static/uploads/perfis/"):
-            return nome_rel
-
-    return caminho_relativo_usuario_foto(texto)
-
 def url_foto_usuario(caminho):
     return caminho_foto_para_url(caminho) if str(caminho or "").strip() else ""
 
@@ -698,77 +853,6 @@ def remover_foto_perfil_antiga(caminho):
         os.remove(caminho_abs)
     except Exception:
         pass
-
-def localizar_arquivo_em_subpastas(pasta_base, nome_arquivo):
-    nome = os.path.basename(str(nome_arquivo or "").replace("\\", "/").strip())
-    if not nome or not os.path.exists(pasta_base):
-        return ""
-
-    for raiz, _, arquivos in os.walk(pasta_base):
-        if nome in arquivos:
-            return os.path.join(raiz, nome)
-
-    return ""
-
-def reparar_registros_foto_perfil():
-    conn = conectar()
-    c = conn.cursor()
-    c.execute("""
-        SELECT id, foto_perfil
-        FROM usuarios
-        WHERE foto_perfil IS NOT NULL AND TRIM(foto_perfil) <> ''
-    """)
-    usuarios = c.fetchall()
-    atualizacoes = []
-
-    for usuario in usuarios:
-        registro_atual = str(usuario["foto_perfil"] or "").strip()
-        registro_normalizado = normalizar_registro_usuario_foto(registro_atual)
-        caminho_atual = caminho_absoluto_usuario_foto(registro_atual)
-        caminho_normalizado = caminho_absoluto_usuario_foto(registro_normalizado)
-
-        if caminho_normalizado and os.path.exists(caminho_normalizado):
-            if registro_atual != registro_normalizado:
-                atualizacoes.append((registro_normalizado, usuario["id"]))
-            continue
-
-        if caminho_atual and os.path.exists(caminho_atual):
-            if registro_atual != registro_normalizado:
-                atualizacoes.append((registro_normalizado, usuario["id"]))
-            continue
-
-        encontrado_em_orfaos = localizar_arquivo_em_subpastas(
-            caminho_uploads_orfaos_absoluto(),
-            registro_atual,
-        )
-        if not encontrado_em_orfaos:
-            continue
-
-        destino = caminho_absoluto_usuario_foto(registro_normalizado)
-        if not destino:
-            continue
-
-        os.makedirs(os.path.dirname(destino), exist_ok=True)
-        try:
-            if os.path.normcase(os.path.normpath(encontrado_em_orfaos)) != os.path.normcase(
-                os.path.normpath(destino)
-            ):
-                if os.path.exists(destino):
-                    os.remove(destino)
-                shutil.move(encontrado_em_orfaos, destino)
-            atualizacoes.append((registro_normalizado, usuario["id"]))
-        except Exception:
-            continue
-
-    if atualizacoes:
-        c.executemany(
-            "UPDATE usuarios SET foto_perfil=? WHERE id=?",
-            atualizacoes,
-        )
-        conn.commit()
-
-    conn.close()
-    return len(atualizacoes)
 
 def coletar_metricas_diretorio(pasta, ignorar_subpastas=None):
     base = os.path.abspath(pasta)
@@ -971,15 +1055,6 @@ def executar_manutencao_arquivos(force=False, registrar_log=True, usuario=None):
             caminho_ref = normalizar_caminho_arquivo(row["caminho"])
             if caminho_ref:
                 referenced.add(caminho_ref)
-        c.execute("""
-            SELECT foto_perfil
-            FROM usuarios
-            WHERE foto_perfil IS NOT NULL AND TRIM(foto_perfil) <> ''
-        """)
-        for row in c.fetchall():
-            caminho_ref = caminho_absoluto_usuario_foto(row["foto_perfil"])
-            if caminho_ref:
-                referenced.add(normalizar_caminho_arquivo(caminho_ref))
         conn.close()
 
         orfaos_movidos = 0
@@ -1542,6 +1617,7 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "usuarios", "senha_atualizada_em TEXT")
     adicionar_coluna_se_preciso(c, "usuarios", "foto_perfil TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "frequencia TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_backup", "tipo_backup TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "retencao_arquivos INTEGER")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "atualizado_em TEXT")
     adicionar_coluna_se_preciso(c, "manutencao_arquivos", "ultimo_executado_em TEXT")
@@ -1552,6 +1628,10 @@ def atualizar_banco():
     c.execute("""
         UPDATE usuarios
         SET nome=COALESCE(NULLIF(nome, ''), usuario)
+    """)
+    c.execute("""
+        UPDATE configuracao_backup
+        SET tipo_backup=COALESCE(NULLIF(tipo_backup, ''), 'completo')
     """)
     c.execute("""
         UPDATE usuarios
@@ -1748,10 +1828,6 @@ def atualizar_banco():
     c.execute("CREATE INDEX IF NOT EXISTS idx_retornos_clientes_status ON retornos_clientes(status, proximo_contato_em)")
 
     conn.commit()
-    try:
-        reparar_registros_foto_perfil()
-    except Exception:
-        pass
     conn.close()
 
 def init_db():
@@ -2166,6 +2242,7 @@ def criar_todas_tabelas():
     CREATE TABLE IF NOT EXISTS configuracao_backup (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         frequencia TEXT DEFAULT 'diario',
+        tipo_backup TEXT DEFAULT 'completo',
         retencao_arquivos INTEGER DEFAULT 15,
         atualizado_em TEXT
     )
@@ -3754,7 +3831,7 @@ def salvar_foto_perfil_usuario(foto, identificador="usuario"):
                 optimize=True,
                 progressive=True,
             )
-            return caminho_relativo_usuario_foto(destino)
+            return destino
         except (UnidentifiedImageError, OSError, ValueError):
             raise ValueError("Nao consegui processar a foto enviada. Tente outra imagem.")
         except Exception:
@@ -3767,7 +3844,7 @@ def salvar_foto_perfil_usuario(foto, identificador="usuario"):
     )
     foto.stream.seek(0)
     foto.save(destino)
-    return caminho_relativo_usuario_foto(destino)
+    return destino
 
 def salvar_arquivo_imagem_otimizado(foto):
     pasta_destino = caminho_uploads_servicos_diretorio()
@@ -6831,6 +6908,7 @@ def configuracoes():
         backup_status=obter_status_backup_banco(),
         backup_config=backup_config,
         frequencias_backup=FREQUENCIAS_BACKUP,
+        tipos_backup=TIPOS_BACKUP,
         backups_disponiveis=listar_arquivos_backup_banco(),
         arquivos_status=arquivos_status,
     )
@@ -6851,6 +6929,7 @@ def salvar_configuracao_backup():
         "backup",
         detalhes={
             "frequencia": configuracao["frequencia"],
+            "tipo_backup": configuracao["tipo_backup"],
             "retencao_arquivos": configuracao["retencao_arquivos"],
         },
     )
@@ -6859,6 +6938,7 @@ def salvar_configuracao_backup():
         (
             f"Rotina de backup atualizada para "
             f"{configuracao['frequencia_label'].lower()} "
+            f"em modo {configuracao['tipo_backup_label'].lower()} "
             f"com retencao de {configuracao['retencao_arquivos']} arquivo(s)."
         )
     )
@@ -6877,11 +6957,15 @@ def gerar_backup_agora():
     sucesso, mensagem, caminho = criar_backup_banco(force=True)
     if sucesso:
         nome = os.path.basename(caminho) if caminho else ""
+        tipo_item = identificar_tipo_backup_por_nome(nome)
         registrar_auditoria(
             "gerou_backup_manual",
             "backup",
             placa="",
-            detalhes={"arquivo": nome},
+            detalhes={
+                "arquivo": nome,
+                "tipo_backup": tipo_item or obter_configuracao_backup()["tipo_backup"],
+            },
         )
         definir_feedback_configuracoes("sucesso", f"{mensagem} {nome}".strip())
     else:
@@ -6901,10 +6985,14 @@ def restaurar_backup_configuracoes():
     nome_backup = request.form.get("backup_nome") or ""
     sucesso, mensagem = restaurar_backup_banco(nome_backup)
     if sucesso:
+        tipo_item = identificar_tipo_backup_por_nome(nome_backup)
         registrar_auditoria(
             "restaurou_backup",
             "backup",
-            detalhes={"arquivo_restaurado": nome_backup},
+            detalhes={
+                "arquivo_restaurado": nome_backup,
+                "tipo_backup": tipo_item or "",
+            },
         )
     definir_feedback_configuracoes("sucesso" if sucesso else "erro", mensagem)
     return redirect("/configuracoes")
