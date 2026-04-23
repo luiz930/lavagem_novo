@@ -449,6 +449,60 @@ function toggleSidebar() {
 }
 </script>
 
+<script>
+let baseSyncToken = "";
+let baseSyncExecutando = false;
+
+function baseElementoEditavelAtivo() {
+    const ativo = document.activeElement;
+    if (!ativo) return false;
+
+    return (
+        ativo.tagName === "INPUT" ||
+        ativo.tagName === "TEXTAREA" ||
+        ativo.tagName === "SELECT" ||
+        ativo.isContentEditable
+    );
+}
+
+async function verificarSincroniaBancoBase() {
+    if (baseSyncExecutando || document.hidden) {
+        return;
+    }
+
+    baseSyncExecutando = true;
+
+    try {
+        const resposta = await fetch("/api/hud", { cache: "no-store" });
+        const dados = await resposta.json();
+
+        if (!dados.erro) {
+            const tokenNovo = String(dados.sync_token || "");
+            if (!baseSyncToken) {
+                baseSyncToken = tokenNovo;
+            } else if (tokenNovo && tokenNovo !== baseSyncToken) {
+                baseSyncToken = tokenNovo;
+                if (!baseElementoEditavelAtivo()) {
+                    window.location.reload();
+                    return;
+                }
+            }
+        }
+    } catch (e) {
+        console.log("Erro ao verificar sincronia do banco:", e);
+    } finally {
+        baseSyncExecutando = false;
+    }
+}
+
+setInterval(verificarSincroniaBancoBase, 12000);
+document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+        verificarSincroniaBancoBase();
+    }
+});
+</script>
+
 <script src="/static/photo_upload.js"></script>
 {% if session.get("usuario") %}
 <script src="/static/operacional_voz.js"></script>

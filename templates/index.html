@@ -669,6 +669,28 @@ input[type="file"] {
     text-overflow: ellipsis;
 }
 
+.hud-line--status {
+    padding: 7px 9px;
+    border-radius: 9px;
+    font-weight: 700;
+    line-height: 1.22;
+    letter-spacing: 0.01em;
+}
+
+.hud-line--status-ok {
+    color: #bbf7d0;
+    background: linear-gradient(90deg, rgba(22, 101, 52, 0.36), rgba(17, 24, 39, 0.94));
+    border: 1px solid rgba(74, 222, 128, 0.38);
+    box-shadow: inset 0 0 0 1px rgba(22, 101, 52, 0.12);
+}
+
+.hud-line--status-off {
+    color: #fecaca;
+    background: linear-gradient(90deg, rgba(127, 29, 29, 0.34), rgba(17, 24, 39, 0.94));
+    border: 1px solid rgba(248, 113, 113, 0.42);
+    box-shadow: inset 0 0 0 1px rgba(127, 29, 29, 0.12);
+}
+
 /* ================= TABLET / MOBILE ================= */
 @media (max-width: 1024px) {
 
@@ -1368,7 +1390,20 @@ input[type="file"] {
 
 <input type="hidden" name="valor" id="valorServico">
 
+<div class="field-grid">
+    <div>
+        <label>Valor adicional manual</label>
+        <input type="number" name="valor_adicional" min="0" step="0.01" placeholder="0,00">
+    </div>
+
+    <div>
+        <label>Horario de entrega combinado (Brasilia)</label>
+        <input type="time" name="entrega_prevista" step="60">
+    </div>
+</div>
+
 <p class="muted-text">No celular, esse campo abre o seletor de imagens para voce usar a galeria ou a camera do aparelho. Os detalhes operacionais, produtos aplicados e a finalizacao agora sao preenchidos no painel operacional.</p>
+<p class="muted-text">Quando voce informar o horario combinado, o sistema começa a contagem no horario de Brasilia e destaca o aviso de entrega no HUD e no painel.</p>
 
 <button type="submit">Iniciar Atendimento</button>
 
@@ -1393,8 +1428,14 @@ input[type="file"] {
 {% if s.entrega_exibicao %}
 <p>Entrega: {{s.entrega_exibicao}}</p>
 {% endif %}
+{% if s.entrega_prevista_exibicao %}
+<p>Horario combinado: {{s.entrega_prevista_exibicao}}{% if s.status == "EM ANDAMENTO" %} <span class="muted-text">({{ s.tempo_entrega }})</span>{% endif %}</p>
+{% endif %}
 <p>Status: {{s.status}}</p>
 <p>Tempo: {{item.tempo_str}}</p>
+{% if s.tem_valor_adicional %}
+<p class="muted-text">Valor adicional manual: R$ {{ s.valor_adicional_exibicao }}</p>
+{% endif %}
 <p class="muted-text">Entrada por: {{ s.criado_por_nome_exibicao }}{% if s.finalizado_por_nome_exibicao != "Nao finalizado" %} | Finalizado por: {{ s.finalizado_por_nome_exibicao }}{% endif %}</p>
 
 <div class="historico-summary">
@@ -1463,6 +1504,24 @@ Hidro vidros {{ "Sim" if s.hidro_vidros == "Sim" else "Nao" }}
         <strong>Observacoes</strong>
         {{ s.observacoes or "Sem observacoes registradas" }}
     </div>
+
+    {% if s.tem_cobrancas_extras %}
+    <div class="historico-meta-item historico-meta-item--wide">
+        <strong>Cobrancas extras</strong>
+        <div class="extra-charge-list top-spacing">
+            {% for extra in s.cobrancas_extras_info.itens %}
+            <div class="extra-charge-item">
+                <div>
+                    <strong>{{ extra.descricao }}</strong>
+                    <p class="muted-text">Lançado por {{ extra.criado_por_nome_exibicao }}{% if extra.criado_em_exibicao %} em {{ extra.criado_em_exibicao }}{% endif %}</p>
+                </div>
+                <span class="extra-charge-value">R$ {{ extra.valor_exibicao }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        <p class="muted-text top-spacing"><b>Total extra:</b> R$ {{ s.cobrancas_extras_info.total_exibicao }}</p>
+    </div>
+    {% endif %}
 
     <div class="historico-meta-item historico-meta-item--wide">
         <strong>Fotos do atendimento</strong>
@@ -2018,10 +2077,21 @@ let hudData = {
     andamento: 0,
     atrasados: 0,
     ticket: 0,
+    entregas_ativas: 0,
+    entregas_com_horario: 0,
+    entregas_sem_horario: 0,
+    entregas_vencidas: 0,
+    entrega_proxima_em_minutos: null,
+    entrega_mensagem: "Entrega combinada em dia",
     retornos_acao_agora: 0,
     retornos_reagendados_vencidos: 0,
     retornos_contatados_hoje: 0,
     retornos_mensagem: "Painel retornos em dia",
+    banco_online_ativo: false,
+    banco_online_resumo: "Banco online indisponivel",
+    banco_online_mensagem: "Banco online indisponivel",
+    banco_online_backend_label: "SQLite local",
+    sync_token: "",
     usuario_nome: "",
     usuario_iniciais: "",
     usuario_foto_url: "",
@@ -2034,6 +2104,7 @@ const HUD_STORAGE_KEY = "wagen_hud_expandido_v1";
 const HUD_AUTO_COLLAPSE_MS = 30000;
 let hudExpandido = carregarEstadoHudExpandido();
 let hudAutoCollapseTimer = null;
+let ultimoSyncToken = "";
 
 function obterIniciaisUsuario(nome) {
     const texto = String(nome || "").trim();
@@ -2154,6 +2225,48 @@ function montarResumoRetornosCompacto() {
     return "Retornos: em dia";
 }
 
+function formatarTempoMinutos(minutos) {
+    const total = Math.max(0, Number(minutos || 0));
+    const horas = Math.floor(total / 60);
+    const mins = total % 60;
+
+    if (horas > 0) {
+        return `${horas}h ${mins}min`;
+    }
+
+    return `${mins}min`;
+}
+
+function montarResumoEntregaCompacto() {
+    const total = Number(hudData.entregas_ativas || 0);
+    const vencidas = Number(hudData.entregas_vencidas || 0);
+    const semHorario = Number(hudData.entregas_sem_horario || 0);
+    const proximaMinutos = Number(hudData.entrega_proxima_em_minutos || 0);
+
+    if (!total) {
+        return "";
+    }
+
+    if (vencidas > 0) {
+        return `Entrega: ${vencidas} vencida(s)`;
+    }
+
+    if (proximaMinutos > 0) {
+        return `Entrega: proxima em ${formatarTempoMinutos(proximaMinutos)}`;
+    }
+
+    if (semHorario > 0) {
+        return `Entrega: ${semHorario} sem horario`;
+    }
+
+    return `Entrega: ${total} agendada(s)`;
+}
+
+function montarResumoOperacionalCompacto() {
+    const partes = [montarResumoRetornosCompacto(), montarResumoEntregaCompacto()].filter(Boolean);
+    return partes.length ? partes.join(" | ") : "Painel em dia";
+}
+
 function montarTextoClimaHud() {
     const partes = [
         String(climaTexto || "").trim(),
@@ -2163,30 +2276,59 @@ function montarTextoClimaHud() {
     return partes.join("\n") || "Clima indisponivel";
 }
 
+function montarStatusBancoHud() {
+    const ativo = Boolean(hudData.banco_online_ativo);
+    const resumo = String(hudData.banco_online_resumo || "").trim();
+    const mensagem = String(hudData.banco_online_mensagem || "").trim();
+    const backend = String(hudData.banco_online_backend_label || "").trim();
+
+    return {
+        ativo,
+        resumo: resumo || (ativo ? "Banco online ativo" : "Banco online indisponivel"),
+        detalhe: ativo
+            ? `🟢 Banco online ativo e gravando em tempo real${backend ? ` (${backend})` : ""}`
+            : `🔴 ${mensagem || "Banco online indisponivel"}`,
+    };
+}
+
 function montarLinhasHud(agora) {
     const dataAtual = agora.toLocaleDateString("pt-BR");
     const horaAtual = agora.toLocaleTimeString("pt-BR");
+    const statusBanco = montarStatusBancoHud();
 
     if (!hudExpandido) {
         return [
             { texto: `📅 ${dataAtual} • ${horaAtual}`, compacta: true },
             {
+                texto: `🗄️ ${statusBanco.resumo}`,
+                status: true,
+                statusOk: statusBanco.ativo,
+            },
+            {
                 texto: `⚙️ ${hudData.andamento} • 🚨 ${hudData.atrasados} • 💰 R$ ${hudData.total}`,
                 compacta: true,
             },
-            { texto: `📞 ${montarResumoRetornosCompacto()}`, compacta: true },
+            { texto: `📌 ${montarResumoOperacionalCompacto()}`, compacta: true },
             { texto: montarTextoClimaHud(), multilinha: true },
         ];
     }
 
     return [
         { texto: `📅 ${dataAtual} ⏰ ${horaAtual}` },
+        {
+            texto: statusBanco.detalhe,
+            status: true,
+            statusOk: statusBanco.ativo,
+        },
         { texto: montarTextoClimaHud(), multilinha: true },
         { texto: `💰 Hoje: R$ ${hudData.total}` },
         { texto: `⚙️ Em andamento: ${hudData.andamento}` },
         { texto: `🚨 Atrasados: ${hudData.atrasados}` },
         { texto: `💵 Ticket: R$ ${hudData.ticket}` },
         { texto: `📅 ${hudData.retornos_mensagem || "Painel retornos em dia"}` },
+        ...(Number(hudData.entregas_ativas || 0) > 0
+            ? [{ texto: `📦 ${hudData.entrega_mensagem || "Entrega combinada em dia"}` }]
+            : []),
         { texto: `👤 Usuario: ${hudData.usuario_nome || "-"}` },
         { texto: `🧠 ${hudData.versao || APP_VERSION}` },
     ];
@@ -2198,8 +2340,28 @@ async function atualizarHUD() {
         const data = await res.json();
 
         if (!data.erro) {
+            const tokenAnterior = ultimoSyncToken;
             hudData = data;
+            ultimoSyncToken = String(data.sync_token || "");
             atualizarAvatarUsuario();
+
+            if (tokenAnterior && ultimoSyncToken && tokenAnterior !== ultimoSyncToken) {
+                const ativo = document.activeElement;
+                const estaEditando = Boolean(
+                    ativo &&
+                    (
+                        ativo.tagName === "INPUT" ||
+                        ativo.tagName === "TEXTAREA" ||
+                        ativo.tagName === "SELECT" ||
+                        ativo.isContentEditable
+                    )
+                );
+
+                if (!estaEditando) {
+                    window.location.reload();
+                    return;
+                }
+            }
         }
     } catch (e) {
         console.log("Erro HUD");
@@ -2237,20 +2399,26 @@ function atualizarRelogio() {
     const label = hudExpandido ? "Ocultar detalhes do HUD" : "Mostrar HUD completo";
     const linhas = montarLinhasHud(agora);
 
-    el.innerHTML =
-        `<button type="button" class="hud-toggle-button" onclick="toggleHudModo()" aria-label="${escaparHudHtml(label)}" title="${escaparHudHtml(label)}">${simbolo}</button>` +
-        `<div class="hud-content">` +
-        linhas
-            .map(item => {
-                const classeCompacta = item.compacta ? " hud-line--compact" : "";
-                const classeMultiline = item.multilinha ? " hud-line--multiline" : "";
-                return `<span class="hud-line${classeCompacta}${classeMultiline}">${escaparHudHtml(item.texto)}</span>`;
-            })
-            .join("") +
-        `</div>`;
+        el.innerHTML =
+            `<button type="button" class="hud-toggle-button" onclick="toggleHudModo()" aria-label="${escaparHudHtml(label)}" title="${escaparHudHtml(label)}">${simbolo}</button>` +
+            `<div class="hud-content">` +
+            linhas
+                .map(item => {
+                    const classeCompacta = item.compacta ? " hud-line--compact" : "";
+                    const classeMultiline = item.multilinha ? " hud-line--multiline" : "";
+                    const classeStatus = item.status ? " hud-line--status" : "";
+                    const classeStatusOk = item.status ? (item.statusOk ? " hud-line--status-ok" : " hud-line--status-off") : "";
+                    return `<span class="hud-line${classeCompacta}${classeMultiline}${classeStatus}${classeStatusOk}">${escaparHudHtml(item.texto)}</span>`;
+                })
+                .join("") +
+            `</div>`;
 
     // 🔥 ALERTA
-    if (hudData.atrasados > 0) {
+    const entregaProxima = Number(hudData.entrega_proxima_em_minutos || 0);
+    const entregaEmBreve = entregaProxima > 0 && entregaProxima <= 15;
+    const entregaVencida = Number(hudData.entregas_vencidas || 0) > 0;
+
+    if (hudData.atrasados > 0 || entregaVencida) {
 
         el.style.border = "2px solid red";
         el.style.boxShadow = "0 0 20px red";
@@ -2261,6 +2429,13 @@ function atualizarRelogio() {
             audioAlerta.play().catch(() => {});
             alertaAtivo = true;
         }
+
+    } else if (entregaEmBreve) {
+
+        el.style.border = "2px solid #f59e0b";
+        el.style.boxShadow = "0 0 18px #f59e0b";
+        el.style.opacity = "1";
+        alertaAtivo = false;
 
     } else {
 

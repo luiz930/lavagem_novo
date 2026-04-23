@@ -3541,6 +3541,13 @@ def atualizar_banco():
     conn.close()
 
 def init_db():
+    if modo_banco_preferido() == "postgres":
+        status_boot = diagnosticar_banco_online(force=True)
+        if not status_boot.get("conectado"):
+            raise RuntimeError(
+                "Banco online configurado, mas indisponivel no boot. "
+                "O sistema foi bloqueado para evitar gravar dados fora do Supabase."
+            )
     criar_todas_tabelas()
     atualizar_banco()
 
@@ -8519,6 +8526,54 @@ def api_hud():
     entregas_raw = [dict(row) for row in c.fetchall()]
     resumo_entregas = resumir_entregas_em_andamento(entregas_raw, referencia=agora)
 
+    c.execute("""
+        SELECT
+            COALESCE(COUNT(*), 0) AS total,
+            COALESCE(MAX(id), 0) AS ultimo_id
+        FROM servicos
+    """)
+    servicos_total, servicos_ultimo_id = c.fetchone() or (0, 0)
+
+    c.execute("""
+        SELECT
+            COALESCE(COUNT(*), 0) AS total,
+            COALESCE(MAX(id), 0) AS ultimo_id
+        FROM veiculos
+    """)
+    veiculos_total, veiculos_ultimo_id = c.fetchone() or (0, 0)
+
+    c.execute("""
+        SELECT
+            COALESCE(COUNT(*), 0) AS total,
+            COALESCE(MAX(id), 0) AS ultimo_id
+        FROM clientes
+    """)
+    clientes_total, clientes_ultimo_id = c.fetchone() or (0, 0)
+
+    c.execute("""
+        SELECT
+            COALESCE(COUNT(*), 0) AS total,
+            COALESCE(MAX(id), 0) AS ultimo_id
+        FROM notificacoes
+    """)
+    notificacoes_total, notificacoes_ultimo_id = c.fetchone() or (0, 0)
+
+    c.execute("""
+        SELECT
+            COALESCE(COUNT(*), 0) AS total,
+            COALESCE(MAX(id), 0) AS ultimo_id
+        FROM auditoria
+    """)
+    auditoria_total, auditoria_ultimo_id = c.fetchone() or (0, 0)
+
+    c.execute("""
+        SELECT
+            COALESCE(COUNT(*), 0) AS total,
+            COALESCE(MAX(id), 0) AS ultimo_id
+        FROM usuarios
+    """)
+    usuarios_total, usuarios_ultimo_id = c.fetchone() or (0, 0)
+
     conn.close()
     itens_retornos = []
     retornos_acao_agora = 0
@@ -8561,6 +8616,25 @@ def api_hud():
     else:
         mensagem_retornos_hud = "Painel retornos em dia"
 
+    token_bruto = "|".join(
+        str(v)
+        for v in (
+            servicos_total,
+            servicos_ultimo_id,
+            veiculos_total,
+            veiculos_ultimo_id,
+            clientes_total,
+            clientes_ultimo_id,
+            notificacoes_total,
+            notificacoes_ultimo_id,
+            auditoria_total,
+            auditoria_ultimo_id,
+            usuarios_total,
+            usuarios_ultimo_id,
+        )
+    )
+    sync_token = hashlib.sha1(token_bruto.encode("utf-8")).hexdigest()
+
     entrega_mensagem = "Entrega combinada em dia"
     if resumo_entregas["total"] > 0:
         if resumo_entregas["vencidas"] > 0:
@@ -8587,6 +8661,20 @@ def api_hud():
                 f"Entrega combinada: {resumo_entregas['com_horario']} agendada(s)"
             )
 
+    status_banco = obter_status_banco_online()
+    banco_online_ativo = bool(status_banco.get("conectado"))
+    banco_online_backend = status_banco.get("backend_label") or "Supabase / PostgreSQL"
+    banco_online_resumo = (
+        "Banco online ativo"
+        if banco_online_ativo
+        else "Banco online indisponivel"
+    )
+    banco_online_mensagem = (
+        f"Banco online ativo e gravando em tempo real ({banco_online_backend})"
+        if banco_online_ativo
+        else (status_banco.get("mensagem") or "Banco online indisponivel")
+    )
+
     return {
         "total": round(total, 2),
         "andamento": andamento,
@@ -8604,6 +8692,10 @@ def api_hud():
         "retornos_reagendados_vencidos": retornos_reagendados_vencidos,
         "retornos_contatados_hoje": retornos_contatados_hoje,
         "retornos_mensagem": mensagem_retornos_hud,
+        "banco_online_ativo": banco_online_ativo,
+        "banco_online_resumo": banco_online_resumo,
+        "banco_online_mensagem": banco_online_mensagem,
+        "banco_online_backend_label": banco_online_backend,
         "versao": APP_VERSION,
         "usuario": session.get("usuario") or "",
         "usuario_nome": session.get("usuario_nome") or session.get("usuario") or "",
@@ -8612,6 +8704,7 @@ def api_hud():
             session.get("usuario"),
         ),
         "usuario_foto_url": session.get("usuario_foto_url") or "",
+        "sync_token": sync_token,
     }
 
 @app.route("/status_sync")
