@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, session, jsonify, has_request_context
 import csv
 import json
+import math
 import sqlite3
 import socket
 from zoneinfo import ZoneInfo
@@ -136,6 +137,8 @@ def salvar_env_local(valores, caminho=None):
         "DATABASE_URL",
         "SUPABASE_DB_PASSWORD",
         "SUPABASE_DATABASE_URL",
+        "AUTO_MIGRAR_BANCO",
+        "DATABASE_ONLINE_MIGRADO",
     ]
     linhas = []
     for chave in chaves_prioritarias:
@@ -156,6 +159,8 @@ DATABASE_BACKEND_RAW = (
     or os.environ.get("BACKEND_BANCO")
     or ""
 ).strip().lower()
+AUTO_MIGRAR_BANCO_RAW = (os.environ.get("AUTO_MIGRAR_BANCO") or "1").strip().lower()
+DATABASE_ONLINE_MIGRADO_RAW = (os.environ.get("DATABASE_ONLINE_MIGRADO") or "0").strip().lower()
 
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -207,6 +212,7 @@ TABELAS_SISTEMA_ORDENADAS = [
     "servicos",
     "adicionais",
     "servico_adicionais",
+    "servico_cobrancas_extras",
     "fotos",
     "produtos_pneu",
     "checklist_itens",
@@ -2752,8 +2758,9 @@ BANCO_ONLINE_STATUS_CACHE_TTL = 30
 SCHEMA_BANCO_ONLINE_GARANTIDO = False
 
 
-def atualizar_configuracao_banco_runtime(database_url=None, senha=None, backend=None):
+def atualizar_configuracao_banco_runtime(database_url=None, senha=None, backend=None, auto_migrar=None, migrado=None):
     global DATABASE_URL_RAW, SUPABASE_DB_PASSWORD, DATABASE_BACKEND_RAW
+    global AUTO_MIGRAR_BANCO_RAW, DATABASE_ONLINE_MIGRADO_RAW
     global SCHEMA_BANCO_ONLINE_GARANTIDO
 
     if database_url is not None:
@@ -2769,6 +2776,14 @@ def atualizar_configuracao_banco_runtime(database_url=None, senha=None, backend=
         DATABASE_BACKEND_RAW = str(backend).strip().lower()
         os.environ["DATABASE_BACKEND"] = DATABASE_BACKEND_RAW
 
+    if auto_migrar is not None:
+        AUTO_MIGRAR_BANCO_RAW = "1" if bool_config_ativo(auto_migrar) else "0"
+        os.environ["AUTO_MIGRAR_BANCO"] = AUTO_MIGRAR_BANCO_RAW
+
+    if migrado is not None:
+        DATABASE_ONLINE_MIGRADO_RAW = "1" if bool_config_ativo(migrado) else "0"
+        os.environ["DATABASE_ONLINE_MIGRADO"] = DATABASE_ONLINE_MIGRADO_RAW
+
     BANCO_ONLINE_STATUS_CACHE["testado_em"] = 0.0
     BANCO_ONLINE_STATUS_CACHE["resultado"] = {}
     SCHEMA_BANCO_ONLINE_GARANTIDO = False
@@ -2781,6 +2796,14 @@ def modo_banco_preferido():
     if modo in {"postgres", "supabase", "online"}:
         return "postgres"
     return "postgres" if DATABASE_URL_RAW else "sqlite"
+
+
+def migracao_online_automatica_ativa():
+    return bool_config_ativo(AUTO_MIGRAR_BANCO_RAW)
+
+
+def migracao_online_ja_realizada():
+    return bool_config_ativo(DATABASE_ONLINE_MIGRADO_RAW)
 
 
 def url_postgres_ajustada():
@@ -3078,7 +3101,10 @@ def obter_configuracao_banco_form():
     partes.update({
         "modo": modo_banco_preferido(),
         "url_masked": status.get("url_masked") or "",
+        "url_completa": origem,
         "senha_preenchida": bool(SUPABASE_DB_PASSWORD),
+        "auto_migrar_banco": migracao_online_automatica_ativa(),
+        "migracao_online_ja_realizada": bool_config_ativo(DATABASE_ONLINE_MIGRADO_RAW) or bool(status.get("conectado")),
     })
     return partes
 
@@ -3088,6 +3114,8 @@ def salvar_configuracao_banco_form(form):
     if modo not in {"sqlite", "postgres"}:
         modo = "sqlite"
 
+    modo_anterior = modo_banco_preferido()
+    url_anterior = url_postgres_ajustada() or DATABASE_URL_RAW
     configuracao_atual = obter_configuracao_banco_form()
     url_completa = normalizar_texto_campo(form.get("database_url"))
     host = normalizar_texto_campo(form.get("database_host")) or configuracao_atual.get("host") or ""
@@ -3095,6 +3123,7 @@ def salvar_configuracao_banco_form(form):
     database = normalizar_texto_campo(form.get("database_name")) or configuracao_atual.get("database") or "postgres"
     usuario = normalizar_texto_campo(form.get("database_user")) or configuracao_atual.get("usuario") or "postgres"
     senha = form.get("database_password") or SUPABASE_DB_PASSWORD
+    auto_migrar = bool_config_ativo(form.get("migrar_automaticamente"))
 
     url_atual = DATABASE_URL_RAW
     senha_atual = SUPABASE_DB_PASSWORD
@@ -3126,18 +3155,48 @@ def salvar_configuracao_banco_form(form):
             url_atual = montar_url_postgres(host, porta, database, usuario, senha)
             senha_atual = str(senha).strip()
 
-    atualizar_configuracao_banco_runtime(url_atual, senha_atual, modo)
+    atual_migrado = "0" if url_atual != url_anterior or modo != modo_anterior else DATABASE_ONLINE_MIGRADO_RAW
+    atualizar_configuracao_banco_runtime(
+        url_atual,
+        senha_atual,
+        modo,
+        auto_migrar=auto_migrar,
+        migrado=atual_migrado,
+    )
     salvar_env_local({
         "DATABASE_BACKEND": modo,
         "DATABASE_URL": url_atual,
         "SUPABASE_DB_PASSWORD": senha_atual,
         "SUPABASE_DATABASE_URL": url_atual,
+        "AUTO_MIGRAR_BANCO": "1" if auto_migrar else "0",
+        "DATABASE_ONLINE_MIGRADO": "0" if url_atual != url_anterior or modo != modo_anterior else DATABASE_ONLINE_MIGRADO_RAW,
     })
 
     status = diagnosticar_banco_online(force=True)
+    migracao_automatica = False
+    mensagem_migracao = ""
     if status.get("conectado") and modo == "postgres":
         garantir_schema_banco_online(force=True)
-    return obter_status_banco_online()
+        if auto_migrar and modo_anterior != "postgres":
+            try:
+                importar_sqlite_para_banco_atual(caminho_banco_absoluto())
+                salvar_env_local({
+                    "DATABASE_ONLINE_MIGRADO": "1",
+                })
+                atualizar_configuracao_banco_runtime(migrado="1")
+                migracao_automatica = True
+                mensagem_migracao = " Dados do banco local migrados automaticamente para o Supabase."
+            except Exception as e:
+                print("AVISO: falha na migracao automatica para o banco online:", e)
+                mensagem_migracao = (
+                    " A conexao foi salva, mas a migracao automatica nao concluiu. "
+                    "Use o botao de migracao manual."
+                )
+
+    status_final = obter_status_banco_online()
+    status_final["migracao_automatica"] = migracao_automatica
+    status_final["mensagem_migracao"] = mensagem_migracao
+    return status_final
 
 
 def obter_status_banco_online():
@@ -3232,6 +3291,8 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "servicos", "cera TEXT")
     adicionar_coluna_se_preciso(c, "servicos", "hidro_lataria TEXT")
     adicionar_coluna_se_preciso(c, "servicos", "hidro_vidros TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "valor_adicional REAL DEFAULT 0")
+    adicionar_coluna_se_preciso(c, "servicos", "entrega_prevista TEXT")
     adicionar_coluna_se_preciso(c, "servicos", "criado_por_usuario TEXT")
     adicionar_coluna_se_preciso(c, "servicos", "criado_por_nome TEXT")
     adicionar_coluna_se_preciso(c, "servicos", "operacional_por_usuario TEXT")
@@ -3618,6 +3679,7 @@ def criar_todas_tabelas():
         tipo_id INTEGER,
         valor REAL,
         entrada TEXT,
+        entrega_prevista TEXT,
         entrega TEXT,
         status TEXT,
         prioridade INTEGER DEFAULT 0,
@@ -3628,6 +3690,7 @@ def criar_todas_tabelas():
         cera TEXT,
         hidro_lataria TEXT,
         hidro_vidros TEXT,
+        valor_adicional REAL DEFAULT 0,
         criado_por_usuario TEXT,
         criado_por_nome TEXT,
         operacional_por_usuario TEXT,
@@ -3655,6 +3718,19 @@ def criar_todas_tabelas():
         adicional_id INTEGER,
         FOREIGN KEY(servico_id) REFERENCES servicos(id),
         FOREIGN KEY(adicional_id) REFERENCES adicionais(id)
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS servico_cobrancas_extras (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        servico_id INTEGER NOT NULL,
+        descricao TEXT NOT NULL,
+        valor REAL NOT NULL DEFAULT 0,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        criado_por_usuario TEXT,
+        criado_por_nome TEXT,
+        FOREIGN KEY(servico_id) REFERENCES servicos(id)
     )
     """)
 
@@ -3916,6 +3992,7 @@ def criar_todas_tabelas():
     c.execute("CREATE INDEX IF NOT EXISTS idx_servico_entrada ON servicos(entrada)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_veiculo_placa ON veiculos(placa)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_servico_checklist_servico ON servico_checklist(servico_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_servico_cobrancas_extras_servico ON servico_cobrancas_extras(servico_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_fotos_servico_tipo ON fotos(servico_id, tipo)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_auditoria_entidade ON auditoria(entidade, entidade_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_auditoria_criado_em ON auditoria(criado_em)")
@@ -4223,6 +4300,62 @@ def formatar_tempo_restante(valor_iso):
 
     return "Falta " + " ".join(partes[:3])
 
+def formatar_duracao_segundos(segundos):
+    total = max(0, int(segundos or 0))
+    dias, resto = divmod(total, 86400)
+    horas, resto = divmod(resto, 3600)
+    minutos, segundos = divmod(resto, 60)
+    partes = []
+
+    if dias:
+        partes.append(f"{dias}d")
+    if horas:
+        partes.append(f"{horas}h")
+    if minutos:
+        partes.append(f"{minutos}min")
+    if not partes:
+        partes.append(f"{segundos}s")
+
+    return " ".join(partes[:3])
+
+def interpretar_hora_brasilia(valor_hora, referencia=None):
+    texto = normalizar_texto_campo(valor_hora)
+    if not texto:
+        return None
+
+    referencia = referencia or agora()
+
+    for formato in ("%H:%M", "%H:%M:%S"):
+        try:
+            hora = datetime.strptime(texto, formato).time()
+            datahora = datetime.combine(
+                referencia.date(),
+                hora,
+                tzinfo=ZoneInfo("America/Sao_Paulo"),
+            )
+            if datahora < referencia:
+                datahora += timedelta(days=1)
+            return datahora
+        except Exception:
+            continue
+
+    return None
+
+def formatar_contagem_regressiva(valor_iso, referencia=None):
+    datahora = interpretar_datahora_sistema(valor_iso)
+    if not datahora:
+        return "Sem horario combinado"
+
+    referencia = referencia or agora()
+    if datahora.tzinfo is None:
+        datahora = datahora.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+
+    diferenca = int((datahora - referencia).total_seconds())
+    if diferenca <= 0:
+        return f"Atraso de {formatar_duracao_segundos(abs(diferenca))}"
+
+    return f"Falta {formatar_duracao_segundos(diferenca)}"
+
 def interpretar_datahora_sistema(valor):
     if not valor:
         return None
@@ -4277,7 +4410,7 @@ def normalizar_valor_importacao_pg(tabela, coluna, valor):
     colunas_float = {
         "valor", "valor_unitario", "valor_total", "subtotal", "desconto",
         "total", "aliquota_padrao", "aliquota_iss", "valor_servicos",
-        "valor_iss",
+        "valor_iss", "valor_adicional",
     }
     colunas_int = {
         "id", "validade_dias", "ordem", "ativo", "prioridade",
@@ -5661,6 +5794,85 @@ def enriquecer_responsaveis_servico(servico):
     servico["resumo_uploaders_fotos"] = resumir_uploaders_fotos(servico.get("galeria_fotos") or {})
     return servico
 
+def enriquecer_entrega_servico(servico, referencia=None):
+    referencia = referencia or agora()
+    valor_adicional = converter_valor_numerico(servico.get("valor_adicional"))
+    entrega_prevista = interpretar_datahora_sistema(servico.get("entrega_prevista"))
+
+    servico["valor_adicional_num"] = valor_adicional
+    servico["valor_adicional_exibicao"] = formatar_valor_monetario(valor_adicional)
+    servico["tem_valor_adicional"] = valor_adicional > 0
+
+    if entrega_prevista:
+        if entrega_prevista.tzinfo is None:
+            entrega_prevista = entrega_prevista.replace(
+                tzinfo=ZoneInfo("America/Sao_Paulo")
+            )
+
+        servico["entrega_prevista_dt"] = entrega_prevista
+        servico["entrega_prevista_iso"] = entrega_prevista.isoformat(timespec="seconds")
+        servico["entrega_prevista_exibicao"] = entrega_prevista.strftime("%d/%m/%Y %H:%M")
+        servico["tempo_entrega"] = formatar_contagem_regressiva(servico["entrega_prevista_iso"], referencia)
+        diferenca = int((entrega_prevista - referencia).total_seconds())
+        servico["entrega_prevista_em_minutos"] = max(0, diferenca // 60)
+        servico["entrega_prevista_vencida"] = diferenca <= 0
+    else:
+        servico["entrega_prevista_dt"] = None
+        servico["entrega_prevista_iso"] = ""
+        servico["entrega_prevista_exibicao"] = ""
+        servico["tempo_entrega"] = "Sem horario combinado"
+        servico["entrega_prevista_em_minutos"] = None
+        servico["entrega_prevista_vencida"] = False
+
+    return servico
+
+def resumir_entregas_em_andamento(servicos, referencia=None):
+    referencia = referencia or agora()
+    total = 0
+    com_horario = 0
+    sem_horario = 0
+    vencidas = 0
+    proxima = None
+
+    for servico in servicos or []:
+        total += 1
+        entrega_prevista = interpretar_datahora_sistema(servico.get("entrega_prevista"))
+
+        if not entrega_prevista:
+            sem_horario += 1
+            continue
+
+        if entrega_prevista.tzinfo is None:
+            entrega_prevista = entrega_prevista.replace(
+                tzinfo=ZoneInfo("America/Sao_Paulo")
+            )
+
+        com_horario += 1
+        diferenca = int((entrega_prevista - referencia).total_seconds())
+
+        if diferenca <= 0:
+            vencidas += 1
+            continue
+
+        if not proxima or diferenca < proxima["segundos"]:
+            proxima = {
+                "segundos": diferenca,
+                "minutos": max(1, math.ceil(diferenca / 60)),
+                "placa": normalizar_texto_campo(servico.get("placa")).upper(),
+                "modelo": normalizar_texto_campo(servico.get("modelo")),
+                "cliente_nome": normalizar_texto_campo(servico.get("cliente_nome")),
+                "tipo_nome": normalizar_texto_campo(servico.get("tipo_nome")) or "Servico",
+                "entrega_prevista": entrega_prevista,
+            }
+
+    return {
+        "total": total,
+        "com_horario": com_horario,
+        "sem_horario": sem_horario,
+        "vencidas": vencidas,
+        "proxima": proxima,
+    }
+
 def salvar_fotos_servico(cursor, servico_id, fotos, tipo):
     total_salvas = 0
     usuario_info = resumo_usuario_logado()
@@ -5773,6 +5985,59 @@ def contar_fotos_validas(fotos):
         for foto in (fotos or [])
         if foto and foto.filename and arquivo_permitido(foto.filename)
     )
+
+def listar_cobrancas_extras_servicos(ids_servicos):
+    ids = [int(item) for item in (ids_servicos or []) if item]
+
+    if not ids:
+        return {}
+
+    conn = conectar()
+    c = conn.cursor()
+    placeholders = ",".join(["?"] * len(ids))
+    c.execute(f"""
+        SELECT
+            id,
+            servico_id,
+            descricao,
+            valor,
+            criado_em,
+            criado_por_usuario,
+            criado_por_nome
+        FROM servico_cobrancas_extras
+        WHERE servico_id IN ({placeholders})
+        ORDER BY id ASC
+    """, ids)
+
+    extras_por_servico = {}
+
+    for row in c.fetchall():
+        extra = dict(row)
+        extra["valor_exibicao"] = formatar_valor_monetario(extra.get("valor"))
+        extra["criado_em_exibicao"] = formatar_datahora(extra.get("criado_em"))
+        extra["criado_por_nome_exibicao"] = formatar_usuario_exibicao(
+            extra.get("criado_por_nome"),
+            extra.get("criado_por_usuario"),
+            fallback="Nao identificado",
+        )
+
+        grupo = extras_por_servico.setdefault(extra["servico_id"], {
+            "itens": [],
+            "total": 0.0,
+        })
+        grupo["itens"].append(extra)
+        grupo["total"] += converter_valor_numerico(extra.get("valor"))
+
+    conn.close()
+
+    for grupo in extras_por_servico.values():
+        grupo["total_exibicao"] = formatar_valor_monetario(grupo["total"])
+
+    return extras_por_servico
+
+def listar_cobrancas_extras_servico(servico_id):
+    extras = listar_cobrancas_extras_servicos([servico_id])
+    return extras.get(servico_id, {"itens": [], "total": 0.0, "total_exibicao": "0.00"})
 
 def atualizar_campos_operacionais_servico(cursor, servico_id, form, usuario_info=None):
     usuario_info = usuario_info or resumo_usuario_logado()
@@ -8237,6 +8502,23 @@ def api_hud():
         except:
             pass
 
+    c.execute("""
+        SELECT
+            servicos.entrada,
+            servicos.entrega_prevista,
+            tipos_servico.nome AS tipo_nome,
+            veiculos.placa,
+            veiculos.modelo,
+            clientes.nome AS cliente_nome
+        FROM servicos
+        LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
+        LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
+        LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
+        WHERE servicos.status='EM ANDAMENTO'
+    """)
+    entregas_raw = [dict(row) for row in c.fetchall()]
+    resumo_entregas = resumir_entregas_em_andamento(entregas_raw, referencia=agora)
+
     conn.close()
     itens_retornos = []
     retornos_acao_agora = 0
@@ -8279,11 +8561,45 @@ def api_hud():
     else:
         mensagem_retornos_hud = "Painel retornos em dia"
 
+    entrega_mensagem = "Entrega combinada em dia"
+    if resumo_entregas["total"] > 0:
+        if resumo_entregas["vencidas"] > 0:
+            entrega_mensagem = (
+                f"Entrega combinada: {resumo_entregas['vencidas']} vencida(s)"
+            )
+            if resumo_entregas["proxima"]:
+                entrega_mensagem += (
+                    f" | proxima em {formatar_duracao_segundos(resumo_entregas['proxima']['segundos'])}"
+                )
+        elif resumo_entregas["proxima"]:
+            entrega_mensagem = (
+                "Entrega combinada: proxima em "
+                f"{formatar_duracao_segundos(resumo_entregas['proxima']['segundos'])}"
+            )
+            if resumo_entregas["proxima"]["placa"]:
+                entrega_mensagem += f" ({resumo_entregas['proxima']['placa']})"
+        elif resumo_entregas["sem_horario"] > 0:
+            entrega_mensagem = (
+                f"Entrega combinada: {resumo_entregas['sem_horario']} sem horario"
+            )
+        else:
+            entrega_mensagem = (
+                f"Entrega combinada: {resumo_entregas['com_horario']} agendada(s)"
+            )
+
     return {
         "total": round(total, 2),
         "andamento": andamento,
         "atrasados": atrasados,
         "ticket": round(ticket, 2),
+        "entregas_ativas": resumo_entregas["total"],
+        "entregas_com_horario": resumo_entregas["com_horario"],
+        "entregas_sem_horario": resumo_entregas["sem_horario"],
+        "entregas_vencidas": resumo_entregas["vencidas"],
+        "entrega_proxima_em_minutos": resumo_entregas["proxima"]["minutos"] if resumo_entregas["proxima"] else None,
+        "entrega_proxima_placa": resumo_entregas["proxima"]["placa"] if resumo_entregas["proxima"] else "",
+        "entrega_proxima_hora": resumo_entregas["proxima"]["entrega_prevista"].strftime("%H:%M") if resumo_entregas["proxima"] else "",
+        "entrega_mensagem": entrega_mensagem,
         "retornos_acao_agora": retornos_acao_agora,
         "retornos_reagendados_vencidos": retornos_reagendados_vencidos,
         "retornos_contatados_hoje": retornos_contatados_hoje,
@@ -8660,9 +8976,14 @@ def salvar_configuracao_banco():
     )
 
     if status.get("conectado"):
+        mensagem = "Configuracao do banco salva e conexao com o Supabase validada com sucesso."
+        if status.get("migracao_automatica"):
+            mensagem += " Os dados locais foram migrados automaticamente."
+        elif status.get("mensagem_migracao"):
+            mensagem += status.get("mensagem_migracao")
         definir_feedback_configuracoes(
             "sucesso",
-            "Configuracao do banco salva e conexao com o Supabase validada com sucesso.",
+            mensagem,
         )
     else:
         definir_feedback_configuracoes(
@@ -8721,6 +9042,10 @@ def migrar_banco_para_supabase():
         garantir_schema_banco_online(force=True)
         importar_sqlite_para_banco_atual(caminho_banco_absoluto())
         criar_backup_banco(force=True, tipo_backup="banco")
+        salvar_env_local({
+            "DATABASE_ONLINE_MIGRADO": "1",
+        })
+        atualizar_configuracao_banco_runtime(migrado="1")
         registrar_auditoria(
             "migracao_banco_online",
             "banco",
@@ -9715,7 +10040,9 @@ def index():
                     SELECT
                         servicos.id,
                         servicos.valor,
+                        servicos.valor_adicional,
                         servicos.entrada,
+                        servicos.entrega_prevista,
                         servicos.entrega,
                         servicos.status,
                         servicos.observacoes,
@@ -9740,6 +10067,7 @@ def index():
 
                 historico_db = c.fetchall()
                 fotos_por_servico = listar_fotos_servicos([row["id"] for row in historico_db])
+                extras_por_servico = listar_cobrancas_extras_servicos([row["id"] for row in historico_db])
 
                 # 🔥 FORMATAR HISTÓRICO
                 historico_formatado = []
@@ -9772,6 +10100,7 @@ def index():
                     s_dict["valor_exibicao"] = formatar_valor_monetario(
                         s_dict.get("valor")
                     )
+                    enriquecer_entrega_servico(s_dict)
                     c.execute("""
                         SELECT item_nome
                         FROM servico_checklist
@@ -9785,6 +10114,12 @@ def index():
                     s_dict["fotos_entrada"] = len(s_dict["galeria_fotos"].get("entrada", []))
                     s_dict["fotos_detalhe"] = len(s_dict["galeria_fotos"].get("detalhe", []))
                     s_dict["fotos_saida"] = len(s_dict["galeria_fotos"].get("saida", []))
+                    s_dict["cobrancas_extras_info"] = extras_por_servico.get(s_dict["id"], {
+                        "itens": [],
+                        "total": 0.0,
+                        "total_exibicao": "0.00",
+                    })
+                    s_dict["tem_cobrancas_extras"] = bool(s_dict["cobrancas_extras_info"]["itens"])
                     enriquecer_responsaveis_servico(s_dict)
 
                     historico_formatado.append({
@@ -10275,7 +10610,14 @@ def servico():
         return "Erro: tipo não encontrado"
 
     tipo_id = tipo["id"]
-    valor = converter_valor_numerico(tipo["valor"])
+    valor_base = converter_valor_numerico(tipo["valor"])
+    valor_adicional = converter_valor_numerico(data.get("valor_adicional"))
+    valor_total = valor_base + valor_adicional
+    entrega_prevista = interpretar_hora_brasilia(data.get("entrega_prevista"))
+    entrega_prevista_iso = (
+        entrega_prevista.isoformat(timespec="seconds")
+        if entrega_prevista else None
+    )
 
     # 🔥 PRIORIDADE
     c.execute("""
@@ -10294,16 +10636,18 @@ def servico():
     c.execute("""
         INSERT INTO servicos 
         (
-            veiculo_id, tipo_id, valor, entrada, status, prioridade,
+            veiculo_id, tipo_id, valor, valor_adicional, entrada, entrega_prevista, status, prioridade,
             observacoes, origem, guarita, pneu, cera, hidro_lataria, hidro_vidros,
             criado_por_usuario, criado_por_nome
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         veiculo_id,
         tipo_id,
-        valor,
+        valor_total,
+        valor_adicional,
         agora,
+        entrega_prevista_iso,
         "EM ANDAMENTO",
         nova_prioridade,
         normalizar_texto_campo(data.get("observacoes")),
@@ -10335,7 +10679,10 @@ def servico():
         placa=placa,
         detalhes={
             "tipo_servico": tipo_nome,
-            "valor": valor,
+            "valor_base": valor_base,
+            "valor_adicional": valor_adicional,
+            "valor_total": valor_total,
+            "entrega_prevista": entrega_prevista_iso,
             "fotos_entrada": entrada_salvas,
             "fotos_detalhe": detalhe_salvas,
         },
@@ -10421,6 +10768,84 @@ def salvar_operacional_painel(id):
     definir_feedback_painel("sucesso", mensagem)
     return redirect("/painel")
 
+@app.route("/painel/servico/<int:id>/cobranca-extra", methods=["POST"])
+def adicionar_cobranca_extra_painel(id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    usuario_info = resumo_usuario_logado()
+    descricao = normalizar_texto_campo(request.form.get("descricao_extra"))
+    valor_extra = converter_valor_numerico(request.form.get("valor_extra"))
+
+    if not descricao:
+        definir_feedback_painel("erro", "Informe a descricao da cobranca extra.")
+        return redirect("/painel")
+
+    if valor_extra <= 0:
+        definir_feedback_painel("erro", "Informe um valor valido para a cobranca extra.")
+        return redirect("/painel")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT servicos.id, servicos.status, servicos.valor, veiculos.placa
+        FROM servicos
+        LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
+        WHERE servicos.id=?
+    """, (id,))
+    servico = c.fetchone()
+
+    if not servico:
+        conn.close()
+        definir_feedback_painel("erro", "Atendimento nao encontrado.")
+        return redirect("/painel")
+
+    if normalizar_texto_campo(servico["status"]).upper() == "FINALIZADO":
+        conn.close()
+        definir_feedback_painel("erro", "Nao e possivel adicionar cobranca extra em atendimento finalizado.")
+        return redirect("/painel")
+
+    novo_total = converter_valor_numerico(servico["valor"]) + valor_extra
+
+    c.execute("""
+        INSERT INTO servico_cobrancas_extras (
+            servico_id, descricao, valor, criado_em, criado_por_usuario, criado_por_nome
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        id,
+        descricao,
+        valor_extra,
+        agora_iso(),
+        normalizar_texto_campo(usuario_info.get("usuario")),
+        normalizar_texto_campo(usuario_info.get("nome")),
+    ))
+    c.execute(
+        "UPDATE servicos SET valor=? WHERE id=?",
+        (novo_total, id),
+    )
+    conn.commit()
+    conn.close()
+
+    registrar_auditoria(
+        "adicionou_cobranca_extra",
+        "servico",
+        entidade_id=id,
+        placa=servico["placa"],
+        detalhes={
+            "descricao": descricao,
+            "valor_extra": valor_extra,
+            "valor_total": novo_total,
+        },
+        usuario=usuario_info,
+    )
+
+    definir_feedback_painel(
+        "sucesso",
+        f"Cobranca extra adicionada: {descricao} (R$ {formatar_valor_monetario(valor_extra)}).",
+    )
+    return redirect("/painel")
+
 @app.route("/painel/servico/<int:id>/checklist", methods=["GET", "POST"])
 def checklist_servico(id):
     if not session.get("usuario"):
@@ -10445,6 +10870,8 @@ def checklist_servico(id):
     servico["tipo_nome"] = servico.get("tipo_nome") or "Servico"
     servico["valor_exibicao"] = formatar_valor_monetario(servico.get("valor"))
     enriquecer_responsaveis_servico(servico)
+    enriquecer_entrega_servico(servico)
+    servico["cobrancas_extras_info"] = listar_cobrancas_extras_servico(id)
     entrada = interpretar_datahora_sistema(servico.get("entrada"))
     servico["entrada_exibicao"] = (
         entrada.strftime("%d/%m/%Y %H:%M")
@@ -10823,6 +11250,8 @@ def listar_servicos_em_andamento_voz():
         SELECT
             servicos.id,
             servicos.entrada,
+            servicos.entrega_prevista,
+            servicos.valor_adicional,
             tipos_servico.nome AS tipo_nome,
             veiculos.placa,
             veiculos.modelo,
@@ -10860,22 +11289,24 @@ def listar_servicos_em_andamento_voz():
         else:
             tempo_exibicao = f"{minutos_restantes}min"
 
-        servicos.append(
-            {
-                "id": item.get("id"),
-                "placa": item.get("placa") or "",
-                "modelo": item.get("modelo") or "",
-                "cor": item.get("cor") or "",
-                "cliente_nome": item.get("cliente_nome") or "",
-                "servico": item.get("tipo_nome") or "Servico",
-                "minutos_em_andamento": minutos,
-                "tempo_exibicao": tempo_exibicao,
-                "entrada_exibicao": (
-                    entrada.strftime("%d/%m/%Y %H:%M")
-                    if entrada else (item.get("entrada") or "-")
-                ),
-            }
-        )
+        item_saida = {
+            "id": item.get("id"),
+            "placa": item.get("placa") or "",
+            "modelo": item.get("modelo") or "",
+            "cor": item.get("cor") or "",
+            "cliente_nome": item.get("cliente_nome") or "",
+            "servico": item.get("tipo_nome") or "Servico",
+            "minutos_em_andamento": minutos,
+            "tempo_exibicao": tempo_exibicao,
+            "entrada_exibicao": (
+                entrada.strftime("%d/%m/%Y %H:%M")
+                if entrada else (item.get("entrada") or "-")
+            ),
+            "entrega_prevista": item.get("entrega_prevista"),
+            "valor_adicional": item.get("valor_adicional"),
+        }
+        enriquecer_entrega_servico(item_saida, referencia=agora_atual)
+        servicos.append(item_saida)
 
     return servicos
 
@@ -10927,6 +11358,7 @@ def painel():
     ids_servicos = [row["id"] for row in servicos_db]
     conn.close()
     fotos_por_servico = listar_fotos_servicos(ids_servicos)
+    extras_por_servico = listar_cobrancas_extras_servicos(ids_servicos)
 
     servicos = []
 
@@ -10983,7 +11415,14 @@ def painel():
         s_dict["fotos_detalhe"] = len(s_dict["galeria_fotos"].get("detalhe", []))
         s_dict["fotos_saida"] = len(s_dict["galeria_fotos"].get("saida", []))
         s_dict["tem_fotos"] = bool(s_dict["fotos_entrada"] or s_dict["fotos_detalhe"] or s_dict["fotos_saida"])
+        s_dict["cobrancas_extras_info"] = extras_por_servico.get(s_dict["id"], {
+            "itens": [],
+            "total": 0.0,
+            "total_exibicao": "0.00",
+        })
+        s_dict["tem_cobrancas_extras"] = bool(s_dict["cobrancas_extras_info"]["itens"])
         enriquecer_responsaveis_servico(s_dict)
+        enriquecer_entrega_servico(s_dict)
 
         servicos.append(s_dict)
 

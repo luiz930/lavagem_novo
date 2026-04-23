@@ -87,6 +87,8 @@
         <p><b>Banco ativo agora:</b> {{ banco_status.backend_label }}</p>
         <p><b>Conexao:</b> {{ banco_status.mensagem }}</p>
         <p><b>URL:</b> {{ banco_status.dsn_masked or "Nao informado" }}</p>
+        <p><b>Migracao automatica:</b> {% if banco_config.auto_migrar_banco %}Ativa{% else %}Desativada{% endif %}</p>
+        <p><b>Migracao inicial:</b> {% if banco_config.migracao_online_ja_realizada %}Concluida{% else %}Pendente{% endif %}</p>
         <p><b>Host:</b> {{ banco_status.host or "-" }}</p>
         <p><b>Banco:</b> {{ banco_status.database or "-" }}</p>
         <p><b>Usuario:</b> {{ banco_status.usuario or "-" }}</p>
@@ -103,10 +105,30 @@
                     <option value="sqlite" {% if banco_config.modo != 'postgres' %}selected{% endif %}>SQLite local</option>
                     <option value="postgres" {% if banco_config.modo == 'postgres' %}selected{% endif %}>Supabase / PostgreSQL</option>
                 </select>
-                <input name="database_url" value="" placeholder="Cole aqui a connection string completa do Supabase ou Session pooler" autocomplete="off">
+                <div class="password-toggle-row connection-toggle-row">
+                    <input
+                        name="database_url"
+                        value="{{ banco_config.url_completa }}"
+                        placeholder="Cole aqui a connection string completa do Supabase ou Session pooler"
+                        autocomplete="off"
+                        readonly
+                        data-database-url-input
+                    >
+                    <button type="button" class="password-toggle-button" data-toggle-database-url>Editar conexão</button>
+                </div>
             </div>
 
             <p class="muted-text">Para o banco online, basta colar a <strong>connection string completa</strong> do Supabase. Se o servidor nao tiver IPv6, use a string do <strong>Session pooler</strong>.</p>
+            <label class="inline-toggle top-spacing">
+                <input
+                    type="checkbox"
+                    name="migrar_automaticamente"
+                    value="1"
+                    {% if banco_config.auto_migrar_banco %}checked{% endif %}
+                >
+                Migrar o banco local automaticamente ao ativar o Supabase
+            </label>
+            <p class="muted-text">A migração manual continua disponivel. Esse modo automatico roda quando a conexao online e ativada pela primeira vez.</p>
 
             <div class="actions-row actions-row--left">
                 <button type="submit">Salvar conexao</button>
@@ -477,6 +499,24 @@ function atualizarBackupDestino() {
 if (backupDestinoSelector) {
     backupDestinoSelector.addEventListener("change", atualizarBackupDestino);
     atualizarBackupDestino();
+}
+
+const databaseUrlInput = document.querySelector("[data-database-url-input]");
+const databaseUrlToggle = document.querySelector("[data-toggle-database-url]");
+
+if (databaseUrlInput && databaseUrlToggle) {
+    databaseUrlToggle.addEventListener("click", () => {
+        const bloqueado = databaseUrlInput.hasAttribute("readonly");
+        if (bloqueado) {
+            databaseUrlInput.removeAttribute("readonly");
+            databaseUrlToggle.textContent = "Travar conexão";
+            databaseUrlInput.focus();
+            databaseUrlInput.select();
+        } else {
+            databaseUrlInput.setAttribute("readonly", "readonly");
+            databaseUrlToggle.textContent = "Editar conexão";
+        }
+    });
 }
 </script>
 
