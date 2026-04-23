@@ -842,6 +842,37 @@ input[type="file"] {
     padding-bottom: 4px;
 }
 
+.extra-charge-list {
+    display: grid;
+    gap: 10px;
+}
+
+.extra-charge-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 12px 14px;
+    border-radius: 16px;
+    border: 1px solid rgba(250, 204, 21, 0.14);
+    background: rgba(15, 23, 42, 0.72);
+}
+
+.extra-charge-item strong {
+    color: var(--text);
+}
+
+.extra-charge-item p {
+    margin: 6px 0 0;
+}
+
+.extra-charge-value {
+    flex: 0 0 auto;
+    color: var(--primary);
+    font-weight: 800;
+    white-space: nowrap;
+}
+
 .photo-thumb-link {
     flex: 0 0 auto;
     display: block;
@@ -1050,6 +1081,10 @@ iframe {
 
     .field-grid {
         grid-template-columns: 1fr;
+    }
+
+    .extra-charge-item {
+        flex-direction: column;
     }
 
     .profile-user-row {

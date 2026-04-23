@@ -38,6 +38,7 @@
     data-modelo="{{ s.modelo }}"
     data-servico="{{ s.tipo_nome }}"
     data-base-minutos="{{ s.tempo_espera_minutos }}"
+    data-entrega-prevista="{{ s.entrega_prevista_iso or '' }}"
 >
 
     <p class="pill-label">Fila {{ loop.index }}</p>
@@ -46,8 +47,12 @@
 
     <p><b>Cliente:</b> {{ s.cliente_nome }}</p>
     <p><b>Veiculo:</b> {{ s.placa }}{% if s.modelo %} - {{ s.modelo }}{% endif %}{% if s.cor %} / {{ s.cor }}{% endif %}</p>
-    <p><b>Valor:</b> R$ {{ s.valor_exibicao }}</p>
+    <p><b>Valor:</b> R$ {{ s.valor_exibicao }}{% if s.tem_valor_adicional %} <span class="muted-text">(+ extra manual R$ {{ s.valor_adicional_exibicao }})</span>{% endif %}</p>
     <p><b>Entrada:</b> {{ s.entrada_exibicao }}</p>
+    {% if s.entrega_prevista_exibicao %}
+    <p><b>Entrega combinada:</b> {{ s.entrega_prevista_exibicao }}</p>
+    <p><b>Tempo para entrega:</b> <span class="js-tempo-entrega">{{ s.tempo_entrega }}</span></p>
+    {% endif %}
     <p><b>Tempo em espera:</b> <span class="js-tempo-espera">{{ s.tempo_espera }}</span></p>
     <p><b>Prioridade IA:</b> {{ s.prioridade_ia }}</p>
 
@@ -139,6 +144,37 @@
             <button type="submit" name="acao" value="finalizar">Abrir checklist de finalizacao</button>
         </div>
     </form>
+
+    <div class="page-card page-card--soft top-spacing">
+        <h3 class="section-title">Cobranças extras</h3>
+        <p class="muted-text">Use este campo quando o cliente pedir um serviço adicional durante o atendimento. O valor entra no total do carro e fica no histórico.</p>
+
+        <form action="/painel/servico/{{ s.id }}/cobranca-extra" method="POST" class="stack-form stack-form--wide">
+            <div class="field-grid">
+                <input name="descricao_extra" placeholder="Descricao da cobranca extra" required>
+                <input type="number" name="valor_extra" min="0" step="0.01" placeholder="0,00" required>
+            </div>
+
+            <button type="submit">Adicionar cobrança extra</button>
+        </form>
+
+        {% if s.tem_cobrancas_extras %}
+        <div class="extra-charge-list top-spacing">
+            <p class="muted-text"><b>Total de extras:</b> R$ {{ s.cobrancas_extras_info.total_exibicao }}</p>
+            {% for extra in s.cobrancas_extras_info.itens %}
+            <div class="extra-charge-item">
+                <div>
+                    <strong>{{ extra.descricao }}</strong>
+                    <p class="muted-text">Lançado por {{ extra.criado_por_nome_exibicao }}{% if extra.criado_em_exibicao %} em {{ extra.criado_em_exibicao }}{% endif %}</p>
+                </div>
+                <span class="extra-charge-value">R$ {{ extra.valor_exibicao }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="muted-text top-spacing">Nenhuma cobrança extra registrada neste atendimento ainda.</p>
+        {% endif %}
+    </div>
 
 </div>
 {% endfor %}

@@ -159,6 +159,41 @@
         return `${mins}min`;
     }
 
+    function formatarTempoEntrega(dataIso) {
+        if (!dataIso) {
+            return "Sem horario combinado";
+        }
+
+        const alvo = new Date(dataIso);
+        if (Number.isNaN(alvo.getTime())) {
+            return "Horario invalido";
+        }
+
+        const diferencaSegundos = Math.floor((alvo.getTime() - Date.now()) / 1000);
+        const totalSegundos = Math.abs(diferencaSegundos);
+        const horas = Math.floor(totalSegundos / 3600);
+        const minutos = Math.floor((totalSegundos % 3600) / 60);
+        const partes = [];
+
+        if (horas > 0) {
+            partes.push(`${horas}h`);
+        }
+
+        if (minutos > 0) {
+            partes.push(`${minutos}min`);
+        }
+
+        if (!partes.length) {
+            partes.push(`${Math.max(1, totalSegundos)}s`);
+        }
+
+        if (diferencaSegundos <= 0) {
+            return `Atraso de ${partes.join(" ")}`;
+        }
+
+        return `Falta ${partes.join(" ")}`;
+    }
+
     function obterMinutosAtuais(item) {
         const base = Math.max(0, Number(item.minutos_em_andamento || item.baseMinutos || 0));
         const decorridos = Math.floor((Date.now() - snapshotEm) / 60000);
@@ -193,6 +228,7 @@
             placa: card.dataset.placa || "",
             modelo: card.dataset.modelo || "",
             servico: card.dataset.servico || "",
+            entrega_prevista: card.dataset.entregaPrevista || "",
             minutos_em_andamento: obterMinutosAtuais({
                 baseMinutos: Number(card.dataset.baseMinutos || 0),
             }),
@@ -229,6 +265,10 @@
                 if (servico.servico) {
                     card.dataset.servico = servico.servico;
                 }
+
+                if (servico.entrega_prevista) {
+                    card.dataset.entregaPrevista = servico.entrega_prevista;
+                }
             }
 
             const tempoEl = card.querySelector(".js-tempo-espera");
@@ -238,6 +278,11 @@
                         baseMinutos: Number(card.dataset.baseMinutos || 0),
                     })
                 );
+            }
+
+            const entregaEl = card.querySelector(".js-tempo-entrega");
+            if (entregaEl) {
+                entregaEl.textContent = formatarTempoEntrega(card.dataset.entregaPrevista);
             }
         });
     }
@@ -278,6 +323,32 @@
             texto = "Nenhum atendimento em andamento no momento. O aviso sera retomado automaticamente quando houver carros em operacao.";
         } else if (!lider) {
             texto = "Os avisos por voz estao ativos, mas outra aba deste sistema esta responsavel pelos avisos para evitar duplicidade.";
+        }
+
+        const entregasComHorario = servicosCache.filter((item) => item.entrega_prevista);
+        const entregasAgendadas = entregasComHorario.length;
+        const entregasVencidas = entregasComHorario.filter((item) => {
+            const alvo = new Date(item.entrega_prevista);
+            return !Number.isNaN(alvo.getTime()) && alvo.getTime() <= Date.now();
+        }).length;
+        const entregasProximas = entregasComHorario.filter((item) => {
+            const alvo = new Date(item.entrega_prevista);
+            if (Number.isNaN(alvo.getTime())) {
+                return false;
+            }
+
+            const diferencaMinutos = Math.ceil((alvo.getTime() - Date.now()) / 60000);
+            return diferencaMinutos > 0 && diferencaMinutos <= 15;
+        }).length;
+
+        if (ativa && totalAtivos > 0 && entregasAgendadas > 0) {
+            if (entregasVencidas > 0) {
+                texto += ` ${entregasVencidas} entrega(s) estao no prazo final ou vencidas.`;
+            } else if (entregasProximas > 0) {
+                texto += ` ${entregasProximas} entrega(s) estao proximas do horario combinado.`;
+            } else {
+                texto += ` ${entregasAgendadas} entrega(s) possuem horario combinado.`;
+            }
         }
 
         if (textoExtra) {

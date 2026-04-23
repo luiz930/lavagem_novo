@@ -25,6 +25,15 @@
     <p><b>Veiculo:</b> {{ servico.placa }}{% if servico.modelo %} - {{ servico.modelo }}{% endif %}{% if servico.cor %} / {{ servico.cor }}{% endif %}</p>
     <p><b>Entrada:</b> {{ servico.entrada_exibicao }}</p>
     <p><b>Valor:</b> R$ {{ servico.valor_exibicao }}</p>
+    {% if servico.tem_valor_adicional %}
+    <p><b>Valor adicional:</b> R$ {{ servico.valor_adicional_exibicao }}</p>
+    {% endif %}
+    {% if servico.entrega_prevista_exibicao %}
+    <p><b>Horario combinado:</b> {{ servico.entrega_prevista_exibicao }} <span class="muted-text">({{ servico.tempo_entrega }})</span></p>
+    {% endif %}
+    {% if servico.tem_cobrancas_extras %}
+    <p><b>Extras lancados:</b> R$ {{ servico.cobrancas_extras_info.total_exibicao }}</p>
+    {% endif %}
     <p class="muted-text">Entrada por: {{ servico.criado_por_nome_exibicao }}{% if servico.operacional_por_nome_exibicao != "Nao registrado" %} | Operacional por: {{ servico.operacional_por_nome_exibicao }}{% endif %}</p>
 
     {% if servico.origem or servico.guarita %}
@@ -37,6 +46,20 @@
 
     {% if servico.observacoes %}
     <p class="muted-text">{{ servico.observacoes }}</p>
+    {% endif %}
+
+    {% if servico.tem_cobrancas_extras %}
+    <div class="extra-charge-list top-spacing">
+        {% for extra in servico.cobrancas_extras_info.itens %}
+        <div class="extra-charge-item">
+            <div>
+                <strong>{{ extra.descricao }}</strong>
+                <p class="muted-text">Lançado por {{ extra.criado_por_nome_exibicao }}{% if extra.criado_em_exibicao %} em {{ extra.criado_em_exibicao }}{% endif %}</p>
+            </div>
+            <span class="extra-charge-value">R$ {{ extra.valor_exibicao }}</span>
+        </div>
+        {% endfor %}
+    </div>
     {% endif %}
 </div>
 
