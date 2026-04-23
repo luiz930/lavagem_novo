@@ -2686,20 +2686,29 @@ def salvar_configuracao_banco_form(form):
     if modo == "postgres":
         if url_completa:
             partes_url = desmontar_url_postgres(url_completa)
+            if not partes_url.get("host"):
+                raise ValueError(
+                    "Cole a connection string completa do Supabase ou do Session pooler."
+                )
+            if "[YOUR-PASSWORD]" in url_completa:
+                raise ValueError(
+                    "Cole a connection string completa com a senha real do banco."
+                )
             host = partes_url.get("host") or host
             porta = partes_url.get("porta") or porta
             database = partes_url.get("database") or database
             usuario = partes_url.get("usuario") or usuario
-            if not senha:
-                senha = partes_url.get("senha") or senha
+            senha = partes_url.get("senha") or senha
+            url_atual = url_completa
+            senha_atual = str(senha or partes_url.get("senha") or "").strip()
+        else:
+            if host.lower() in {"postgres", "postgresql"} or "." not in host:
+                host = configuracao_atual.get("host") or host
 
-        if host.lower() in {"postgres", "postgresql"} or "." not in host:
-            host = configuracao_atual.get("host") or host
-
-        if not host or not senha:
-            raise ValueError("Preencha o host do banco online e a senha antes de salvar.")
-        url_atual = montar_url_postgres(host, porta, database, usuario, senha)
-        senha_atual = str(senha).strip()
+            if not host or not senha:
+                raise ValueError("Preencha a connection string completa ou o host do banco online.")
+            url_atual = montar_url_postgres(host, porta, database, usuario, senha)
+            senha_atual = str(senha).strip()
 
     atualizar_configuracao_banco_runtime(url_atual, senha_atual, modo)
     salvar_env_local({
