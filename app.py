@@ -3314,6 +3314,11 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "usuarios", "senha_alteracao_obrigatoria INTEGER")
     adicionar_coluna_se_preciso(c, "usuarios", "senha_atualizada_em TEXT")
     adicionar_coluna_se_preciso(c, "usuarios", "foto_perfil TEXT")
+    adicionar_coluna_se_preciso(c, "clientes", "placa_principal TEXT")
+    adicionar_coluna_se_preciso(c, "veiculos", "status_atendimento TEXT DEFAULT 'SEM_ATENDIMENTO'")
+    adicionar_coluna_se_preciso(c, "veiculos", "atendimento_ativo INTEGER DEFAULT 0")
+    adicionar_coluna_se_preciso(c, "veiculos", "ultima_entrada TEXT")
+    adicionar_coluna_se_preciso(c, "veiculos", "ultima_entrega TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "frequencia TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "tipo_backup TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "retencao_arquivos INTEGER")
@@ -3363,6 +3368,79 @@ def atualizar_banco():
         UPDATE usuarios
         SET senha_atualizada_em=COALESCE(senha_atualizada_em, criado_em, ?)
     """, (agora().isoformat(timespec="seconds"),))
+
+    c.execute("""
+        UPDATE clientes
+        SET placa_principal=COALESCE(NULLIF(placa_principal, ''), NULL)
+    """)
+
+    try:
+        c.execute("""
+            SELECT cliente_id, placa
+            FROM veiculos
+            WHERE cliente_id IS NOT NULL
+            ORDER BY cliente_id ASC, id DESC
+        """)
+        clientes_com_placa = {}
+        for row in c.fetchall():
+            cliente_id = row["cliente_id"]
+            if cliente_id and cliente_id not in clientes_com_placa:
+                clientes_com_placa[cliente_id] = normalizar_texto_campo(row["placa"]).upper()
+
+        for cliente_id, placa in clientes_com_placa.items():
+            if placa:
+                c.execute(
+                    "UPDATE clientes SET placa_principal=? WHERE id=?",
+                    (placa, cliente_id),
+                )
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+    try:
+        c.execute("""
+            SELECT id
+            FROM veiculos
+            ORDER BY id ASC
+        """)
+        veiculos_ids = [row["id"] for row in c.fetchall()]
+
+        for veiculo_id in veiculos_ids:
+            c.execute("""
+                SELECT status, entrada, entrega
+                FROM servicos
+                WHERE veiculo_id=?
+                ORDER BY id DESC
+                LIMIT 1
+            """, (veiculo_id,))
+            servico = c.fetchone()
+
+            if servico:
+                status = normalizar_texto_campo(servico["status"]).upper() or "SEM_ATENDIMENTO"
+                entrada = servico["entrada"]
+                entrega = servico["entrega"]
+                ativo = 1 if status == "EM ANDAMENTO" else 0
+            else:
+                status = "SEM_ATENDIMENTO"
+                entrada = None
+                entrega = None
+                ativo = 0
+
+            c.execute("""
+                UPDATE veiculos
+                SET status_atendimento=?,
+                    atendimento_ativo=?,
+                    ultima_entrada=?,
+                    ultima_entrega=?
+                WHERE id=?
+            """, (status, ativo, entrada, entrega, veiculo_id))
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
     c.execute("""
         SELECT id, usuario, senha, senha_alteracao_obrigatoria
@@ -3616,7 +3694,8 @@ def criar_todas_tabelas():
     CREATE TABLE IF NOT EXISTS clientes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nome TEXT NOT NULL,
-        telefone TEXT
+        telefone TEXT,
+        placa_principal TEXT
     )
     """)
 
@@ -3628,6 +3707,10 @@ def criar_todas_tabelas():
         modelo TEXT,
         cor TEXT,
         cliente_id INTEGER,
+        status_atendimento TEXT DEFAULT 'SEM_ATENDIMENTO',
+        atendimento_ativo INTEGER DEFAULT 0,
+        ultima_entrada TEXT,
+        ultima_entrega TEXT,
         FOREIGN KEY(cliente_id) REFERENCES clientes(id)
     )
     """)
@@ -7314,6 +7397,9 @@ def importar_clientes_dataframe(df, mapeamento):
             """, (placa, modelo, cor, cliente_id))
             estatisticas["veiculos_novos"] += 1
 
+        if cliente_id:
+            sincronizar_placa_principal_cliente(c, cliente_id, placa)
+
         estatisticas["linhas_processadas"] += 1
 
     conn.commit()
@@ -7556,7 +7642,8 @@ def listar_registros_clientes(busca=""):
                 veiculos.cor,
                 clientes.id AS cliente_id,
                 clientes.nome,
-                clientes.telefone
+                clientes.telefone,
+                clientes.placa_principal
             FROM veiculos
             LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
             WHERE veiculos.placa LIKE ? OR veiculos.modelo LIKE ? OR clientes.nome LIKE ?
@@ -7571,7 +7658,8 @@ def listar_registros_clientes(busca=""):
                 veiculos.cor,
                 clientes.id AS cliente_id,
                 clientes.nome,
-                clientes.telefone
+                clientes.telefone,
+                clientes.placa_principal
             FROM veiculos
             LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
             ORDER BY veiculos.id DESC
@@ -7586,6 +7674,7 @@ def listar_registros_clientes(busca=""):
         item["modelo"] = item.get("modelo") or ""
         item["cor"] = item.get("cor") or ""
         item["placa_original"] = item.get("placa") or ""
+        item["placa_principal"] = item.get("placa_principal") or item["placa_original"]
         registros.append(item)
 
     conn.close()
@@ -7702,15 +7791,289 @@ def salvar_cliente_veiculo(placa, nome="", telefone="", modelo="", cor="", placa
                 VALUES (?, ?, ?, ?)
             """, (placa_nova, modelo, cor, cliente_id))
 
+        if cliente_id:
+            sincronizar_placa_principal_cliente(c, cliente_id, placa_nova)
+
         conn.commit()
+
+        espelho_planilha = {"sucesso": [], "falhas": [], "ignoradas": []}
+        try:
+            espelho_planilha = espelhar_cadastro_site_em_sincronizacoes_clientes(
+                placa_nova,
+                nome=nome,
+                telefone=telefone,
+                modelo=modelo,
+                cor=cor,
+            )
+        except Exception as erro_espelho:
+            espelho_planilha = {
+                "sucesso": [],
+                "falhas": [{"nome": "Sincronizacao", "erro": str(erro_espelho)}],
+                "ignoradas": [],
+            }
 
         return {
             "placa": placa_nova,
             "acao": "atualizado" if veiculo_existente else "novo",
             "cliente_id": cliente_id,
+            "espelho_planilha": espelho_planilha,
         }
     finally:
         conn.close()
+
+def sincronizar_resumo_veiculo_cliente(c, veiculo_id, placa=None, cliente_id=None, status_atendimento=None, entrada=None, entrega=None):
+    campos = []
+    valores = []
+
+    placa = limpar_valor_planilha(placa).upper()
+
+    if cliente_id is not None:
+        campos.append("cliente_id=?")
+        valores.append(cliente_id)
+
+    if placa:
+        campos.append("placa=?")
+        valores.append(placa)
+
+    if status_atendimento is not None:
+        status_atendimento = normalizar_texto_campo(status_atendimento).upper() or "SEM_ATENDIMENTO"
+        campos.append("status_atendimento=?")
+        valores.append(status_atendimento)
+        campos.append("atendimento_ativo=?")
+        valores.append(1 if status_atendimento == "EM ANDAMENTO" else 0)
+
+    if entrada is not None:
+        campos.append("ultima_entrada=?")
+        valores.append(entrada)
+
+    if entrega is not None:
+        campos.append("ultima_entrega=?")
+        valores.append(entrega)
+
+    if campos:
+        valores.append(veiculo_id)
+        c.execute(
+            f"UPDATE veiculos SET {', '.join(campos)} WHERE id=?",
+            valores,
+        )
+
+    if cliente_id is not None and placa:
+        c.execute(
+            "UPDATE clientes SET placa_principal=? WHERE id=?",
+            (placa, cliente_id),
+        )
+
+
+def sincronizar_placa_principal_cliente(c, cliente_id, placa):
+    placa = limpar_valor_planilha(placa).upper()
+    if not cliente_id or not placa:
+        return
+
+    c.execute(
+        "UPDATE clientes SET placa_principal=? WHERE id=?",
+        (placa, cliente_id),
+    )
+
+def numero_para_coluna_planilha(numero):
+    numero = int(numero or 0)
+    if numero <= 0:
+        return "A"
+
+    letras = ""
+    while numero:
+        numero, resto = divmod(numero - 1, 26)
+        letras = chr(65 + resto) + letras
+    return letras
+
+def obter_servico_google_sheets():
+    credenciais_info, erro = carregar_credenciais_google_drive()
+    if erro:
+        raise RuntimeError(erro)
+    if not credenciais_info:
+        raise RuntimeError("Credenciais do Google nao configuradas.")
+    if not google_build or not service_account:
+        raise RuntimeError("Dependencias do Google Sheets nao estao disponiveis.")
+
+    credenciais = service_account.Credentials.from_service_account_info(
+        credenciais_info,
+        scopes=[
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/spreadsheets",
+        ],
+    )
+    return google_build("sheets", "v4", credentials=credenciais, cache_discovery=False)
+
+def obter_titulo_aba_planilha_google(spreadsheet_id, gid=None):
+    service = obter_servico_google_sheets()
+    resposta = service.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields="sheets(properties(sheetId,title,index))",
+    ).execute()
+    folhas = resposta.get("sheets", [])
+    if not folhas:
+        return ""
+
+    if gid not in {None, "", "0"}:
+        gid_texto = str(gid)
+        for folha in folhas:
+            propriedades = folha.get("properties", {})
+            if str(propriedades.get("sheetId")) == gid_texto:
+                return propriedades.get("title") or ""
+
+    primeira = folhas[0].get("properties", {})
+    return primeira.get("title") or ""
+
+def obter_colunas_sincronizacao_cliente(sync):
+    colunas_texto = normalizar_texto_campo(sync.get("colunas_ultima_sync"))
+    if colunas_texto:
+        colunas = [coluna.strip() for coluna in colunas_texto.split(",") if coluna.strip()]
+        if colunas:
+            return colunas
+
+    colunas = []
+    for chave in ("placa", "nome", "telefone", "modelo", "cor", "servico", "data"):
+        coluna = normalizar_texto_campo(sync.get(f"campo_{chave}"))
+        if coluna and coluna not in colunas:
+            colunas.append(coluna)
+    return colunas
+
+def montar_registro_site_para_sincronizacao(placa, nome="", telefone="", modelo="", cor=""):
+    agora_local = agora()
+    return {
+        "placa": limpar_valor_planilha(placa).upper(),
+        "nome": limpar_valor_planilha(nome),
+        "telefone": limpar_valor_planilha(telefone),
+        "modelo": limpar_valor_planilha(modelo),
+        "cor": limpar_valor_planilha(cor),
+        "servico": "CADASTRO NO SITE",
+        "data": agora_local.strftime("%d/%m/%Y"),
+    }
+
+def escrever_registro_em_sheety(sync, registro_base):
+    url = normalizar_texto_campo(sync.get("url"))
+    if not url:
+        raise RuntimeError("Sincronizacao sem URL.")
+
+    partes_url = urlparse(url)
+    resource = partes_url.path.rstrip("/").split("/")[-1] or "geral"
+    payload = {
+        resource: {
+            chave: valor
+            for chave, valor in registro_base.items()
+            if valor not in {None, ""}
+        }
+    }
+
+    resposta = requests.post(url, json=payload, timeout=20)
+    resposta.raise_for_status()
+    return resposta
+
+def escrever_registro_em_google_sheets(sync, registro_base):
+    url = normalizar_texto_campo(sync.get("url"))
+    sheet_id = extrair_sheet_id_google(url)
+    if not sheet_id:
+        raise RuntimeError("Nao foi possivel identificar o ID da planilha.")
+
+    gid = extrair_gid_url(url)
+    titulo_aba = obter_titulo_aba_planilha_google(sheet_id, gid)
+    if not titulo_aba:
+        raise RuntimeError("Nao foi possivel identificar a aba da planilha.")
+
+    service = obter_servico_google_sheets()
+    colunas = obter_colunas_sincronizacao_cliente(sync)
+    if not colunas:
+        raise RuntimeError("Nao foi possivel identificar as colunas da planilha.")
+
+    mapa_campos = {}
+    for chave in ("placa", "nome", "telefone", "modelo", "cor", "servico", "data"):
+        coluna_destino = normalizar_texto_campo(sync.get(f"campo_{chave}"))
+        if coluna_destino:
+            mapa_campos[normalizar_texto_comparacao(coluna_destino)] = registro_base.get(chave, "")
+
+    linha = [mapa_campos.get(normalizar_texto_comparacao(coluna), "") for coluna in colunas]
+    intervalo_leitura = f"'{titulo_aba}'!A1:{numero_para_coluna_planilha(len(colunas))}"
+
+    try:
+        cabecalho_resp = service.spreadsheets().values().get(
+            spreadsheetId=sheet_id,
+            range=intervalo_leitura,
+            majorDimension="ROWS",
+        ).execute()
+        linhas_existentes = cabecalho_resp.get("values", [])
+    except Exception:
+        linhas_existentes = []
+
+    if linhas_existentes and len(linhas_existentes) > 1:
+        cabecalho = [str(coluna).strip() for coluna in linhas_existentes[0]]
+        placa_coluna = normalizar_texto_campo(sync.get("campo_placa"))
+        indice_placa = -1
+        for indice, coluna in enumerate(cabecalho):
+            if normalizar_texto_comparacao(coluna) == normalizar_texto_comparacao(placa_coluna):
+                indice_placa = indice
+                break
+
+        if indice_placa >= 0:
+            placa_procura = normalizar_texto_comparacao(registro_base.get("placa"))
+            for numero_linha, valores in enumerate(linhas_existentes[1:], start=2):
+                valor_celula = valores[indice_placa] if indice_placa < len(valores) else ""
+                if normalizar_texto_comparacao(valor_celula) == placa_procura:
+                    intervalo_update = f"'{titulo_aba}'!A{numero_linha}:{numero_para_coluna_planilha(len(colunas))}{numero_linha}"
+                    service.spreadsheets().values().update(
+                        spreadsheetId=sheet_id,
+                        range=intervalo_update,
+                        valueInputOption="USER_ENTERED",
+                        body={"values": [linha]},
+                    ).execute()
+                    return {"acao": "atualizado", "aba": titulo_aba, "planilha_id": sheet_id}
+
+    service.spreadsheets().values().append(
+        spreadsheetId=sheet_id,
+        range=f"'{titulo_aba}'!A:{numero_para_coluna_planilha(len(colunas))}",
+        valueInputOption="USER_ENTERED",
+        insertDataOption="INSERT_ROWS",
+        body={"values": [linha]},
+    ).execute()
+    return {"acao": "adicionado", "aba": titulo_aba, "planilha_id": sheet_id}
+
+def espelhar_cadastro_site_em_sincronizacoes_clientes(placa, nome="", telefone="", modelo="", cor=""):
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, nome, url, campo_placa, campo_nome, campo_telefone, campo_modelo, campo_cor, campo_servico, campo_data, colunas_ultima_sync
+        FROM sincronizacoes_clientes
+        WHERE ativo=1
+        ORDER BY id ASC
+    """)
+    sincronizacoes = [dict(row) for row in c.fetchall()]
+    conn.close()
+
+    registro_base = montar_registro_site_para_sincronizacao(placa, nome, telefone, modelo, cor)
+    resultado = {
+        "sucesso": [],
+        "falhas": [],
+        "ignoradas": [],
+    }
+
+    for sync in sincronizacoes:
+        url = normalizar_texto_campo(sync.get("url"))
+        if not url:
+            resultado["ignoradas"].append("Sincronizacao sem URL configurada")
+            continue
+
+        try:
+            if "sheety.co" in url:
+                escrever_registro_em_sheety(sync, registro_base)
+            else:
+                escrever_registro_em_google_sheets(sync, registro_base)
+
+            resultado["sucesso"].append(sync.get("nome") or f"Sincronizacao {sync.get('id')}")
+        except Exception as e:
+            resultado["falhas"].append({
+                "nome": sync.get("nome") or f"Sincronizacao {sync.get('id')}",
+                "erro": str(e),
+            })
+
+    return resultado
 
 def salvar_linhas_base_dados(linhas):
     estatisticas = {
@@ -9368,7 +9731,10 @@ def atualizar_minha_foto():
         entidade_id=usuario["id"],
         detalhes={"usuario_alvo": usuario["usuario"]},
     )
-    definir_feedback_configuracoes("sucesso", "Foto do seu perfil atualizada com sucesso.")
+    definir_feedback_configuracoes(
+        "sucesso",
+        "Foto do seu perfil atualizada com sucesso e sincronizada no banco ativo."
+    )
     return redirect("/configuracoes")
 
 @app.route("/configuracoes/senha", methods=["POST"])
@@ -9434,7 +9800,7 @@ def atualizar_minha_senha():
         "sucesso",
         (
             "Senha atualizada com sucesso. Seu acesso agora esta protegido "
-            "com hash bcrypt e politica forte."
+            "com hash bcrypt e politica forte, sincronizado no banco ativo."
         ),
     )
     return redirect("/configuracoes")
@@ -9527,7 +9893,7 @@ def criar_usuario_funcionario():
     definir_feedback_configuracoes(
         "sucesso",
         (
-            f"Usuario {usuario} criado com sucesso. "
+            f"Usuario {usuario} criado com sucesso e sincronizado no banco ativo. "
             "A troca de senha sera obrigatoria no primeiro login."
         ),
     )
@@ -9649,7 +10015,7 @@ def atualizar_foto_usuario(usuario_id):
     )
     definir_feedback_configuracoes(
         "sucesso",
-        f"Foto do usuario {alvo['usuario']} atualizada com sucesso."
+        f"Foto do usuario {alvo['usuario']} atualizada com sucesso e sincronizada no banco ativo."
     )
     return redirect("/configuracoes")
 
@@ -9685,7 +10051,7 @@ def alternar_status_usuario(usuario_id):
 
     definir_feedback_configuracoes(
         "sucesso",
-        f"Usuario {alvo['usuario']} {'ativado' if novo_status else 'pausado'} com sucesso."
+        f"Usuario {alvo['usuario']} {'ativado' if novo_status else 'pausado'} com sucesso e sincronizado no banco ativo."
     )
     return redirect("/configuracoes")
 
@@ -10620,10 +10986,14 @@ def cadastrar():
             modelo=request.form.get("modelo", ""),
             cor=request.form.get("cor", ""),
         )
-        definir_feedback_index(
-            "sucesso",
-            f"Cadastro da placa {resultado['placa']} salvo com sucesso."
-        )
+        espelho = resultado.get("espelho_planilha") or {}
+        mensagem = f"Cadastro da placa {resultado['placa']} salvo com sucesso."
+        if espelho.get("sucesso"):
+            mensagem += f" Espelhado em {len(espelho['sucesso'])} planilha(s)."
+        if espelho.get("falhas"):
+            primeiro_erro = espelho["falhas"][0]
+            mensagem += f" Aviso na planilha: {primeiro_erro.get('nome')} - {primeiro_erro.get('erro')}."
+        definir_feedback_index("sucesso", mensagem)
         placa = resultado["placa"]
     except Exception as e:
         print("ERRO CADASTRO:", e)
@@ -10652,7 +11022,13 @@ def editar_cliente():
             cor=request.form.get("cor", ""),
             placa_original=placa_original,
         )
+        espelho = resultado.get("espelho_planilha") or {}
         mensagem = f"Cadastro da placa {resultado['placa']} salvo com sucesso."
+        if espelho.get("sucesso"):
+            mensagem += f" Espelhado em {len(espelho['sucesso'])} planilha(s)."
+        if espelho.get("falhas"):
+            primeiro_erro = espelho["falhas"][0]
+            mensagem += f" Aviso na planilha: {primeiro_erro.get('nome')} - {primeiro_erro.get('erro')}."
 
         if redirect_to.startswith("/clientes"):
             definir_feedback_clientes("sucesso", mensagem)
@@ -10683,7 +11059,7 @@ def servico():
     # 🔥 BUSCAR VEÍCULO PELA PLACA
     placa = data["placa"].upper()
 
-    c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
+    c.execute("SELECT id, cliente_id FROM veiculos WHERE placa=?", (placa,))
     veiculo = c.fetchone()
 
     if not veiculo:
@@ -10691,6 +11067,7 @@ def servico():
         return "Erro: veículo não encontrado"
 
     veiculo_id = veiculo["id"]
+    cliente_id = veiculo["cliente_id"] if veiculo["cliente_id"] else None
 
     # 🔥 BUSCAR TIPO DE SERVIÇO
     tipo_nome = data["tipo"]
@@ -10755,6 +11132,16 @@ def servico():
     ))
 
     servico_id = c.lastrowid
+
+    sincronizar_resumo_veiculo_cliente(
+        c,
+        veiculo_id,
+        placa=placa,
+        cliente_id=cliente_id,
+        status_atendimento="EM ANDAMENTO",
+        entrada=agora,
+        entrega=entrega_prevista_iso,
+    )
 
     # 📸 FOTOS
     fotos_entrada = request.files.getlist("foto_entrada")
@@ -11027,6 +11414,14 @@ def checklist_servico(id):
                 normalizar_texto_campo(usuario_info.get("nome")),
                 id,
             ))
+
+            sincronizar_resumo_veiculo_cliente(
+                c,
+                servico["veiculo_id"],
+                placa=servico["placa"],
+                status_atendimento="FINALIZADO",
+                entrega=agora_iso(),
+            )
             conn.commit()
             conn.close()
 

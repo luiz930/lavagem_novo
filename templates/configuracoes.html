@@ -92,6 +92,27 @@
         <p><b>Host:</b> {{ banco_status.host or "-" }}</p>
         <p><b>Banco:</b> {{ banco_status.database or "-" }}</p>
         <p><b>Usuario:</b> {{ banco_status.usuario or "-" }}</p>
+
+        <div class="top-spacing">
+            <p class="pill-label">Sincronizacao</p>
+            <h3 class="section-title top-spacing">Atualizacao automatica</h3>
+            <p class="muted-text">Defina em quantos segundos a tela confere se o banco online mudou e recarrega quando houver nova gravacao.</p>
+
+            <div class="field-grid top-spacing">
+                <input
+                    type="number"
+                    min="5"
+                    max="120"
+                    step="1"
+                    value="12"
+                    data-sync-interval-input
+                >
+                <button type="button" data-sync-interval-apply>Aplicar intervalo</button>
+                <button type="button" data-sync-interval-now>Atualizar agora</button>
+            </div>
+
+            <p class="muted-text" data-sync-interval-feedback>Atualizacao automatica ajustada para 12 segundos.</p>
+        </div>
     </div>
 
     {% if admin_logado %}
@@ -515,6 +536,75 @@ if (databaseUrlInput && databaseUrlToggle) {
         } else {
             databaseUrlInput.setAttribute("readonly", "readonly");
             databaseUrlToggle.textContent = "Editar conexão";
+        }
+    });
+}
+
+const syncIntervalInput = document.querySelector("[data-sync-interval-input]");
+const syncIntervalApply = document.querySelector("[data-sync-interval-apply]");
+const syncIntervalNow = document.querySelector("[data-sync-interval-now]");
+const syncIntervalFeedback = document.querySelector("[data-sync-interval-feedback]");
+const SYNC_INTERVAL_KEY = "wagen_sync_interval_seconds";
+const SYNC_INTERVAL_PADRAO = 12;
+
+function lerIntervaloSincroniaSalvo() {
+    const valor = Number(localStorage.getItem(SYNC_INTERVAL_KEY) || SYNC_INTERVAL_PADRAO);
+    if (!Number.isFinite(valor) || valor <= 0) {
+        return SYNC_INTERVAL_PADRAO;
+    }
+
+    return Math.max(5, Math.min(120, Math.round(valor)));
+}
+
+function atualizarFeedbackSincronia(texto) {
+    if (syncIntervalFeedback) {
+        syncIntervalFeedback.textContent = texto;
+    }
+}
+
+function aplicarIntervaloSincronia(segundos) {
+    const valor = Math.max(5, Math.min(120, Math.round(Number(segundos) || SYNC_INTERVAL_PADRAO)));
+    localStorage.setItem(SYNC_INTERVAL_KEY, String(valor));
+
+    if (syncIntervalInput) {
+        syncIntervalInput.value = String(valor);
+    }
+
+    atualizarFeedbackSincronia(`Atualizacao automatica ajustada para ${valor} segundos.`);
+
+    if (typeof window.reiniciarSincroniaBancoBase === "function") {
+        window.reiniciarSincroniaBancoBase();
+    }
+}
+
+if (syncIntervalInput) {
+    syncIntervalInput.value = String(lerIntervaloSincroniaSalvo());
+}
+
+if (syncIntervalApply) {
+    syncIntervalApply.addEventListener("click", () => {
+        aplicarIntervaloSincronia(syncIntervalInput ? syncIntervalInput.value : SYNC_INTERVAL_PADRAO);
+    });
+}
+
+if (syncIntervalNow) {
+    syncIntervalNow.addEventListener("click", async () => {
+        atualizarFeedbackSincronia("Atualizando agora...");
+
+        try {
+            const resposta = await fetch("/api/hud", { cache: "no-store" });
+            const dados = await resposta.json();
+            if (dados.erro) {
+                throw new Error(dados.erro);
+            }
+
+            if (typeof window.reiniciarSincroniaBancoBase === "function") {
+                window.reiniciarSincroniaBancoBase();
+            }
+
+            window.location.reload();
+        } catch (erro) {
+            atualizarFeedbackSincronia("Nao foi possivel atualizar agora. Tente novamente.");
         }
     });
 }

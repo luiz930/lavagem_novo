@@ -452,6 +452,27 @@ function toggleSidebar() {
 <script>
 let baseSyncToken = "";
 let baseSyncExecutando = false;
+let baseSyncIntervalHandle = null;
+const baseSyncIntervalPadrao = 12;
+const baseSyncIntervalChave = "wagen_sync_interval_seconds";
+
+function baseObterIntervaloSincronia() {
+    const valorArmazenado = Number(localStorage.getItem(baseSyncIntervalChave) || baseSyncIntervalPadrao);
+    if (!Number.isFinite(valorArmazenado) || valorArmazenado <= 0) {
+        return baseSyncIntervalPadrao;
+    }
+
+    return Math.max(5, Math.min(120, Math.round(valorArmazenado)));
+}
+
+function baseReiniciarAgendamentoSincronia() {
+    if (baseSyncIntervalHandle) {
+        clearInterval(baseSyncIntervalHandle);
+    }
+
+    const intervaloSegundos = baseObterIntervaloSincronia();
+    baseSyncIntervalHandle = setInterval(verificarSincroniaBancoBase, intervaloSegundos * 1000);
+}
 
 function baseElementoEditavelAtivo() {
     const ativo = document.activeElement;
@@ -495,10 +516,20 @@ async function verificarSincroniaBancoBase() {
     }
 }
 
-setInterval(verificarSincroniaBancoBase, 12000);
+window.reiniciarSincroniaBancoBase = baseReiniciarAgendamentoSincronia;
+
+baseReiniciarAgendamentoSincronia();
+verificarSincroniaBancoBase();
+
 document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
         verificarSincroniaBancoBase();
+    }
+});
+
+document.addEventListener("storage", (evento) => {
+    if (evento.key === baseSyncIntervalChave) {
+        baseReiniciarAgendamentoSincronia();
     }
 });
 </script>
