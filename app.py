@@ -157,7 +157,7 @@ SUPABASE_DB_PASSWORD = (os.environ.get("SUPABASE_DB_PASSWORD") or "").strip()
 DATABASE_BACKEND_RAW = (
     os.environ.get("DATABASE_BACKEND")
     or os.environ.get("BACKEND_BANCO")
-    or ""
+    or "postgres"
 ).strip().lower()
 AUTO_MIGRAR_BANCO_RAW = (os.environ.get("AUTO_MIGRAR_BANCO") or "1").strip().lower()
 DATABASE_ONLINE_MIGRADO_RAW = (os.environ.get("DATABASE_ONLINE_MIGRADO") or "0").strip().lower()
@@ -176,6 +176,7 @@ BACKUP_TIPO_PADRAO = "completo"
 BACKUP_ARQUIVO_BANCO_ATUAL = "database_v2_atual.db"
 BACKUP_ARQUIVO_POSTGRES_ATUAL = "database_postgres_atual.json"
 BACKUP_ARQUIVO_POSTGRES_ATUAL_ZIP = "database_postgres_atual.zip"
+BANCO_ONLINE_LOCK_FILE = ".database_online.lock"
 AGENDA_RETORNO_MARCOS = (15, 30, 45)
 AGENDA_RETORNO_LIMITE_ITENS = 18
 STATUS_RETORNO_PADRAO = "pendente"
@@ -203,6 +204,34 @@ TIPOS_BACKUP = [
     {"value": "banco", "label": "Somente banco"},
 ]
 TABELAS_SISTEMA_ORDENADAS = [
+    "notificacoes",
+    "sincronizacoes_clientes",
+    "usuarios",
+    "clientes",
+    "veiculos",
+    "tipos_servico",
+    "servicos",
+    "adicionais",
+    "servico_adicionais",
+    "servico_cobrancas_extras",
+    "fotos",
+    "produtos_pneu",
+    "checklist_itens",
+    "servico_checklist",
+    "historico_lavagens_sync",
+    "retornos_clientes",
+    "configuracao_empresa",
+    "orcamentos",
+    "orcamento_itens",
+    "notas_fiscais",
+    "nota_fiscal_itens",
+    "integracao_fiscal",
+    "configuracao_backup",
+    "manutencao_arquivos",
+    "auditoria",
+]
+
+TABELAS_COM_ATUALIZADO_EM_SYNC = [
     "notificacoes",
     "sincronizacoes_clientes",
     "usuarios",
@@ -1379,58 +1408,20 @@ def importar_sqlite_para_banco_atual(caminho_sqlite):
 
     origem = sqlite3.connect(f"file:{caminho_sqlite}?mode=ro", uri=True)
     origem.row_factory = sqlite3.Row
-    origem_cursor = origem.cursor()
-
-    conn = conectar()
-    c = conn.cursor()
-    backend = "postgres" if banco_online_ativo() else "sqlite"
+    destino = conectar()
 
     try:
-        limpar_tabelas_sistema(c, backend)
         for tabela in TABELAS_SISTEMA_ORDENADAS:
-            try:
-                origem_cursor.execute(f"SELECT * FROM {tabela} ORDER BY id")
-                registros = origem_cursor.fetchall()
-            except Exception:
+            if tabela.startswith("sincronizacao_"):
                 continue
-
-            for registro in registros:
-                registro_dict = dict(registro)
-                if not registro_dict:
-                    continue
-
-                colunas = list(registro_dict.keys())
-                if backend == "postgres":
-                    valores = [
-                        normalizar_valor_importacao_pg(tabela, coluna, registro_dict.get(coluna))
-                        for coluna in colunas
-                    ]
-                else:
-                    valores = [registro_dict.get(coluna) for coluna in colunas]
-                marcadores = ", ".join(["?"] * len(colunas))
-                sql = f"INSERT INTO {tabela} ({', '.join(colunas)}) VALUES ({marcadores})"
-                c.execute(sql, valores)
-
-        if backend == "postgres":
-            for tabela in TABELAS_SISTEMA_ORDENADAS:
-                try:
-                    c.execute(f"SELECT COALESCE(MAX(id), 0) FROM {tabela}")
-                    maior_id = c.fetchone()[0] or 0
-                    c.execute(
-                        f"SELECT setval(pg_get_serial_sequence('{tabela}', 'id'), %s, %s)",
-                        (max(1, int(maior_id)), bool(maior_id)),
-                    )
-                except Exception:
-                    continue
-
-        conn.commit()
+            sincronizar_tabela_incremental(origem, destino, tabela, origem_prevalece_em_empate=False)
     finally:
         try:
             origem.close()
         except Exception:
             pass
         try:
-            conn.close()
+            destino.close()
         except Exception:
             pass
 
@@ -2746,6 +2737,8 @@ def inject_global_template_context():
 
 sync_lock = Lock()
 sync_worker_iniciado = False
+sync_bancos_lock = Lock()
+sync_bancos_worker_iniciado = False
 backup_lock = Lock()
 backup_worker_iniciado = False
 maintenance_lock = Lock()
@@ -2795,7 +2788,9 @@ def modo_banco_preferido():
         return "sqlite"
     if modo in {"postgres", "supabase", "online"}:
         return "postgres"
-    return "postgres" if DATABASE_URL_RAW else "sqlite"
+    if banco_online_travado_localmente() or migracao_online_ja_realizada():
+        return "postgres"
+    return "postgres"
 
 
 def migracao_online_automatica_ativa():
@@ -2804,6 +2799,38 @@ def migracao_online_automatica_ativa():
 
 def migracao_online_ja_realizada():
     return bool_config_ativo(DATABASE_ONLINE_MIGRADO_RAW)
+
+
+def caminho_trava_banco_online():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), BANCO_ONLINE_LOCK_FILE)
+
+
+def banco_online_travado_localmente():
+    return os.path.exists(caminho_trava_banco_online())
+
+
+def travar_banco_online_localmente(ativar=True, motivo=""):
+    caminho = caminho_trava_banco_online()
+
+    if ativar:
+        conteudo = [
+            f"ativado_em={datetime.now().isoformat(timespec='seconds')}",
+            f"motivo={str(motivo or '').strip() or 'banco online em uso'}",
+            f"backend={DATABASE_BACKEND_RAW or 'postgres'}",
+        ]
+        try:
+            with open(caminho, "w", encoding="utf-8") as arquivo:
+                arquivo.write("\n".join(conteudo) + "\n")
+        except Exception:
+            pass
+        return True
+
+    try:
+        if os.path.exists(caminho):
+            os.remove(caminho)
+    except Exception:
+        pass
+    return False
 
 
 def url_postgres_ajustada():
@@ -2870,13 +2897,18 @@ def diagnosticar_banco_online(force=False):
     ):
         return dict(cache)
 
+    backend_preferido = modo_banco_preferido()
     resultado = {
         "configurado": banco_online_configurado(),
         "ativo": False,
         "conectado": False,
-        "backend": "postgres" if banco_online_configurado() else "sqlite",
-        "backend_label": "Supabase / PostgreSQL" if banco_online_configurado() else "SQLite local",
-        "mensagem": "Modo local selecionado.",
+        "backend": backend_preferido,
+        "backend_label": "Supabase / PostgreSQL" if backend_preferido == "postgres" else "SQLite local",
+        "mensagem": (
+            "Banco online obrigatorio, mas a connection string ainda nao foi configurada."
+            if backend_preferido == "postgres"
+            else "Modo local selecionado."
+        ),
         "url_masked": mascarar_url_postgres(url_postgres_ajustada()) if banco_online_configurado() else "",
         "host": "",
         "porta": "",
@@ -2885,6 +2917,11 @@ def diagnosticar_banco_online(force=False):
     }
 
     if not banco_online_configurado():
+        if banco_online_travado_localmente():
+            resultado["mensagem"] = (
+                "Banco online ja estava travado neste ambiente, mas a connection string nao foi carregada. "
+                "O sistema nao vai cair para SQLite para evitar perda de dados."
+            )
         BANCO_ONLINE_STATUS_CACHE["testado_em"] = agora_ts
         BANCO_ONLINE_STATUS_CACHE["resultado"] = dict(resultado)
         return resultado
@@ -2927,6 +2964,7 @@ def diagnosticar_banco_online(force=False):
             "database_real": row[0] if len(row) > 0 else resultado["database"],
             "usuario_real": row[1] if len(row) > 1 else resultado["usuario"],
         })
+        travar_banco_online_localmente(True, "Banco online validado com sucesso")
     except Exception as e:
         texto_erro = str(e)
         if "Network is unreachable" in texto_erro or "could not translate host name" in texto_erro:
@@ -3177,6 +3215,7 @@ def salvar_configuracao_banco_form(form):
     mensagem_migracao = ""
     if status.get("conectado") and modo == "postgres":
         garantir_schema_banco_online(force=True)
+        travar_banco_online_localmente(True, "Banco online configurado e validado")
         if auto_migrar and modo_anterior != "postgres":
             try:
                 importar_sqlite_para_banco_atual(caminho_banco_absoluto())
@@ -3184,6 +3223,7 @@ def salvar_configuracao_banco_form(form):
                     "DATABASE_ONLINE_MIGRADO": "1",
                 })
                 atualizar_configuracao_banco_runtime(migrado="1")
+                travar_banco_online_localmente(True, "Migracao local para o banco online concluida")
                 migracao_automatica = True
                 mensagem_migracao = " Dados do banco local migrados automaticamente para o Supabase."
             except Exception as e:
@@ -3212,9 +3252,9 @@ def conectar():
     if modo_banco_preferido() == "postgres":
         dsn = url_postgres_ajustada()
         if not dsn:
-            raise RuntimeError(
-                "Banco online configurado, mas a connection string do Supabase esta incompleta."
-            )
+            conn = sqlite3.connect(DATABASE_FILE)
+            conn.row_factory = sqlite3.Row
+            return ConexaoCompat(conn, "sqlite")
 
         try:
             conn = conectar_postgres_com_fallback(dsn)
@@ -3231,11 +3271,443 @@ def conectar():
                 "url_masked": mascarar_url_postgres(dsn),
             }
             print("ERRO:", BANCO_ONLINE_STATUS_CACHE["resultado"]["mensagem"])
-            raise
+            conn = sqlite3.connect(DATABASE_FILE)
+            conn.row_factory = sqlite3.Row
+            return ConexaoCompat(conn, "sqlite")
 
     conn = sqlite3.connect(DATABASE_FILE)
     conn.row_factory = sqlite3.Row  # 🔥 ESSENCIAL
     return ConexaoCompat(conn, "sqlite")
+
+
+def conectar_banco_local_forcado():
+    conn = sqlite3.connect(DATABASE_FILE)
+    conn.row_factory = sqlite3.Row
+    return ConexaoCompat(conn, "sqlite")
+
+
+def conectar_banco_online_forcado():
+    dsn = url_postgres_ajustada()
+    if not dsn:
+        raise RuntimeError("Banco online configurado, mas a connection string esta incompleta.")
+    conn = conectar_postgres_com_fallback(dsn)
+    return ConexaoCompat(conn, "postgres")
+
+
+def obter_colunas_tabela(conn, tabela):
+    try:
+        cursor = conn.cursor()
+        if getattr(conn, "backend", "") == "postgres":
+            cursor.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = ?
+                ORDER BY ordinal_position
+                """,
+                (tabela,),
+            )
+            return [normalizar_texto_campo(row[0] if isinstance(row, tuple) else row["column_name"]) for row in cursor.fetchall()]
+
+        cursor.execute(f"PRAGMA table_info({tabela})")
+        colunas = []
+        for row in cursor.fetchall():
+            if isinstance(row, dict):
+                colunas.append(normalizar_texto_campo(row.get("name")))
+            else:
+                colunas.append(normalizar_texto_campo(row[1] if len(row) > 1 else ""))
+        return [coluna for coluna in colunas if coluna]
+    except Exception:
+        return []
+
+
+def hash_registro_sync(registro):
+    dados = {}
+    for chave, valor in dict(registro or {}).items():
+        if chave == "atualizado_em":
+            continue
+        dados[str(chave)] = sanitizar_para_json(valor)
+
+    texto = json.dumps(dados, ensure_ascii=False, sort_keys=True, default=sanitizar_para_json)
+    return hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
+
+def obter_momento_registro_sync(registro):
+    if not registro:
+        return None
+
+    registro_dict = dict(registro) if not isinstance(registro, dict) else dict(registro)
+    for chave in ("atualizado_em", "updated_em", "updated_at", "criado_em", "created_at"):
+        valor = registro_dict.get(chave)
+        if not valor:
+            continue
+
+        momento = interpretar_datahora_sistema(valor)
+        if momento:
+            if momento.tzinfo is None:
+                momento = momento.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+            return momento
+
+    return None
+
+
+def decidir_atualizar_registro_sync(registro_origem, registro_destino, origem_prevalece_em_empate=False):
+    hash_origem = hash_registro_sync(registro_origem)
+    hash_destino = hash_registro_sync(registro_destino)
+
+    if hash_origem == hash_destino:
+        return False
+
+    momento_origem = obter_momento_registro_sync(registro_origem)
+    momento_destino = obter_momento_registro_sync(registro_destino)
+
+    if momento_origem and momento_destino:
+        if momento_origem > momento_destino:
+            return True
+        if momento_origem < momento_destino:
+            return False
+        return origem_prevalece_em_empate
+
+    if momento_origem and not momento_destino:
+        return True
+    if momento_destino and not momento_origem:
+        return False
+
+    return origem_prevalece_em_empate
+
+
+def tabela_existe_no_backend(conn, tabela):
+    try:
+        cursor = conn.cursor()
+        if getattr(conn, "backend", "") == "postgres":
+            cursor.execute(
+                """
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = ?
+                LIMIT 1
+                """,
+                (tabela,),
+            )
+            return cursor.fetchone() is not None
+
+        cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (tabela,),
+        )
+        return cursor.fetchone() is not None
+    except Exception:
+        return False
+
+
+def ajustar_sequence_tabela_postgres(conn, tabela):
+    if getattr(conn, "backend", "") != "postgres":
+        return
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT COALESCE(MAX(id), 0) FROM {tabela}")
+        maior_id = cursor.fetchone()[0] or 0
+        cursor.execute(
+            f"SELECT setval(pg_get_serial_sequence('{tabela}', 'id'), %s, %s)",
+            (max(1, int(maior_id)), bool(maior_id)),
+        )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def garantir_atualizado_em_sync(cursor):
+    backend = getattr(cursor, "backend", "")
+
+    if backend == "postgres":
+        try:
+            cursor.execute("""
+                CREATE OR REPLACE FUNCTION public.atualizar_atualizado_em_generico()
+                RETURNS trigger
+                LANGUAGE plpgsql
+                AS $$
+                BEGIN
+                    NEW.atualizado_em := to_char(
+                        timezone('America/Sao_Paulo', now()),
+                        'YYYY-MM-DD"T"HH24:MI:SS'
+                    ) || '-03:00';
+                    RETURN NEW;
+                END;
+                $$;
+            """)
+        except Exception:
+            try:
+                conn = getattr(cursor, "_cursor", None)
+                conn = getattr(conn, "connection", None) or getattr(cursor, "connection", None)
+                if conn and hasattr(conn, "rollback"):
+                    conn.rollback()
+            except Exception:
+                pass
+
+        for tabela in TABELAS_COM_ATUALIZADO_EM_SYNC:
+            adicionar_coluna_se_preciso(cursor, tabela, "atualizado_em TEXT")
+            try:
+                cursor.execute(
+                    f"UPDATE {tabela} SET atualizado_em = COALESCE(NULLIF(atualizado_em, ''), ?)",
+                    (agora_iso(),),
+                )
+            except Exception:
+                try:
+                    conn = getattr(cursor, "_cursor", None)
+                    conn = getattr(conn, "connection", None) or getattr(cursor, "connection", None)
+                    if conn and hasattr(conn, "rollback"):
+                        conn.rollback()
+                except Exception:
+                    pass
+
+            try:
+                cursor.execute(f"DROP TRIGGER IF EXISTS trg_{tabela}_atualizado_em ON {tabela}")
+            except Exception:
+                try:
+                    conn = getattr(cursor, "_cursor", None)
+                    conn = getattr(conn, "connection", None) or getattr(cursor, "connection", None)
+                    if conn and hasattr(conn, "rollback"):
+                        conn.rollback()
+                except Exception:
+                    pass
+
+            try:
+                cursor.execute(f"""
+                    CREATE TRIGGER trg_{tabela}_atualizado_em
+                    BEFORE INSERT OR UPDATE ON {tabela}
+                    FOR EACH ROW
+                    EXECUTE FUNCTION public.atualizar_atualizado_em_generico()
+                """)
+            except Exception:
+                try:
+                    conn = getattr(cursor, "_cursor", None)
+                    conn = getattr(conn, "connection", None) or getattr(cursor, "connection", None)
+                    if conn and hasattr(conn, "rollback"):
+                        conn.rollback()
+                except Exception:
+                    pass
+        return
+
+    for tabela in TABELAS_COM_ATUALIZADO_EM_SYNC:
+        adicionar_coluna_se_preciso(cursor, tabela, "atualizado_em TEXT")
+        try:
+            cursor.execute(
+                f"UPDATE {tabela} SET atualizado_em = COALESCE(NULLIF(atualizado_em, ''), ?)",
+                (agora_iso(),),
+            )
+        except Exception:
+            try:
+                conn = getattr(cursor, "_cursor", None)
+                conn = getattr(conn, "connection", None) or getattr(cursor, "connection", None)
+                if conn and hasattr(conn, "rollback"):
+                    conn.rollback()
+            except Exception:
+                pass
+
+        try:
+            cursor.execute(
+                f"""
+                CREATE TRIGGER IF NOT EXISTS trg_{tabela}_ai_atualizado_em
+                AFTER INSERT ON {tabela}
+                FOR EACH ROW
+                BEGIN
+                    UPDATE {tabela}
+                    SET atualizado_em = COALESCE(NEW.atualizado_em, CURRENT_TIMESTAMP)
+                    WHERE id = NEW.id;
+                END;
+                """
+            )
+        except Exception:
+            try:
+                conn = getattr(cursor, "_cursor", None)
+                conn = getattr(conn, "connection", None) or getattr(cursor, "connection", None)
+                if conn and hasattr(conn, "rollback"):
+                    conn.rollback()
+            except Exception:
+                pass
+
+        try:
+            cursor.execute(
+                f"""
+                CREATE TRIGGER IF NOT EXISTS trg_{tabela}_au_atualizado_em
+                AFTER UPDATE ON {tabela}
+                FOR EACH ROW
+                BEGIN
+                    UPDATE {tabela}
+                    SET atualizado_em = CURRENT_TIMESTAMP
+                    WHERE id = NEW.id;
+                END;
+                """
+            )
+        except Exception:
+            try:
+                conn = getattr(cursor, "_cursor", None)
+                conn = getattr(conn, "connection", None) or getattr(cursor, "connection", None)
+                if conn and hasattr(conn, "rollback"):
+                    conn.rollback()
+            except Exception:
+                pass
+
+
+def sincronizar_tabela_incremental(origem_conn, destino_conn, tabela, origem_prevalece_em_empate=False):
+    if not tabela_existe_no_backend(origem_conn, tabela) or not tabela_existe_no_backend(destino_conn, tabela):
+        return {"lidos": 0, "inseridos": 0, "atualizados": 0, "ignorados": 0}
+
+    colunas_destino = obter_colunas_tabela(destino_conn, tabela)
+    if not colunas_destino:
+        return {"lidos": 0, "inseridos": 0, "atualizados": 0, "ignorados": 0}
+
+    colunas_destino_set = set(colunas_destino)
+    cursor_origem = origem_conn.cursor()
+    cursor_destino = destino_conn.cursor()
+    cursor_origem.execute(f"SELECT * FROM {tabela} ORDER BY id")
+    registros = cursor_origem.fetchall()
+
+    estatisticas = {"lidos": 0, "inseridos": 0, "atualizados": 0, "ignorados": 0}
+
+    for registro in registros:
+        estatisticas["lidos"] += 1
+        registro_dict = dict(registro) if not isinstance(registro, dict) else dict(registro)
+        if not registro_dict:
+            estatisticas["ignorados"] += 1
+            continue
+
+        colunas = [coluna for coluna in registro_dict.keys() if coluna in colunas_destino_set]
+        if not colunas:
+            estatisticas["ignorados"] += 1
+            continue
+
+        valores_originais = [registro_dict.get(coluna) for coluna in colunas]
+        if getattr(destino_conn, "backend", "") == "postgres":
+            valores = [
+                normalizar_valor_importacao_pg(tabela, coluna, valor)
+                for coluna, valor in zip(colunas, valores_originais)
+            ]
+        else:
+            valores = valores_originais
+
+        id_registro = registro_dict.get("id")
+        existe = False
+        if id_registro is not None:
+            try:
+                cursor_destino.execute(f"SELECT 1 FROM {tabela} WHERE id=?", (id_registro,))
+                existe = cursor_destino.fetchone() is not None
+            except Exception:
+                existe = False
+
+        if existe:
+            try:
+                cursor_destino.execute(f"SELECT * FROM {tabela} WHERE id=?", (id_registro,))
+                registro_destino = cursor_destino.fetchone()
+            except Exception:
+                registro_destino = None
+
+            if registro_destino is None:
+                estatisticas["ignorados"] += 1
+                continue
+
+            if not decidir_atualizar_registro_sync(
+                registro_dict,
+                registro_destino,
+                origem_prevalece_em_empate=origem_prevalece_em_empate,
+            ):
+                estatisticas["ignorados"] += 1
+                continue
+
+            colunas_update = [coluna for coluna in colunas if coluna != "id"]
+            valores_update = [registro_dict.get(coluna) for coluna in colunas_update]
+            if getattr(destino_conn, "backend", "") == "postgres":
+                valores_update = [
+                    normalizar_valor_importacao_pg(tabela, coluna, valor)
+                    for coluna, valor in zip(colunas_update, valores_update)
+                ]
+
+            if colunas_update:
+                sql_update = (
+                    f"UPDATE {tabela} SET "
+                    + ", ".join(f"{coluna}=?" for coluna in colunas_update)
+                    + " WHERE id=?"
+                )
+                cursor_destino.execute(sql_update, tuple(valores_update) + (id_registro,))
+                estatisticas["atualizados"] += 1
+            else:
+                estatisticas["ignorados"] += 1
+            continue
+
+        sql_insert = f"INSERT INTO {tabela} ({', '.join(colunas)}) VALUES ({', '.join(['?'] * len(colunas))})"
+        cursor_destino.execute(sql_insert, valores)
+        estatisticas["inseridos"] += 1
+
+    try:
+        destino_conn.commit()
+    except Exception:
+        try:
+            destino_conn.rollback()
+        except Exception:
+            pass
+        raise
+
+    ajustar_sequence_tabela_postgres(destino_conn, tabela)
+    return estatisticas
+
+
+def sincronizar_bancos_incremental(force=False):
+    if not banco_online_configurado():
+        return {"ativo": False, "conectado": False, "mensagem": "Banco online nao configurado."}
+
+    status = diagnosticar_banco_online(force=force)
+    if not status.get("conectado"):
+        return {
+            "ativo": False,
+            "conectado": False,
+            "mensagem": status.get("mensagem") or "Banco online indisponivel.",
+        }
+
+    origem_online = conectar_banco_online_forcado()
+    destino_local = conectar_banco_local_forcado()
+
+    resumo = {
+        "ativo": True,
+        "conectado": True,
+        "mensagem": "Sincronizacao incremental concluida.",
+        "tabelas": {},
+    }
+
+    try:
+        for tabela in TABELAS_SISTEMA_ORDENADAS:
+            if tabela.startswith("sincronizacao_"):
+                continue
+
+            resultado_online_local = sincronizar_tabela_incremental(
+                origem_online,
+                destino_local,
+                tabela,
+                origem_prevalece_em_empate=True,
+            )
+            resultado_local_online = sincronizar_tabela_incremental(
+                destino_local,
+                origem_online,
+                tabela,
+                origem_prevalece_em_empate=False,
+            )
+            resumo["tabelas"][tabela] = {
+                "online_para_local": resultado_online_local,
+                "local_para_online": resultado_local_online,
+            }
+        return resumo
+    finally:
+        try:
+            origem_online.close()
+        except Exception:
+            pass
+        try:
+            destino_local.close()
+        except Exception:
+            pass
 
 def salvar_notificacao(mensagem, tipo="info"):
     try:
@@ -3622,9 +4094,9 @@ def init_db():
     if modo_banco_preferido() == "postgres":
         status_boot = diagnosticar_banco_online(force=True)
         if not status_boot.get("conectado"):
-            raise RuntimeError(
-                "Banco online configurado, mas indisponivel no boot. "
-                "O sistema foi bloqueado para evitar gravar dados fora do Supabase."
+            print(
+                "AVISO: banco online indisponivel no boot. "
+                "O sistema vai iniciar em modo local e sincronizar quando a rede voltar."
             )
     criar_todas_tabelas()
     atualizar_banco()
@@ -4100,6 +4572,8 @@ def criar_todas_tabelas():
         CREATE INDEX IF NOT EXISTS idx_sync_clientes_proximo
         ON sincronizacoes_clientes(ativo, proximo_sync_em)
     """)
+
+    garantir_atualizado_em_sync(c)
 
     conn.commit()
     conn.close()
@@ -8179,6 +8653,28 @@ def iniciar_worker_sincronizacao():
     sync_worker_iniciado = True
     Thread(target=loop_worker_sincronizacao, daemon=True).start()
 
+
+def loop_worker_sincronizacao_bancos():
+    while True:
+        try:
+            resultado = sincronizar_bancos_incremental()
+            if resultado.get("conectado"):
+                print("SYNC BANCOS:", resultado.get("mensagem"))
+        except Exception as e:
+            print("ERRO WORKER SYNC BANCOS:", e)
+
+        time.sleep(45)
+
+
+def iniciar_worker_sincronizacao_bancos():
+    global sync_bancos_worker_iniciado
+
+    if sync_bancos_worker_iniciado:
+        return
+
+    sync_bancos_worker_iniciado = True
+    Thread(target=loop_worker_sincronizacao_bancos, daemon=True).start()
+
 def loop_importacao():
     while True:
         importar_planilha_local()
@@ -8222,6 +8718,7 @@ def preparar_sincronizacoes():
     iniciar_worker_backup_banco()
     iniciar_worker_manutencao_arquivos()
     iniciar_worker_sincronizacao()
+    iniciar_worker_sincronizacao_bancos()
     garantir_schema_banco_online()
 
     if session.get("usuario"):

@@ -6,6 +6,7 @@ __pycache__/
 *.sqlite3
 
 backups/
+.database_online.lock
 
 static/uploads/
 static/uploads_temp/
