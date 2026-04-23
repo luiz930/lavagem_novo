@@ -70,9 +70,71 @@
 
 <div class="page-grid top-spacing">
     <div class="page-card">
+        <p class="pill-label">Banco online</p>
+        <h2 class="section-title top-spacing">Supabase / PostgreSQL</h2>
+        <p>
+            <span class="status-badge {% if banco_status.conectado %}status-badge--success{% elif banco_status.configurado %}status-badge--warning{% else %}status-badge--muted{% endif %}">
+                {% if banco_status.conectado %}
+                Conectado
+                {% elif banco_status.configurado %}
+                Configurado, mas offline
+                {% else %}
+                Nao configurado
+                {% endif %}
+            </span>
+        </p>
+        <p><b>Modo selecionado:</b> {{ banco_status.modo_label }}</p>
+        <p><b>Banco ativo agora:</b> {{ banco_status.backend_label }}</p>
+        <p><b>Conexao:</b> {{ banco_status.mensagem }}</p>
+        <p><b>URL:</b> {{ banco_status.dsn_masked or "Nao informado" }}</p>
+        <p><b>Host:</b> {{ banco_status.host or "-" }}</p>
+        <p><b>Banco:</b> {{ banco_status.database or "-" }}</p>
+        <p><b>Usuario:</b> {{ banco_status.usuario or "-" }}</p>
+    </div>
+
+    {% if admin_logado %}
+    <div class="page-card">
+        <h2 class="section-title">Configurar banco online</h2>
+        <p class="muted-text">Troque a conexao sem editar codigo. A senha fica somente no arquivo local `.env` e nao vai para o GitHub.</p>
+
+        <form action="/configuracoes/banco" method="POST" class="stack-form stack-form--wide top-spacing">
+            <div class="field-grid">
+                <select name="database_backend" required>
+                    <option value="sqlite" {% if banco_config.modo != 'postgres' %}selected{% endif %}>SQLite local</option>
+                    <option value="postgres" {% if banco_config.modo == 'postgres' %}selected{% endif %}>Supabase / PostgreSQL</option>
+                </select>
+                <input name="database_host" value="{{ banco_config.host }}" placeholder="db.udusrpvwvznwkwxdrgnj.supabase.co" autocomplete="off">
+                <input name="database_port" value="{{ banco_config.porta }}" placeholder="5432" autocomplete="off">
+                <input name="database_name" value="{{ banco_config.database }}" placeholder="postgres" autocomplete="off">
+                <input name="database_user" value="{{ banco_config.usuario }}" placeholder="postgres" autocomplete="off">
+                <input name="database_password" type="password" placeholder="Senha do banco online" autocomplete="new-password">
+            </div>
+
+            <p class="muted-text">Se escolher SQLite local, o sistema continua usando o banco da maquina. Se escolher Supabase, ele passa a usar o banco online assim que a conexao responder.</p>
+
+            <div class="actions-row actions-row--left">
+                <button type="submit">Salvar conexao</button>
+            </div>
+        </form>
+
+        <div class="actions-row actions-row--left top-spacing">
+            <form action="/configuracoes/banco/testar" method="POST">
+                <button type="submit">Testar conexao</button>
+            </form>
+            <form action="/configuracoes/banco/migrar" method="POST" onsubmit="return confirm('Migrar todos os dados do banco local para o Supabase agora? O sistema vai criar uma copia preventiva antes de concluir.');">
+                <button type="submit">Migrar banco local</button>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<div class="page-grid top-spacing">
+    <div class="page-card">
         <p class="pill-label">Backup automatico</p>
         <h2 class="section-title top-spacing">Protecao do sistema</h2>
         <p><b>Status:</b> Ativo</p>
+        <p><b>Banco atual:</b> {{ backup_status.backend_label }}</p>
         <p><b>Modo atual:</b> {{ backup_status.tipo_backup_label }}</p>
         <p><b>Frequencia atual:</b> {{ backup_status.frequencia_label }}</p>
         <p><b>Proximo backup previsto:</b> {{ backup_status.proximo_backup_em_fmt }}</p>
@@ -81,6 +143,7 @@
         <p><b>Quantidade salva:</b> {{ backup_status.quantidade }} arquivo(s)</p>
         <p><b>Retencao:</b> ultimos {{ backup_status.retencao }} backups</p>
         <p><b>Copia externa:</b> {% if backup_status.destino_externo_ativo %}Ativa{% else %}Desativada{% endif %}</p>
+        <p><b>Pasta gravavel:</b> {% if backup_status.destino_externo_escrevivel %}Sim{% else %}Nao{% endif %}</p>
         <p><b>Ultimo envio externo:</b> {{ backup_status.ultimo_destino_externo_em_fmt }}</p>
         <p><b>Arquivos externos encontrados:</b> {{ backup_status.destino_externo_quantidade }}</p>
         <p class="muted-text">Pasta: {{ backup_status.pasta }}</p>

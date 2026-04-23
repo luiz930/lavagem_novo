@@ -30,6 +30,15 @@ from reportlab.lib.utils import ImageReader
 from xml.sax.saxutils import escape as xml_escape
 
 try:
+    import psycopg2
+    from psycopg2.extras import DictCursor
+    POSTGRESQL_DISPONIVEL = True
+except Exception:
+    psycopg2 = None
+    DictCursor = None
+    POSTGRESQL_DISPONIVEL = False
+
+try:
     from PIL import Image, ImageFile, ImageOps, UnidentifiedImageError
     ImageFile.LOAD_TRUNCATED_IMAGES = True
     PILLOW_DISPONIVEL = True
@@ -39,6 +48,101 @@ except Exception:
     ImageOps = None
     UnidentifiedImageError = Exception
     PILLOW_DISPONIVEL = False
+
+
+def carregar_env_local(caminho=None):
+    if caminho is None:
+        caminho = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+    if not os.path.exists(caminho):
+        return
+
+    try:
+        with open(caminho, "r", encoding="utf-8") as arquivo:
+            for linha in arquivo:
+                linha = linha.strip()
+                if not linha or linha.startswith("#") or "=" not in linha:
+                    continue
+
+                chave, valor = linha.split("=", 1)
+                chave = chave.strip()
+                if not chave or chave in os.environ:
+                    continue
+
+                valor = valor.strip().strip('"').strip("'")
+                os.environ[chave] = valor
+    except Exception:
+        pass
+
+
+carregar_env_local()
+
+def caminho_env_local():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+
+def ler_env_local(caminho=None):
+    caminho = caminho or caminho_env_local()
+    dados = {}
+    if not os.path.exists(caminho):
+        return dados
+
+    try:
+        with open(caminho, "r", encoding="utf-8") as arquivo:
+            for linha in arquivo:
+                linha = linha.strip()
+                if not linha or linha.startswith("#") or "=" not in linha:
+                    continue
+                chave, valor = linha.split("=", 1)
+                chave = chave.strip()
+                if not chave:
+                    continue
+                dados[chave] = valor.strip().strip('"').strip("'")
+    except Exception:
+        pass
+
+    return dados
+
+
+def salvar_env_local(valores, caminho=None):
+    caminho = caminho or caminho_env_local()
+    dados = ler_env_local(caminho)
+
+    for chave, valor in (valores or {}).items():
+        if valor is None:
+            dados.pop(chave, None)
+            continue
+        texto = str(valor).strip()
+        if not texto:
+            dados.pop(chave, None)
+            continue
+        dados[chave] = texto
+
+    chaves_prioritarias = [
+        "DATABASE_BACKEND",
+        "DATABASE_URL",
+        "SUPABASE_DB_PASSWORD",
+        "SUPABASE_DATABASE_URL",
+    ]
+    linhas = []
+    for chave in chaves_prioritarias:
+        if chave in dados:
+            linhas.append(f"{chave}={dados.pop(chave)}")
+
+    for chave in sorted(dados):
+        linhas.append(f"{chave}={dados[chave]}")
+
+    with open(caminho, "w", encoding="utf-8") as arquivo:
+        arquivo.write("\n".join(linhas).strip() + "\n")
+
+
+DATABASE_URL_RAW = (os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DATABASE_URL") or "").strip()
+SUPABASE_DB_PASSWORD = (os.environ.get("SUPABASE_DB_PASSWORD") or "").strip()
+DATABASE_BACKEND_RAW = (
+    os.environ.get("DATABASE_BACKEND")
+    or os.environ.get("BACKEND_BANCO")
+    or ""
+).strip().lower()
 
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -52,6 +156,8 @@ UPLOADS_PERFIS_FOLDER = os.path.join(UPLOAD_FOLDER, "perfis")
 BACKUP_RETENCAO_PADRAO = 15
 BACKUP_TIPO_PADRAO = "completo"
 BACKUP_ARQUIVO_BANCO_ATUAL = "database_v2_atual.db"
+BACKUP_ARQUIVO_POSTGRES_ATUAL = "database_postgres_atual.json"
+BACKUP_ARQUIVO_POSTGRES_ATUAL_ZIP = "database_postgres_atual.zip"
 AGENDA_RETORNO_MARCOS = (15, 30, 45)
 AGENDA_RETORNO_LIMITE_ITENS = 18
 STATUS_RETORNO_PADRAO = "pendente"
@@ -77,6 +183,32 @@ FREQUENCIAS_BACKUP = [
 TIPOS_BACKUP = [
     {"value": "completo", "label": "Sistema completo"},
     {"value": "banco", "label": "Somente banco"},
+]
+TABELAS_SISTEMA_ORDENADAS = [
+    "notificacoes",
+    "sincronizacoes_clientes",
+    "usuarios",
+    "clientes",
+    "veiculos",
+    "tipos_servico",
+    "servicos",
+    "adicionais",
+    "servico_adicionais",
+    "fotos",
+    "produtos_pneu",
+    "checklist_itens",
+    "servico_checklist",
+    "historico_lavagens_sync",
+    "retornos_clientes",
+    "configuracao_empresa",
+    "orcamentos",
+    "orcamento_itens",
+    "notas_fiscais",
+    "nota_fiscal_itens",
+    "integracao_fiscal",
+    "configuracao_backup",
+    "manutencao_arquivos",
+    "auditoria",
 ]
 FOTO_MAX_DIMENSAO = 1600
 FOTO_QUALIDADE_JPEG = 82
@@ -233,6 +365,9 @@ def caminho_diretorio_backup():
     os.makedirs(BACKUP_FOLDER, exist_ok=True)
     return os.path.abspath(BACKUP_FOLDER)
 
+def caminho_banco_postgres_temporario():
+    return os.path.join(caminho_diretorio_backup(), BACKUP_ARQUIVO_POSTGRES_ATUAL)
+
 def bool_config_ativo(valor):
     texto = str(valor or "").strip().lower()
     return texto in {"1", "true", "on", "sim", "yes"}
@@ -264,6 +399,95 @@ def listar_pastas_sincronizadas_sugeridas():
 
     return sorted(set(encontrados))
 
+def traduzir_sql_para_postgres(sql):
+    texto = str(sql or "")
+    texto = re.sub(
+        r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT",
+        "BIGSERIAL PRIMARY KEY",
+        texto,
+        flags=re.IGNORECASE,
+    )
+    return texto
+
+class CursorCompat:
+    def __init__(self, cursor, backend):
+        self._cursor = cursor
+        self.backend = backend
+        self.lastrowid = getattr(cursor, "lastrowid", None)
+
+    def execute(self, sql, params=None):
+        sql = str(sql or "")
+        if self.backend == "postgres":
+            sql = traduzir_sql_para_postgres(sql)
+            parametros = tuple(params or ())
+            sql_exec = re.sub(r"\?", "%s", sql)
+            if sql_exec.lstrip().upper().startswith("INSERT") and "RETURNING" not in sql_exec.upper():
+                sql_exec = f"{sql_exec} RETURNING id"
+                self._cursor.execute(sql_exec, parametros)
+                resultado = self._cursor.fetchone()
+                self.lastrowid = resultado[0] if resultado else None
+                return self
+            self._cursor.execute(sql_exec, parametros)
+            self.lastrowid = getattr(self._cursor, "lastrowid", None)
+            return self
+
+        self._cursor.execute(sql, params or ())
+        self.lastrowid = getattr(self._cursor, "lastrowid", None)
+        return self
+
+    def executemany(self, sql, seq_of_params):
+        sql = str(sql or "")
+        if self.backend == "postgres":
+            sql = traduzir_sql_para_postgres(sql)
+            sql = re.sub(r"\?", "%s", sql)
+        self._cursor.executemany(sql, seq_of_params)
+        self.lastrowid = getattr(self._cursor, "lastrowid", None)
+        return self
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    def close(self):
+        return self._cursor.close()
+
+    def __iter__(self):
+        return iter(self._cursor)
+
+    def __getattr__(self, nome):
+        return getattr(self._cursor, nome)
+
+class ConexaoCompat:
+    def __init__(self, conn, backend):
+        self._conn = conn
+        self.backend = backend
+
+    def cursor(self):
+        if self.backend == "postgres":
+            return CursorCompat(self._conn.cursor(cursor_factory=DictCursor), self.backend)
+        return CursorCompat(self._conn.cursor(), self.backend)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def close(self):
+        return self._conn.close()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return self._conn.__exit__(exc_type, exc, tb)
+
+    def __getattr__(self, nome):
+        return getattr(self._conn, nome)
+
 def normalizar_tipo_backup(valor):
     tipo = str(valor or BACKUP_TIPO_PADRAO).strip().lower()
     return tipo if tipo in {"banco", "completo"} else BACKUP_TIPO_PADRAO
@@ -279,7 +503,12 @@ def nome_arquivo_backup(datahora=None, tipo_backup=BACKUP_TIPO_PADRAO):
     datahora = datahora or agora()
     tipo = normalizar_tipo_backup(tipo_backup)
     prefixo = "sistema_completo" if tipo == "completo" else "database_v2"
-    extensao = ".zip" if tipo == "completo" else ".db"
+    if tipo == "completo":
+        extensao = ".zip"
+    elif banco_online_ativo():
+        extensao = ".zip"
+    else:
+        extensao = ".db"
     return f"{prefixo}_{datahora.strftime('%Y%m%d_%H%M%S')}{extensao}"
 
 def nome_arquivo_backup_banco(datahora=None):
@@ -448,7 +677,9 @@ def identificar_tipo_backup_por_nome(nome):
     texto = str(nome or "").strip()
     if texto.startswith("sistema_completo_") and texto.endswith(".zip"):
         return "completo"
-    if texto.startswith("database_v2_") and texto.endswith(".db"):
+    if texto.startswith("database_v2_") and texto.endswith((".db", ".zip")):
+        return "banco"
+    if texto.startswith("database_postgres_") and texto.endswith(".zip"):
         return "banco"
     return ""
 
@@ -527,9 +758,34 @@ def preparar_destino_externo_backup(configuracao=None, criar=False):
 
     return pasta
 
+def pasta_escrevivel(pasta):
+    if not pasta or not os.path.isdir(pasta):
+        return False
+
+    arquivo_teste = os.path.join(
+        pasta,
+        f".wagen_write_test_{secrets.token_hex(6)}.tmp",
+    )
+
+    try:
+        with open(arquivo_teste, "w", encoding="utf-8") as fh:
+            fh.write("ok")
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            if os.path.exists(arquivo_teste):
+                os.remove(arquivo_teste)
+        except Exception:
+            pass
+
 def copiar_arquivo_para_destino(origem_path, destino_path):
     os.makedirs(os.path.dirname(destino_path), exist_ok=True)
-    caminho_temp = f"{destino_path}.tmp"
+    caminho_temp = os.path.join(
+        tempfile.gettempdir(),
+        f"{os.path.basename(destino_path)}.{secrets.token_hex(6)}.tmp",
+    )
 
     if os.path.exists(caminho_temp):
         try:
@@ -538,9 +794,17 @@ def copiar_arquivo_para_destino(origem_path, destino_path):
             pass
 
     shutil.copy2(origem_path, caminho_temp)
-    os.replace(caminho_temp, destino_path)
+    shutil.copy2(caminho_temp, destino_path)
+    try:
+        os.remove(caminho_temp)
+    except Exception:
+        pass
 
 def gerar_snapshot_banco_para_arquivo(destino_path):
+    if banco_online_ativo():
+        gravar_snapshot_banco_em_arquivo(destino_path)
+        return
+
     origem = None
     destino = None
     caminho_origem = caminho_banco_absoluto()
@@ -597,6 +861,15 @@ def sincronizar_backup_destino_externo(caminho_backup=None, configuracao=None, i
             "mensagem": "Selecione uma pasta sincronizada para enviar o backup.",
         }
 
+    if not pasta_escrevivel(pasta):
+        return {
+            "ativo": True,
+            "sucesso": False,
+            "pasta": pasta,
+            "arquivos": [],
+            "mensagem": "A pasta sincronizada nao esta gravavel neste momento.",
+        }
+
     copiados = []
 
     try:
@@ -608,7 +881,10 @@ def sincronizar_backup_destino_externo(caminho_backup=None, configuracao=None, i
             copiados.append(os.path.basename(destino_backup))
 
         if incluir_snapshot:
-            destino_banco = os.path.join(pasta, BACKUP_ARQUIVO_BANCO_ATUAL)
+            destino_banco = os.path.join(
+                pasta,
+                BACKUP_ARQUIVO_POSTGRES_ATUAL_ZIP if banco_online_ativo() else BACKUP_ARQUIVO_BANCO_ATUAL,
+            )
             gerar_snapshot_banco_para_arquivo(destino_banco)
             copiados.append(os.path.basename(destino_banco))
 
@@ -628,13 +904,191 @@ def sincronizar_backup_destino_externo(caminho_backup=None, configuracao=None, i
             "mensagem": f"Falha ao copiar para a pasta sincronizada: {e}",
         }
 
+def exportar_snapshot_banco_atual():
+    conn = conectar()
+    c = conn.cursor()
+    snapshot = {
+        "backend": "postgres" if banco_online_ativo() else "sqlite",
+        "gerado_em": agora_iso(),
+        "tabelas": {},
+    }
+
+    try:
+        for tabela in TABELAS_SISTEMA_ORDENADAS:
+            try:
+                c.execute(f"SELECT * FROM {tabela} ORDER BY id")
+                snapshot["tabelas"][tabela] = [dict(row) for row in c.fetchall()]
+            except Exception:
+                snapshot["tabelas"][tabela] = []
+        return snapshot
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+def gravar_snapshot_banco_em_arquivo(destino_path):
+    os.makedirs(os.path.dirname(destino_path), exist_ok=True)
+    caminho_temp = os.path.join(
+        tempfile.gettempdir(),
+        f"{os.path.basename(destino_path)}.{secrets.token_hex(6)}.tmp",
+    )
+    snapshot = exportar_snapshot_banco_atual()
+
+    with zipfile.ZipFile(
+        caminho_temp,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=6,
+    ) as arquivo_zip:
+        arquivo_zip.writestr(
+            BACKUP_ARQUIVO_POSTGRES_ATUAL,
+            json.dumps(snapshot, ensure_ascii=False, indent=2),
+        )
+        arquivo_zip.writestr(
+            "manifesto_backup.json",
+            json.dumps(
+                {
+                    "tipo_backup": "banco",
+                    "gerado_em": snapshot["gerado_em"],
+                    "arquivos": [BACKUP_ARQUIVO_POSTGRES_ATUAL],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+
+    shutil.copy2(caminho_temp, destino_path)
+    try:
+        os.remove(caminho_temp)
+    except Exception:
+        pass
+
+def escrever_snapshot_banco_no_zip(arquivo_zip):
+    snapshot = exportar_snapshot_banco_atual()
+    arquivo_zip.writestr(
+        BACKUP_ARQUIVO_POSTGRES_ATUAL,
+        json.dumps(snapshot, ensure_ascii=False, indent=2),
+    )
+
+def limpar_tabelas_sistema(cursor, backend):
+    tabelas = list(reversed(TABELAS_SISTEMA_ORDENADAS))
+    if backend == "postgres":
+        tabela_sql = ", ".join(tabelas)
+        cursor.execute(f"TRUNCATE TABLE {tabela_sql} RESTART IDENTITY CASCADE")
+        return
+
+    for tabela in tabelas:
+        try:
+            cursor.execute(f"DELETE FROM {tabela}")
+        except Exception:
+            pass
+
+def importar_snapshot_banco_json(caminho_json):
+    with open(caminho_json, "r", encoding="utf-8") as fh:
+        snapshot = json.load(fh)
+
+    conn = conectar()
+    c = conn.cursor()
+    backend = "postgres" if banco_online_ativo() else "sqlite"
+
+    try:
+        limpar_tabelas_sistema(c, backend)
+        tabelas = snapshot.get("tabelas") or {}
+        for tabela in TABELAS_SISTEMA_ORDENADAS:
+            registros = tabelas.get(tabela) or []
+            if not registros:
+                continue
+
+            for registro in registros:
+                colunas = list(registro.keys())
+                valores = [registro.get(coluna) for coluna in colunas]
+                marcadores = ", ".join(["?"] * len(colunas))
+                sql = f"INSERT INTO {tabela} ({', '.join(colunas)}) VALUES ({marcadores})"
+                c.execute(sql, valores)
+
+        if backend == "postgres":
+            for tabela in TABELAS_SISTEMA_ORDENADAS:
+                try:
+                    c.execute(f"SELECT COALESCE(MAX(id), 0) FROM {tabela}")
+                    maior_id = c.fetchone()[0] or 0
+                    c.execute(
+                        f"SELECT setval(pg_get_serial_sequence('{tabela}', 'id'), %s, %s)",
+                        (max(1, int(maior_id)), bool(maior_id)),
+                    )
+                except Exception:
+                    continue
+
+        conn.commit()
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+def importar_sqlite_para_banco_atual(caminho_sqlite):
+    if not os.path.isfile(caminho_sqlite):
+        raise FileNotFoundError("Arquivo SQLite de origem nao encontrado.")
+
+    origem = sqlite3.connect(f"file:{caminho_sqlite}?mode=ro", uri=True)
+    origem.row_factory = sqlite3.Row
+    origem_cursor = origem.cursor()
+
+    conn = conectar()
+    c = conn.cursor()
+    backend = "postgres" if banco_online_ativo() else "sqlite"
+
+    try:
+        limpar_tabelas_sistema(c, backend)
+        for tabela in TABELAS_SISTEMA_ORDENADAS:
+            try:
+                origem_cursor.execute(f"SELECT * FROM {tabela} ORDER BY id")
+                registros = origem_cursor.fetchall()
+            except Exception:
+                continue
+
+            for registro in registros:
+                registro_dict = dict(registro)
+                if not registro_dict:
+                    continue
+
+                colunas = list(registro_dict.keys())
+                valores = [registro_dict.get(coluna) for coluna in colunas]
+                marcadores = ", ".join(["?"] * len(colunas))
+                sql = f"INSERT INTO {tabela} ({', '.join(colunas)}) VALUES ({marcadores})"
+                c.execute(sql, valores)
+
+        if backend == "postgres":
+            for tabela in TABELAS_SISTEMA_ORDENADAS:
+                try:
+                    c.execute(f"SELECT COALESCE(MAX(id), 0) FROM {tabela}")
+                    maior_id = c.fetchone()[0] or 0
+                    c.execute(
+                        f"SELECT setval(pg_get_serial_sequence('{tabela}', 'id'), %s, %s)",
+                        (max(1, int(maior_id)), bool(maior_id)),
+                    )
+                except Exception:
+                    continue
+
+        conn.commit()
+    finally:
+        try:
+            origem.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 def listar_fontes_backup_completo():
     fontes = []
 
-    for nome_banco in ("database_v2.db", "database.db"):
-        caminho_banco = os.path.abspath(nome_banco)
-        if os.path.isfile(caminho_banco):
-            fontes.append((caminho_banco, nome_banco))
+    if not banco_online_ativo():
+        for nome_banco in ("database_v2.db", "database.db"):
+            caminho_banco = os.path.abspath(nome_banco)
+            if os.path.isfile(caminho_banco):
+                fontes.append((caminho_banco, nome_banco))
 
     uploads_path = caminho_uploads_absoluto()
     if os.path.isdir(uploads_path):
@@ -688,6 +1142,10 @@ def escrever_zip_backup_completo(destino_path):
             arquivo_zip.write(origem_path, destino_rel)
             manifesto["arquivos"].append(destino_rel)
 
+        if banco_online_ativo():
+            escrever_snapshot_banco_no_zip(arquivo_zip)
+            manifesto["arquivos"].append(BACKUP_ARQUIVO_POSTGRES_ATUAL)
+
         arquivo_zip.writestr(
             "manifesto_backup.json",
             json.dumps(manifesto, ensure_ascii=False, indent=2),
@@ -702,8 +1160,12 @@ def restaurar_backup_completo_zip(caminho_backup_zip):
         with zipfile.ZipFile(caminho_backup_zip, "r") as arquivo_zip:
             arquivo_zip.extractall(pasta_temp)
 
+        snapshot_postgres = os.path.join(pasta_temp, BACKUP_ARQUIVO_POSTGRES_ATUAL)
         banco_extraido = os.path.join(pasta_temp, "database_v2.db")
-        if os.path.isfile(banco_extraido):
+
+        if banco_online_ativo() and os.path.isfile(snapshot_postgres):
+            importar_snapshot_banco_json(snapshot_postgres)
+        elif os.path.isfile(banco_extraido):
             origem_db = sqlite3.connect(f"file:{banco_extraido}?mode=ro", uri=True)
             destino_db = sqlite3.connect(caminho_banco_absoluto())
             try:
@@ -756,6 +1218,8 @@ def obter_status_backup_banco():
 
     return {
         "ativo": True,
+        "backend": "postgres" if banco_online_ativo() else "sqlite",
+        "backend_label": "Supabase / PostgreSQL" if banco_online_ativo() else "SQLite local",
         "pasta": caminho_diretorio_backup(),
         "retencao": configuracao["retencao_arquivos"],
         "frequencia": configuracao["frequencia"],
@@ -776,6 +1240,7 @@ def obter_status_backup_banco():
         "destino_externo_ativo": bool(int(configuracao.get("destino_externo_ativo") or 0)),
         "destino_externo_pasta": destino_externo_pasta,
         "destino_externo_disponivel": bool(destino_externo_pasta and os.path.isdir(destino_externo_pasta)),
+        "destino_externo_escrevivel": pasta_escrevivel(destino_externo_pasta),
         "destino_externo_quantidade": len(backups_externos),
         "ultimo_destino_externo_nome": ultimo_externo["nome"] if ultimo_externo else "",
         "ultimo_destino_externo_em_fmt": (
@@ -840,15 +1305,18 @@ def criar_backup_banco(force=False, tipo_backup=None):
                     mensagem += f" Aviso: {sync_externo['mensagem']}"
             return True, mensagem, destino_path
 
-        caminho_origem = caminho_banco_absoluto()
-        if not os.path.exists(caminho_origem):
-            return False, "Banco principal nao encontrado para backup.", None
+        if banco_online_ativo():
+            gravar_snapshot_banco_em_arquivo(destino_path)
+        else:
+            caminho_origem = caminho_banco_absoluto()
+            if not os.path.exists(caminho_origem):
+                return False, "Banco principal nao encontrado para backup.", None
 
-        origem = sqlite3.connect(f"file:{caminho_origem}?mode=ro", uri=True)
-        destino = sqlite3.connect(destino_path)
+            origem = sqlite3.connect(f"file:{caminho_origem}?mode=ro", uri=True)
+            destino = sqlite3.connect(destino_path)
 
-        with destino:
-            origem.backup(destino)
+            with destino:
+                origem.backup(destino)
 
         limpar_backups_antigos_banco(tipo_efetivo)
         mensagem = "Backup automatico do banco criado com sucesso."
@@ -909,6 +1377,23 @@ def restaurar_backup_banco(nome_arquivo_backup):
         restore_lock = True
         if selecionado["tipo_backup"] == "completo":
             restaurar_backup_completo_zip(selecionado["caminho"])
+        elif banco_online_ativo():
+            if selecionado["caminho"].lower().endswith(".zip"):
+                with tempfile.TemporaryDirectory(prefix="restore_backup_") as pasta_temp:
+                    with zipfile.ZipFile(selecionado["caminho"], "r") as arquivo_zip:
+                        arquivo_zip.extractall(pasta_temp)
+
+                    snapshot_postgres = os.path.join(pasta_temp, BACKUP_ARQUIVO_POSTGRES_ATUAL)
+                    if os.path.isfile(snapshot_postgres):
+                        importar_snapshot_banco_json(snapshot_postgres)
+                    else:
+                        banco_extraido = os.path.join(pasta_temp, "database_v2.db")
+                        if os.path.isfile(banco_extraido):
+                            importar_sqlite_para_banco_atual(banco_extraido)
+                        else:
+                            raise FileNotFoundError("Snapshot do banco nao encontrado no backup online.")
+            else:
+                importar_sqlite_para_banco_atual(selecionado["caminho"])
         else:
             origem = sqlite3.connect(f"file:{selecionado['caminho']}?mode=ro", uri=True)
             destino = sqlite3.connect(caminho_banco_absoluto())
@@ -1864,11 +2349,340 @@ backup_lock = Lock()
 backup_worker_iniciado = False
 maintenance_lock = Lock()
 maintenance_worker_iniciado = False
+BANCO_ONLINE_STATUS_CACHE = {
+    "testado_em": 0.0,
+    "resultado": {},
+}
+BANCO_ONLINE_STATUS_CACHE_TTL = 30
+
+
+def atualizar_configuracao_banco_runtime(database_url=None, senha=None, backend=None):
+    global DATABASE_URL_RAW, SUPABASE_DB_PASSWORD, DATABASE_BACKEND_RAW
+
+    if database_url is not None:
+        DATABASE_URL_RAW = str(database_url).strip()
+        os.environ["DATABASE_URL"] = DATABASE_URL_RAW
+        os.environ["SUPABASE_DATABASE_URL"] = DATABASE_URL_RAW
+
+    if senha is not None:
+        SUPABASE_DB_PASSWORD = str(senha).strip()
+        os.environ["SUPABASE_DB_PASSWORD"] = SUPABASE_DB_PASSWORD
+
+    if backend is not None:
+        DATABASE_BACKEND_RAW = str(backend).strip().lower()
+        os.environ["DATABASE_BACKEND"] = DATABASE_BACKEND_RAW
+
+    BANCO_ONLINE_STATUS_CACHE["testado_em"] = 0.0
+    BANCO_ONLINE_STATUS_CACHE["resultado"] = {}
+
+
+def modo_banco_preferido():
+    modo = str(DATABASE_BACKEND_RAW or "").strip().lower()
+    if modo in {"sqlite", "local"}:
+        return "sqlite"
+    if modo in {"postgres", "supabase", "online"}:
+        return "postgres"
+    return "postgres" if DATABASE_URL_RAW else "sqlite"
+
+
+def url_postgres_ajustada():
+    url = DATABASE_URL_RAW
+    if not url:
+        return ""
+
+    partes = desmontar_url_postgres(url)
+    if not partes.get("host"):
+        return ""
+    senha = SUPABASE_DB_PASSWORD or partes.get("senha") or ""
+    if not senha and "[YOUR-PASSWORD]" in url:
+        return ""
+
+    usuario = quote(partes.get("usuario") or "postgres")
+    host = partes.get("host") or ""
+    porta = str(
+        int(str(partes.get("porta") or "5432").strip())
+        if str(partes.get("porta") or "5432").strip().isdigit()
+        else 5432
+    )
+    banco = partes.get("database") or "postgres"
+    url = f"postgresql://{usuario}:{quote(senha)}@{host}:{porta}/{banco}"
+
+    if "sslmode=" not in url:
+        separador = "&" if "?" in url else "?"
+        url = f"{url}{separador}sslmode=require"
+
+    if "connect_timeout=" not in url:
+        separador = "&" if "?" in url else "?"
+        url = f"{url}{separador}connect_timeout=10"
+
+    return url
+
+
+def banco_online_configurado():
+    return modo_banco_preferido() == "postgres" and bool(DATABASE_URL_RAW)
+
+
+def mascarar_url_postgres(url):
+    try:
+        partes = desmontar_url_postgres(url)
+    except Exception:
+        return ""
+
+    if not partes.get("scheme") or not partes.get("host"):
+        return ""
+
+    usuario = partes.get("usuario") or "postgres"
+    host = partes.get("host") or ""
+    porta = f":{partes.get('porta')}" if partes.get("porta") else ""
+    banco = partes.get("database") or "postgres"
+    return f"{partes.get('scheme') or 'postgresql'}://{usuario}:***@{host}{porta}/{banco}"
+
+
+def diagnosticar_banco_online(force=False):
+    agora_ts = time.time()
+    cache = BANCO_ONLINE_STATUS_CACHE.get("resultado") or {}
+    testado_em = float(BANCO_ONLINE_STATUS_CACHE.get("testado_em") or 0.0)
+    if (
+        not force
+        and cache
+        and agora_ts - testado_em < BANCO_ONLINE_STATUS_CACHE_TTL
+    ):
+        return dict(cache)
+
+    resultado = {
+        "configurado": banco_online_configurado(),
+        "ativo": False,
+        "conectado": False,
+        "backend": "postgres" if banco_online_configurado() else "sqlite",
+        "backend_label": "Supabase / PostgreSQL" if banco_online_configurado() else "SQLite local",
+        "mensagem": "Modo local selecionado.",
+        "url_masked": mascarar_url_postgres(url_postgres_ajustada()) if banco_online_configurado() else "",
+        "host": "",
+        "porta": "",
+        "database": "",
+        "usuario": "",
+    }
+
+    if not banco_online_configurado():
+        BANCO_ONLINE_STATUS_CACHE["testado_em"] = agora_ts
+        BANCO_ONLINE_STATUS_CACHE["resultado"] = dict(resultado)
+        return resultado
+
+    if not POSTGRESQL_DISPONIVEL:
+        resultado["mensagem"] = (
+            "Banco online configurado, mas o driver PostgreSQL nao esta instalado."
+        )
+        BANCO_ONLINE_STATUS_CACHE["testado_em"] = agora_ts
+        BANCO_ONLINE_STATUS_CACHE["resultado"] = dict(resultado)
+        return resultado
+
+    dsn = url_postgres_ajustada()
+    if not dsn:
+        resultado["mensagem"] = (
+            "A conexao do Supabase ainda esta incompleta. Verifique a senha e a URL."
+        )
+        BANCO_ONLINE_STATUS_CACHE["testado_em"] = agora_ts
+        BANCO_ONLINE_STATUS_CACHE["resultado"] = dict(resultado)
+        return resultado
+
+    resultado.update({
+        "host": desmontar_url_postgres(dsn).get("host") or "",
+        "porta": str(desmontar_url_postgres(dsn).get("porta") or 5432),
+        "database": desmontar_url_postgres(dsn).get("database") or "",
+        "usuario": desmontar_url_postgres(dsn).get("usuario") or "",
+        "url_masked": mascarar_url_postgres(dsn),
+    })
+
+    try:
+        conn = psycopg2.connect(dsn)
+        c = conn.cursor()
+        c.execute("SELECT current_database(), current_user")
+        row = c.fetchone() or ("", "")
+        conn.close()
+        resultado.update({
+            "ativo": True,
+            "conectado": True,
+            "mensagem": "Conexao com o banco online estabelecida com sucesso.",
+            "database_real": row[0] if len(row) > 0 else resultado["database"],
+            "usuario_real": row[1] if len(row) > 1 else resultado["usuario"],
+        })
+    except Exception as e:
+        resultado["mensagem"] = f"Falha ao conectar no banco online: {e}"
+
+    BANCO_ONLINE_STATUS_CACHE["testado_em"] = agora_ts
+    BANCO_ONLINE_STATUS_CACHE["resultado"] = dict(resultado)
+    return resultado
+
+
+def banco_online_ativo():
+    return bool(diagnosticar_banco_online().get("conectado"))
+
+
+def desmontar_url_postgres(url):
+    texto = str(url or "").strip()
+    if not texto:
+        return {
+            "scheme": "postgresql",
+            "host": "",
+            "porta": "5432",
+            "database": "postgres",
+            "usuario": "postgres",
+            "senha": "",
+        }
+
+    partes = urlparse(texto)
+    host = (partes.hostname or "").strip()
+    porta = str(partes.port or 5432) if host else "5432"
+    database = (partes.path or "").lstrip("/").strip() or "postgres"
+    usuario = (partes.username or "postgres").strip() or "postgres"
+    senha = (partes.password or "").strip()
+    host_invalido = not host or host.lower() in {"postgres", "postgresql"} or "." not in host
+    database_invalido = not database or "@" in database or database.lower().startswith("postgresql")
+
+    if host_invalido or database_invalido:
+        ultimo_arroba = texto.rfind("@")
+        trecho = texto[ultimo_arroba + 1 :] if ultimo_arroba >= 0 else texto
+        trecho = trecho.lstrip("/")
+
+        padrao = re.match(
+            r"(?P<host>[A-Za-z0-9.-]+\.[A-Za-z]{2,})(?::(?P<porta>\d+))?/(?P<database>[^?#/]+)",
+            trecho,
+        )
+        if padrao:
+            host = padrao.group("host") or host
+            porta = padrao.group("porta") or porta or "5432"
+            database = (padrao.group("database") or database).split(":", 1)[0].strip() or database
+        else:
+            padrao_host = re.search(r"([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\.[A-Za-z]{2,})", texto)
+            if padrao_host:
+                host = padrao_host.group(1)
+
+            banco_match = re.search(r"/([^/?#]+)", trecho)
+            if banco_match:
+                database = banco_match.group(1).split(":", 1)[0].strip() or database
+
+    if not host:
+        return {
+            "scheme": partes.scheme or "postgresql",
+            "host": "",
+            "porta": porta or "5432",
+            "database": database or "postgres",
+            "usuario": usuario or "postgres",
+            "senha": senha,
+        }
+
+    return {
+        "scheme": partes.scheme or "postgresql",
+        "host": host,
+        "porta": str(int(str(porta).strip()) if str(porta).strip().isdigit() else 5432),
+        "database": database or "postgres",
+        "usuario": usuario or "postgres",
+        "senha": senha,
+    }
+
+
+def quebrar_url_postgres(url):
+    partes = desmontar_url_postgres(url)
+    return {
+        "host": partes.get("host") or "",
+        "porta": partes.get("porta") or "5432",
+        "database": partes.get("database") or "postgres",
+        "usuario": partes.get("usuario") or "postgres",
+    }
+
+
+def montar_url_postgres(host, porta, database, usuario, senha):
+    host = normalizar_texto_campo(host)
+    database = normalizar_texto_campo(database) or "postgres"
+    usuario = normalizar_texto_campo(usuario) or "postgres"
+    senha = str(senha or "").strip()
+    porta = str(converter_inteiro(porta, 5432) or 5432)
+
+    if not host:
+        return ""
+
+    return f"postgresql://{quote(usuario)}:{quote(senha)}@{host}:{porta}/{database}"
+
+
+def obter_configuracao_banco_form():
+    status = diagnosticar_banco_online()
+    origem = url_postgres_ajustada() or DATABASE_URL_RAW
+    partes = quebrar_url_postgres(origem)
+    partes.update({
+        "modo": modo_banco_preferido(),
+        "url_masked": status.get("url_masked") or "",
+        "senha_preenchida": bool(SUPABASE_DB_PASSWORD),
+    })
+    return partes
+
+
+def salvar_configuracao_banco_form(form):
+    modo = str(form.get("database_backend") or "sqlite").strip().lower()
+    if modo not in {"sqlite", "postgres"}:
+        modo = "sqlite"
+
+    configuracao_atual = obter_configuracao_banco_form()
+    host = normalizar_texto_campo(form.get("database_host")) or configuracao_atual.get("host") or ""
+    porta = normalizar_texto_campo(form.get("database_port")) or configuracao_atual.get("porta") or "5432"
+    database = normalizar_texto_campo(form.get("database_name")) or configuracao_atual.get("database") or "postgres"
+    usuario = normalizar_texto_campo(form.get("database_user")) or configuracao_atual.get("usuario") or "postgres"
+    senha = form.get("database_password") or SUPABASE_DB_PASSWORD
+
+    url_atual = DATABASE_URL_RAW
+    senha_atual = SUPABASE_DB_PASSWORD
+
+    if modo == "postgres":
+        if host.lower() in {"postgres", "postgresql"} or "." not in host:
+            host = configuracao_atual.get("host") or host
+
+        if not host or not senha:
+            raise ValueError("Preencha o host do banco online e a senha antes de salvar.")
+        url_atual = montar_url_postgres(host, porta, database, usuario, senha)
+        senha_atual = str(senha).strip()
+
+    atualizar_configuracao_banco_runtime(url_atual, senha_atual, modo)
+    salvar_env_local({
+        "DATABASE_BACKEND": modo,
+        "DATABASE_URL": url_atual,
+        "SUPABASE_DB_PASSWORD": senha_atual,
+        "SUPABASE_DATABASE_URL": url_atual,
+    })
+
+    diagnosticar_banco_online(force=True)
+    return obter_status_banco_online()
+
+
+def obter_status_banco_online():
+    status = diagnosticar_banco_online()
+    status["modo"] = modo_banco_preferido()
+    status["modo_label"] = "Supabase / PostgreSQL" if status["modo"] == "postgres" else "SQLite local"
+    status["dsn_masked"] = status.get("url_masked") or ""
+    status["backend"] = "postgres" if status.get("conectado") else "sqlite"
+    status["backend_label"] = "Supabase / PostgreSQL" if status.get("conectado") else "SQLite local"
+    return status
 
 def conectar():
+    if banco_online_ativo():
+        dsn = url_postgres_ajustada()
+        try:
+            conn = psycopg2.connect(dsn)
+            return ConexaoCompat(conn, "postgres")
+        except Exception as e:
+            BANCO_ONLINE_STATUS_CACHE["testado_em"] = 0.0
+            BANCO_ONLINE_STATUS_CACHE["resultado"] = {
+                "configurado": True,
+                "ativo": False,
+                "conectado": False,
+                "backend": "postgres",
+                "backend_label": "Supabase / PostgreSQL",
+                "mensagem": f"Falha ao abrir conexao online. Usando SQLite local temporariamente: {e}",
+                "url_masked": mascarar_url_postgres(dsn),
+            }
+            print("AVISO:", BANCO_ONLINE_STATUS_CACHE["resultado"]["mensagem"])
+
     conn = sqlite3.connect(DATABASE_FILE)
     conn.row_factory = sqlite3.Row  # 🔥 ESSENCIAL
-    return conn
+    return ConexaoCompat(conn, "sqlite")
 
 def salvar_notificacao(mensagem, tipo="info"):
     try:
@@ -2174,7 +2988,7 @@ def init_db():
     atualizar_banco()
 
 def criar_todas_tabelas():
-    conn = sqlite3.connect(DATABASE_FILE)
+    conn = conectar()
     c = conn.cursor()
 
     # 🔔 NOTIFICAÇÕES
@@ -7224,6 +8038,8 @@ def configuracoes():
     sincronizar_sessao_usuario()
     pode_gerenciar_usuarios = usuario_admin() and not session.get("senha_alteracao_obrigatoria")
     usuarios = carregar_usuarios_configuracao() if pode_gerenciar_usuarios else []
+    banco_status = obter_status_banco_online()
+    banco_config = obter_configuracao_banco_form()
     backup_config = obter_configuracao_backup()
     arquivos_status = obter_status_arquivos()
 
@@ -7246,6 +8062,8 @@ def configuracoes():
         },
         usuarios=usuarios,
         admin_logado=pode_gerenciar_usuarios,
+        banco_status=banco_status,
+        banco_config=banco_config,
         backup_status=obter_status_backup_banco(),
         backup_config=backup_config,
         frequencias_backup=FREQUENCIAS_BACKUP,
@@ -7254,6 +8072,114 @@ def configuracoes():
         arquivos_status=arquivos_status,
         pastas_sync_sugeridas=listar_pastas_sincronizadas_sugeridas(),
     )
+
+@app.route("/configuracoes/banco", methods=["POST"])
+def salvar_configuracao_banco():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem alterar o banco online.")
+        return redirect("/configuracoes")
+
+    try:
+        status = salvar_configuracao_banco_form(request.form)
+    except ValueError as e:
+        definir_feedback_configuracoes("erro", str(e))
+        return redirect("/configuracoes")
+
+    registrar_auditoria(
+        "atualizou_banco_online",
+        "banco",
+        detalhes={
+            "modo": status.get("modo"),
+            "conectado": bool(status.get("conectado")),
+            "host": status.get("host"),
+            "database": status.get("database"),
+        },
+    )
+
+    if status.get("conectado"):
+        definir_feedback_configuracoes(
+            "sucesso",
+            "Configuracao do banco salva e conexao com o Supabase validada com sucesso.",
+        )
+    else:
+        definir_feedback_configuracoes(
+            "erro",
+            f"Configuracao salva, mas a conexao online ainda nao respondeu: {status.get('mensagem')}",
+        )
+
+    return redirect("/configuracoes")
+
+@app.route("/configuracoes/banco/testar", methods=["POST"])
+def testar_configuracao_banco():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem testar o banco online.")
+        return redirect("/configuracoes")
+
+    status = diagnosticar_banco_online(force=True)
+    registrar_auditoria(
+        "testou_banco_online",
+        "banco",
+        detalhes={
+            "conectado": bool(status.get("conectado")),
+            "mensagem": status.get("mensagem"),
+        },
+    )
+
+    if status.get("conectado"):
+        definir_feedback_configuracoes("sucesso", "Conexao com o Supabase validada com sucesso.")
+    else:
+        definir_feedback_configuracoes("erro", status.get("mensagem") or "Nao foi possivel validar a conexao online.")
+
+    return redirect("/configuracoes")
+
+@app.route("/configuracoes/banco/migrar", methods=["POST"])
+def migrar_banco_para_supabase():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem migrar o banco para o Supabase.")
+        return redirect("/configuracoes")
+
+    status = diagnosticar_banco_online(force=True)
+    if not status.get("conectado"):
+        definir_feedback_configuracoes(
+            "erro",
+            "Antes de migrar, a conexao com o Supabase precisa estar ativa.",
+        )
+        return redirect("/configuracoes")
+
+    try:
+        importar_sqlite_para_banco_atual(caminho_banco_absoluto())
+        criar_backup_banco(force=True, tipo_backup="banco")
+        registrar_auditoria(
+            "migracao_banco_online",
+            "banco",
+            detalhes={
+                "origem": caminho_banco_absoluto(),
+                "destino": "supabase",
+            },
+        )
+        definir_feedback_configuracoes(
+            "sucesso",
+            "Dados do SQLite local migrados para o Supabase com sucesso. O sistema ja pode operar online.",
+        )
+    except Exception as e:
+        definir_feedback_configuracoes(
+            "erro",
+            f"Nao consegui migrar os dados para o Supabase: {e}",
+        )
+
+    return redirect("/configuracoes")
 
 @app.route("/configuracoes/backup", methods=["POST"])
 def salvar_configuracao_backup():
