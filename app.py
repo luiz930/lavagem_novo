@@ -31,6 +31,18 @@ from reportlab.lib.utils import ImageReader
 from xml.sax.saxutils import escape as xml_escape
 
 try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build as google_build
+    from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+    GOOGLE_DRIVE_DISPONIVEL = True
+except Exception:
+    service_account = None
+    google_build = None
+    MediaFileUpload = None
+    MediaIoBaseDownload = None
+    GOOGLE_DRIVE_DISPONIVEL = False
+
+try:
     import psycopg2
     from psycopg2.extras import DictCursor
     POSTGRESQL_DISPONIVEL = True
@@ -380,6 +392,81 @@ def normalizar_caminho_destino_externo(valor):
 
     return os.path.abspath(os.path.expandvars(os.path.expanduser(texto)))
 
+def normalizar_tipo_destino_backup(valor):
+    tipo = str(valor or "pasta").strip().lower()
+    if tipo in {"google_drive", "drive", "online"}:
+        return "google_drive"
+    return "pasta"
+
+def carregar_credenciais_google_drive():
+    if not GOOGLE_DRIVE_DISPONIVEL:
+        return None, "Instale google-api-python-client e google-auth para usar o Google Drive."
+
+    chaves = [
+        "GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON",
+        "GOOGLE_DRIVE_CREDENTIALS_JSON",
+    ]
+    dados_json = ""
+    for chave in chaves:
+        dados_json = (os.environ.get(chave) or "").strip()
+        if dados_json:
+            break
+
+    if dados_json:
+        try:
+            credenciais_info = json.loads(dados_json)
+            return credenciais_info, ""
+        except Exception as e:
+            return None, f"Credenciais JSON do Google Drive invalidas: {e}"
+
+    caminho_env = (os.environ.get("GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE") or "").strip()
+    if caminho_env and os.path.isfile(caminho_env):
+        try:
+            with open(caminho_env, "r", encoding="utf-8") as arquivo:
+                return json.load(arquivo), ""
+        except Exception as e:
+            return None, f"Arquivo de credenciais do Google Drive invalido: {e}"
+
+    caminho_local = os.path.join(os.path.dirname(os.path.abspath(__file__)), "google_drive_service_account.json")
+    if os.path.isfile(caminho_local):
+        try:
+            with open(caminho_local, "r", encoding="utf-8") as arquivo:
+                return json.load(arquivo), ""
+        except Exception as e:
+            return None, f"Arquivo local de credenciais do Google Drive invalido: {e}"
+
+    return None, (
+        "Configure a variavel GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON ou o arquivo "
+        "google_drive_service_account.json para autenticar no Google Drive."
+    )
+
+def obter_servico_google_drive():
+    credenciais_info, erro = carregar_credenciais_google_drive()
+    if erro:
+        raise RuntimeError(erro)
+    if not credenciais_info:
+        raise RuntimeError("Credenciais do Google Drive nao configuradas.")
+
+    credenciais = service_account.Credentials.from_service_account_info(
+        credenciais_info,
+        scopes=["https://www.googleapis.com/auth/drive"],
+    )
+    return google_build("drive", "v3", credentials=credenciais, cache_discovery=False)
+
+def caminho_env_google_drive_fallback():
+    return (os.environ.get("GOOGLE_DRIVE_FOLDER_ID") or "").strip()
+
+def identificar_tipo_backup_google_drive(nome):
+    return identificar_tipo_backup_por_nome(nome)
+
+def formato_tempo_google_drive(modified_time):
+    texto = str(modified_time or "").replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(texto)
+        return dt.astimezone(ZoneInfo("America/Sao_Paulo")).isoformat(timespec="seconds")
+    except Exception:
+        return agora_iso()
+
 def listar_pastas_sincronizadas_sugeridas():
     usuario_home = os.path.expanduser("~")
     candidatos = [
@@ -544,7 +631,9 @@ def configuracao_backup_padrao():
         "tipo_backup": BACKUP_TIPO_PADRAO,
         "retencao_arquivos": BACKUP_RETENCAO_PADRAO,
         "destino_externo_ativo": 0,
+        "destino_externo_tipo": "pasta",
         "destino_externo_pasta": "",
+        "destino_externo_drive_folder_id": "",
         "atualizado_em": "",
     }
 
@@ -563,8 +652,14 @@ def obter_configuracao_backup():
     dados["frequencia"] = frequencia if frequencia in {"diario", "semanal", "mensal"} else "diario"
     dados["tipo_backup"] = normalizar_tipo_backup(dados.get("tipo_backup"))
     dados["destino_externo_ativo"] = 1 if bool_config_ativo(dados.get("destino_externo_ativo")) else 0
+    dados["destino_externo_tipo"] = normalizar_tipo_destino_backup(
+        dados.get("destino_externo_tipo") or "pasta"
+    )
     dados["destino_externo_pasta"] = normalizar_caminho_destino_externo(
         dados.get("destino_externo_pasta"),
+    )
+    dados["destino_externo_drive_folder_id"] = normalizar_texto_campo(
+        dados.get("destino_externo_drive_folder_id")
     )
 
     try:
@@ -586,9 +681,18 @@ def salvar_configuracao_backup_form(form):
         frequencia = "diario"
     tipo_backup = normalizar_tipo_backup(form.get("tipo_backup"))
     destino_externo_ativo = 1 if bool_config_ativo(form.get("destino_externo_ativo")) else 0
+    destino_externo_tipo = normalizar_tipo_destino_backup(form.get("destino_externo_tipo"))
     destino_externo_pasta = normalizar_caminho_destino_externo(
         form.get("destino_externo_pasta"),
     )
+    destino_externo_drive_folder_id = normalizar_texto_campo(
+        form.get("destino_externo_drive_folder_id")
+    )
+
+    if destino_externo_tipo == "google_drive":
+        destino_externo_pasta = ""
+    else:
+        destino_externo_drive_folder_id = ""
 
     try:
         retencao = int(form.get("retencao_arquivos") or BACKUP_RETENCAO_PADRAO)
@@ -602,22 +706,27 @@ def salvar_configuracao_backup_form(form):
     c.execute("""
         INSERT INTO configuracao_backup (
             id, frequencia, tipo_backup, retencao_arquivos,
-            destino_externo_ativo, destino_externo_pasta, atualizado_em
+            destino_externo_ativo, destino_externo_tipo,
+            destino_externo_pasta, destino_externo_drive_folder_id, atualizado_em
         )
-        VALUES (1, ?, ?, ?, ?, ?, ?)
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             frequencia=excluded.frequencia,
             tipo_backup=excluded.tipo_backup,
             retencao_arquivos=excluded.retencao_arquivos,
             destino_externo_ativo=excluded.destino_externo_ativo,
+            destino_externo_tipo=excluded.destino_externo_tipo,
             destino_externo_pasta=excluded.destino_externo_pasta,
+            destino_externo_drive_folder_id=excluded.destino_externo_drive_folder_id,
             atualizado_em=excluded.atualizado_em
     """, (
         frequencia,
         tipo_backup,
         retencao,
         destino_externo_ativo,
+        destino_externo_tipo,
         destino_externo_pasta,
+        destino_externo_drive_folder_id,
         agora_iso(),
     ))
     conn.commit()
@@ -707,6 +816,15 @@ def identificar_tipo_backup_por_nome(nome):
     return ""
 
 def listar_arquivos_backup_banco(tipo_backup=None):
+    configuracao = obter_configuracao_backup()
+    if (
+        bool(int(configuracao.get("destino_externo_ativo") or 0))
+        and normalizar_tipo_destino_backup(configuracao.get("destino_externo_tipo")) == "google_drive"
+    ):
+        backups_drive = listar_arquivos_backup_google_drive(configuracao, tipo_backup)
+        if backups_drive:
+            return backups_drive
+
     pasta = caminho_diretorio_backup()
     return listar_arquivos_backup_em_pasta(pasta, tipo_backup)
 
@@ -747,6 +865,9 @@ def listar_arquivos_backup_em_pasta(pasta, tipo_backup=None):
 
 def listar_arquivos_backup_destino_externo():
     configuracao = obter_configuracao_backup()
+    if normalizar_tipo_destino_backup(configuracao.get("destino_externo_tipo")) == "google_drive":
+        return listar_arquivos_backup_google_drive(configuracao)
+
     pasta = configuracao.get("destino_externo_pasta") or ""
     return listar_arquivos_backup_em_pasta(pasta)
 
@@ -771,6 +892,9 @@ def preparar_destino_externo_backup(configuracao=None, criar=False):
     configuracao = configuracao or obter_configuracao_backup()
     if not bool(int(configuracao.get("destino_externo_ativo") or 0)):
         return ""
+
+    if normalizar_tipo_destino_backup(configuracao.get("destino_externo_tipo")) == "google_drive":
+        return obter_drive_folder_id_backup(configuracao)
 
     pasta = normalizar_caminho_destino_externo(configuracao.get("destino_externo_pasta"))
     if not pasta:
@@ -823,6 +947,149 @@ def copiar_arquivo_para_destino(origem_path, destino_path):
     except Exception:
         pass
 
+def remover_arquivo_se_existir(caminho):
+    if not caminho:
+        return
+    try:
+        if os.path.isfile(caminho):
+            os.remove(caminho)
+    except Exception:
+        pass
+
+def obter_drive_folder_id_backup(configuracao=None):
+    configuracao = configuracao or obter_configuracao_backup()
+    folder_id = normalizar_texto_campo(configuracao.get("destino_externo_drive_folder_id"))
+    if folder_id:
+        return folder_id
+    return normalizar_texto_campo(caminho_env_google_drive_fallback())
+
+def google_drive_disponivel_para_backup():
+    return GOOGLE_DRIVE_DISPONIVEL and service_account is not None and google_build is not None
+
+def google_drive_pronto_para_backup():
+    credenciais_info, _ = carregar_credenciais_google_drive()
+    return bool(credenciais_info) and google_drive_disponivel_para_backup()
+
+def listar_arquivos_backup_google_drive(configuracao=None, tipo_backup=None):
+    configuracao = configuracao or obter_configuracao_backup()
+    folder_id = obter_drive_folder_id_backup(configuracao)
+    if not folder_id:
+        return []
+    if not google_drive_disponivel_para_backup():
+        return []
+
+    try:
+        service = obter_servico_google_drive()
+        filtros = [f"'{folder_id}' in parents", "trashed=false"]
+        tipo_filtro = normalizar_tipo_backup(tipo_backup) if tipo_backup else ""
+        if tipo_filtro:
+            if tipo_filtro == "completo":
+                filtros.append("(name contains 'sistema_completo_' or name contains 'database_postgres_' or name contains 'database_v2_')")
+            else:
+                filtros.append("(name contains 'database_v2_' or name contains 'database_postgres_')")
+
+        resposta = service.files().list(
+            q=" and ".join(filtros),
+            fields="files(id,name,modifiedTime,size,mimeType)",
+            pageSize=1000,
+            orderBy="modifiedTime desc",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        ).execute()
+
+        backups = []
+        for item in resposta.get("files", []):
+            nome = item.get("name") or ""
+            tipo_item = identificar_tipo_backup_por_nome(nome)
+            if tipo_filtro and tipo_item != tipo_filtro:
+                continue
+
+            modificado_iso = formato_tempo_google_drive(item.get("modifiedTime"))
+            try:
+                modificado_dt = datetime.fromisoformat(modificado_iso)
+            except Exception:
+                modificado_dt = agora()
+
+            tamanho = int(float(item.get("size") or 0))
+            backups.append({
+                "nome": nome,
+                "caminho": f"drive://{item.get('id')}",
+                "google_drive_file_id": item.get("id"),
+                "tipo_backup": tipo_item,
+                "tipo_backup_label": label_tipo_backup(tipo_item),
+                "modificado_em": modificado_dt.timestamp(),
+                "modificado_dt": modificado_dt,
+                "modificado_em_iso": modificado_iso,
+                "modificado_em_fmt": formatar_datahora(modificado_iso),
+                "tamanho_bytes": tamanho,
+                "tamanho_fmt": formatar_tamanho_arquivo(tamanho),
+            })
+
+        backups.sort(key=lambda item: item["modificado_em"], reverse=True)
+        return backups
+    except Exception:
+        return []
+
+def upload_arquivo_google_drive(caminho_arquivo, configuracao=None, nome_remoto=None):
+    configuracao = configuracao or obter_configuracao_backup()
+    folder_id = obter_drive_folder_id_backup(configuracao)
+    if not folder_id:
+        raise RuntimeError("Informe o ID da pasta do Google Drive.")
+    if not google_drive_disponivel_para_backup():
+        raise RuntimeError("Instale as dependencias do Google Drive para usar esta opcao.")
+    if not os.path.isfile(caminho_arquivo):
+        raise FileNotFoundError("Arquivo de backup nao encontrado para upload.")
+
+    service = obter_servico_google_drive()
+    nome_remoto = nome_remoto or os.path.basename(caminho_arquivo)
+    media = MediaFileUpload(caminho_arquivo, resumable=True)
+    metadata = {
+        "name": nome_remoto,
+        "parents": [folder_id],
+    }
+    return service.files().create(
+        body=metadata,
+        media_body=media,
+        fields="id,name,modifiedTime,size",
+        supportsAllDrives=True,
+    ).execute()
+
+def excluir_arquivo_google_drive(file_id):
+    if not file_id or not google_drive_disponivel_para_backup():
+        return
+
+    service = obter_servico_google_drive()
+    service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+
+def baixar_arquivo_google_drive(file_id, destino_path):
+    if not file_id or not google_drive_disponivel_para_backup():
+        raise RuntimeError("Google Drive nao configurado para download.")
+
+    service = obter_servico_google_drive()
+    request_drive = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+    os.makedirs(os.path.dirname(destino_path), exist_ok=True)
+
+    with open(destino_path, "wb") as fh:
+        downloader = MediaIoBaseDownload(fh, request_drive)
+        concluido = False
+        while not concluido:
+            progresso, concluido = downloader.next_chunk()
+
+def limpar_backups_antigos_google_drive(configuracao=None, tipo_backup=None):
+    configuracao = configuracao or obter_configuracao_backup()
+    backups = listar_arquivos_backup_google_drive(configuracao, tipo_backup)
+    retencao = int(configuracao.get("retencao_arquivos") or BACKUP_RETENCAO_PADRAO)
+    removidos = 0
+
+    for item in backups[retencao:]:
+        try:
+            excluir_arquivo_google_drive(item.get("google_drive_file_id"))
+            removidos += 1
+        except Exception:
+            continue
+
+    return removidos
+
 def gerar_snapshot_banco_para_arquivo(destino_path):
     if banco_online_ativo():
         gravar_snapshot_banco_em_arquivo(destino_path)
@@ -866,7 +1133,8 @@ def gerar_snapshot_banco_para_arquivo(destino_path):
 def sincronizar_backup_destino_externo(caminho_backup=None, configuracao=None, incluir_snapshot=True):
     configuracao = configuracao or obter_configuracao_backup()
     ativo = bool(int(configuracao.get("destino_externo_ativo") or 0))
-    pasta = preparar_destino_externo_backup(configuracao, criar=ativo)
+    tipo_destino = normalizar_tipo_destino_backup(configuracao.get("destino_externo_tipo"))
+    alvo = preparar_destino_externo_backup(configuracao, criar=ativo)
 
     if not ativo:
         return {
@@ -876,55 +1144,105 @@ def sincronizar_backup_destino_externo(caminho_backup=None, configuracao=None, i
             "mensagem": "Destino externo desativado.",
         }
 
-    if not pasta:
+    if not alvo:
         return {
             "ativo": True,
             "sucesso": False,
             "pasta": "",
-            "mensagem": "Selecione uma pasta sincronizada para enviar o backup.",
+            "mensagem": (
+                "Selecione uma pasta sincronizada ou informe o ID da pasta do Google Drive."
+            ),
         }
 
-    if not pasta_escrevivel(pasta):
+    if tipo_destino != "google_drive" and not pasta_escrevivel(alvo):
         return {
             "ativo": True,
             "sucesso": False,
-            "pasta": pasta,
+            "pasta": alvo,
             "arquivos": [],
             "mensagem": "A pasta sincronizada nao esta gravavel neste momento.",
         }
 
     copiados = []
+    aviso_snapshot = ""
 
     try:
-        if caminho_backup and os.path.exists(caminho_backup):
-            destino_backup = os.path.join(pasta, os.path.basename(caminho_backup))
-            copiar_arquivo_para_destino(caminho_backup, destino_backup)
-            tipo_backup = identificar_tipo_backup_por_nome(os.path.basename(caminho_backup))
-            limpar_backups_antigos_em_pasta(pasta, tipo_backup)
-            copiados.append(os.path.basename(destino_backup))
+        if tipo_destino == "google_drive":
+            if not google_drive_pronto_para_backup():
+                return {
+                    "ativo": True,
+                    "sucesso": False,
+                    "pasta": alvo,
+                    "arquivos": [],
+                    "mensagem": (
+                        "Google Drive configurado, mas as dependencias nao estao instaladas."
+                    ),
+                }
 
-        if incluir_snapshot:
-            destino_banco = os.path.join(
-                pasta,
-                BACKUP_ARQUIVO_POSTGRES_ATUAL_ZIP if banco_online_ativo() else BACKUP_ARQUIVO_BANCO_ATUAL,
-            )
-            gerar_snapshot_banco_para_arquivo(destino_banco)
-            copiados.append(os.path.basename(destino_banco))
+            if caminho_backup and os.path.exists(caminho_backup):
+                upload_arquivo_google_drive(caminho_backup, configuracao)
+                tipo_backup = identificar_tipo_backup_por_nome(os.path.basename(caminho_backup))
+                limpar_backups_antigos_google_drive(configuracao, tipo_backup)
+                copiados.append(os.path.basename(caminho_backup))
+                remover_arquivo_se_existir(caminho_backup)
+
+            if incluir_snapshot:
+                caminho_snapshot = ""
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        suffix=f"_{secrets.token_hex(4)}.zip",
+                        delete=False,
+                    ) as temp_snapshot:
+                        caminho_snapshot = temp_snapshot.name
+                    gerar_snapshot_banco_para_arquivo(caminho_snapshot)
+                    upload_arquivo_google_drive(
+                        caminho_snapshot,
+                        configuracao,
+                        nome_remoto=os.path.basename(caminho_snapshot),
+                    )
+                    copiados.append(os.path.basename(caminho_snapshot))
+                except Exception as e_snapshot:
+                    aviso_snapshot = f" Aviso: snapshot nao enviado ({e_snapshot})."
+                finally:
+                    try:
+                        if caminho_snapshot and os.path.exists(caminho_snapshot):
+                            os.remove(caminho_snapshot)
+                    except Exception:
+                        pass
+
+            limpar_backups_antigos_google_drive(configuracao)
+        else:
+            if caminho_backup and os.path.exists(caminho_backup):
+                destino_backup = os.path.join(alvo, os.path.basename(caminho_backup))
+                copiar_arquivo_para_destino(caminho_backup, destino_backup)
+                tipo_backup = identificar_tipo_backup_por_nome(os.path.basename(caminho_backup))
+                limpar_backups_antigos_em_pasta(alvo, tipo_backup)
+                copiados.append(os.path.basename(destino_backup))
+
+            if incluir_snapshot:
+                destino_banco = os.path.join(
+                    alvo,
+                    BACKUP_ARQUIVO_POSTGRES_ATUAL_ZIP if banco_online_ativo() else BACKUP_ARQUIVO_BANCO_ATUAL,
+                )
+                gerar_snapshot_banco_para_arquivo(destino_banco)
+                copiados.append(os.path.basename(destino_banco))
 
         return {
             "ativo": True,
             "sucesso": True,
-            "pasta": pasta,
+            "pasta": alvo,
             "arquivos": copiados,
-            "mensagem": "Sincronizacao externa atualizada com sucesso.",
+            "mensagem": f"Sincronizacao externa atualizada com sucesso.{aviso_snapshot}",
         }
     except Exception as e:
+        if tipo_destino == "google_drive" and caminho_backup:
+            remover_arquivo_se_existir(caminho_backup)
         return {
             "ativo": True,
             "sucesso": False,
-            "pasta": pasta,
+            "pasta": alvo,
             "arquivos": copiados,
-            "mensagem": f"Falha ao copiar para a pasta sincronizada: {e}",
+            "mensagem": f"Falha ao copiar para o {'Google Drive online' if tipo_destino == 'google_drive' else 'pasta sincronizada'}: {e}",
         }
 
 def exportar_snapshot_banco_atual():
@@ -1244,6 +1562,10 @@ def obter_status_backup_banco():
     )
     proximo_backup_iso = proximo_backup_dt.isoformat(timespec="seconds") if proximo_backup_dt else ""
     destino_externo_pasta = configuracao.get("destino_externo_pasta") or ""
+    destino_externo_tipo = normalizar_tipo_destino_backup(configuracao.get("destino_externo_tipo"))
+    destino_externo_drive_folder_id = normalizar_texto_campo(
+        configuracao.get("destino_externo_drive_folder_id")
+    )
 
     return {
         "ativo": True,
@@ -1267,9 +1589,21 @@ def obter_status_backup_banco():
             formatar_datahora(proximo_backup_iso) if proximo_backup_iso else "Assim que a rotina rodar"
         ),
         "destino_externo_ativo": bool(int(configuracao.get("destino_externo_ativo") or 0)),
+        "destino_externo_tipo": destino_externo_tipo,
+        "destino_externo_tipo_label": (
+            "Google Drive online" if destino_externo_tipo == "google_drive" else "Pasta sincronizada"
+        ),
         "destino_externo_pasta": destino_externo_pasta,
-        "destino_externo_disponivel": bool(destino_externo_pasta and os.path.isdir(destino_externo_pasta)),
-        "destino_externo_escrevivel": pasta_escrevivel(destino_externo_pasta),
+        "destino_externo_drive_folder_id": destino_externo_drive_folder_id,
+        "destino_externo_disponivel": (
+            bool(destino_externo_drive_folder_id and google_drive_pronto_para_backup())
+            if destino_externo_tipo == "google_drive"
+            else bool(destino_externo_pasta and os.path.isdir(destino_externo_pasta))
+        ),
+        "destino_externo_escrevivel": (
+            bool(google_drive_pronto_para_backup()) if destino_externo_tipo == "google_drive"
+            else pasta_escrevivel(destino_externo_pasta)
+        ),
         "destino_externo_quantidade": len(backups_externos),
         "ultimo_destino_externo_nome": ultimo_externo["nome"] if ultimo_externo else "",
         "ultimo_destino_externo_em_fmt": (
@@ -1382,6 +1716,20 @@ def restaurar_backup_banco(nome_arquivo_backup):
     if not selecionado:
         return False, "Backup selecionado nao foi encontrado."
 
+    backup_drive_temp = None
+    if str(selecionado.get("caminho") or "").startswith("drive://"):
+        file_id = str(selecionado["caminho"]).split("drive://", 1)[1].strip()
+        if file_id:
+            backup_drive_temp = tempfile.NamedTemporaryFile(
+                prefix="restore_drive_",
+                suffix=os.path.splitext(selecionado["nome"])[1] or ".bak",
+                delete=False,
+            )
+            backup_drive_temp.close()
+            baixar_arquivo_google_drive(file_id, backup_drive_temp.name)
+            selecionado = dict(selecionado)
+            selecionado["caminho"] = backup_drive_temp.name
+
     if not sync_lock.acquire(blocking=False):
         return False, "Existe uma sincronizacao em andamento. Tente restaurar novamente em alguns segundos."
 
@@ -1466,6 +1814,12 @@ def restaurar_backup_banco(nome_arquivo_backup):
                 destino.close()
         except Exception:
             pass
+        if backup_drive_temp:
+            try:
+                if os.path.exists(backup_drive_temp.name):
+                    os.remove(backup_drive_temp.name)
+            except Exception:
+                pass
         if restore_lock:
             try:
                 backup_lock.release()
@@ -2897,7 +3251,9 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "configuracao_backup", "tipo_backup TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "retencao_arquivos INTEGER")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "destino_externo_ativo INTEGER")
+    adicionar_coluna_se_preciso(c, "configuracao_backup", "destino_externo_tipo TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "destino_externo_pasta TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_backup", "destino_externo_drive_folder_id TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "atualizado_em TEXT")
     adicionar_coluna_se_preciso(c, "manutencao_arquivos", "ultimo_executado_em TEXT")
     adicionar_coluna_se_preciso(c, "manutencao_arquivos", "ultima_mensagem TEXT")
@@ -3536,7 +3892,9 @@ def criar_todas_tabelas():
         tipo_backup TEXT DEFAULT 'completo',
         retencao_arquivos INTEGER DEFAULT 15,
         destino_externo_ativo INTEGER DEFAULT 0,
+        destino_externo_tipo TEXT DEFAULT 'pasta',
         destino_externo_pasta TEXT,
+        destino_externo_drive_folder_id TEXT,
         atualizado_em TEXT
     )
     """)
@@ -8388,25 +8746,45 @@ def salvar_configuracao_backup():
         return redirect("/configuracoes")
 
     destino_externo_ativo = 1 if bool_config_ativo(request.form.get("destino_externo_ativo")) else 0
+    destino_externo_tipo = normalizar_tipo_destino_backup(request.form.get("destino_externo_tipo"))
     destino_externo_pasta = normalizar_caminho_destino_externo(
         request.form.get("destino_externo_pasta"),
     )
-    if destino_externo_ativo and not destino_externo_pasta:
-        definir_feedback_configuracoes(
-            "erro",
-            "Informe a pasta sincronizada do Google Drive antes de ativar a copia externa.",
-        )
-        return redirect("/configuracoes")
+    destino_externo_drive_folder_id = normalizar_texto_campo(
+        request.form.get("destino_externo_drive_folder_id")
+    )
 
     if destino_externo_ativo:
-        try:
-            os.makedirs(destino_externo_pasta, exist_ok=True)
-        except Exception as e:
-            definir_feedback_configuracoes(
-                "erro",
-                f"Nao foi possivel acessar a pasta sincronizada informada: {e}",
-            )
-            return redirect("/configuracoes")
+        if destino_externo_tipo == "google_drive":
+            if not destino_externo_drive_folder_id:
+                definir_feedback_configuracoes(
+                    "erro",
+                    "Informe o ID da pasta do Google Drive antes de ativar a copia externa.",
+                )
+                return redirect("/configuracoes")
+            credenciais_drive, erro_drive = carregar_credenciais_google_drive()
+            if not credenciais_drive:
+                definir_feedback_configuracoes(
+                    "erro",
+                    erro_drive or "Configure as credenciais do Google Drive antes de ativar a copia online.",
+                )
+                return redirect("/configuracoes")
+        else:
+            if not destino_externo_pasta:
+                definir_feedback_configuracoes(
+                    "erro",
+                    "Informe a pasta sincronizada antes de ativar a copia externa.",
+                )
+                return redirect("/configuracoes")
+
+            try:
+                os.makedirs(destino_externo_pasta, exist_ok=True)
+            except Exception as e:
+                definir_feedback_configuracoes(
+                    "erro",
+                    f"Nao foi possivel acessar a pasta sincronizada informada: {e}",
+                )
+                return redirect("/configuracoes")
 
     configuracao = salvar_configuracao_backup_form(request.form)
     registrar_auditoria(
@@ -8417,7 +8795,9 @@ def salvar_configuracao_backup():
             "tipo_backup": configuracao["tipo_backup"],
             "retencao_arquivos": configuracao["retencao_arquivos"],
             "destino_externo_ativo": bool(int(configuracao["destino_externo_ativo"] or 0)),
+            "destino_externo_tipo": configuracao["destino_externo_tipo"],
             "destino_externo_pasta": configuracao["destino_externo_pasta"],
+            "destino_externo_drive_folder_id": configuracao["destino_externo_drive_folder_id"],
         },
     )
     definir_feedback_configuracoes(

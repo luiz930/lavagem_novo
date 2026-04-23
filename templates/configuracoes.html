@@ -139,13 +139,17 @@
         <p><b>Quantidade salva:</b> {{ backup_status.quantidade }} arquivo(s)</p>
         <p><b>Retencao:</b> ultimos {{ backup_status.retencao }} backups</p>
         <p><b>Copia externa:</b> {% if backup_status.destino_externo_ativo %}Ativa{% else %}Desativada{% endif %}</p>
+        <p><b>Destino externo:</b> {{ backup_status.destino_externo_tipo_label }}</p>
+        {% if backup_status.destino_externo_tipo == 'google_drive' %}
+        <p><b>Drive conectado:</b> {% if backup_status.destino_externo_escrevivel %}Sim{% else %}Nao{% endif %}</p>
+        <p><b>ID da pasta do Drive:</b> {{ backup_status.destino_externo_drive_folder_id or 'Nao informado' }}</p>
+        {% else %}
         <p><b>Pasta gravavel:</b> {% if backup_status.destino_externo_escrevivel %}Sim{% else %}Nao{% endif %}</p>
+        <p class="muted-text">Pasta sincronizada: {{ backup_status.destino_externo_pasta or 'Nao configurada' }}</p>
+        {% endif %}
         <p><b>Ultimo envio externo:</b> {{ backup_status.ultimo_destino_externo_em_fmt }}</p>
         <p><b>Arquivos externos encontrados:</b> {{ backup_status.destino_externo_quantidade }}</p>
         <p class="muted-text">Pasta: {{ backup_status.pasta }}</p>
-        {% if backup_status.destino_externo_pasta %}
-        <p class="muted-text">Pasta sincronizada: {{ backup_status.destino_externo_pasta }}</p>
-        {% endif %}
         {% if backup_status.ultimo_backup_nome %}
         <p class="muted-text">Arquivo mais recente: {{ backup_status.ultimo_backup_nome }}</p>
         {% endif %}
@@ -168,6 +172,10 @@
                     <option value="{{ item.value }}" {% if backup_config.tipo_backup == item.value %}selected{% endif %}>{{ item.label }}</option>
                     {% endfor %}
                 </select>
+                <select name="destino_externo_tipo" data-backup-destino-selector>
+                    <option value="google_drive" {% if backup_config.destino_externo_tipo == 'google_drive' %}selected{% endif %}>Google Drive online</option>
+                    <option value="pasta" {% if backup_config.destino_externo_tipo != 'google_drive' %}selected{% endif %}>Pasta sincronizada local</option>
+                </select>
                 <input
                     name="retencao_arquivos"
                     type="number"
@@ -187,26 +195,42 @@
                     value="1"
                     {% if backup_config.destino_externo_ativo %}checked{% endif %}
                 >
-                Enviar backup e copia atual do banco para Google Drive / pasta sincronizada
+                Enviar backup e copia atual do banco para o destino externo selecionado
             </label>
 
-            <input
-                type="text"
-                name="destino_externo_pasta"
-                value="{{ backup_config.destino_externo_pasta }}"
-                list="pastas-sync-sugeridas"
-                placeholder="Ex.: C:\\Users\\seu-usuario\\Google Drive\\Wagen Backups"
-            >
-            <datalist id="pastas-sync-sugeridas">
-                {% for caminho in pastas_sync_sugeridas %}
-                <option value="{{ caminho }}"></option>
-                {% endfor %}
-            </datalist>
+            <div data-backup-mode="google_drive" class="stack-form stack-form--wide" {% if backup_config.destino_externo_tipo != 'google_drive' %}hidden{% endif %}>
+                <input
+                    type="text"
+                    name="destino_externo_drive_folder_id"
+                    value="{{ backup_config.destino_externo_drive_folder_id }}"
+                    placeholder="ID da pasta do Google Drive"
+                    autocomplete="off"
+                >
+                <p class="muted-text">
+                    Cole o ID da pasta do Google Drive online. A credencial da conta de servico fica fora do GitHub,
+                    em variavel de ambiente ou arquivo seguro do servidor.
+                </p>
+            </div>
 
-            <p class="muted-text">
-                Informe a pasta local sincronizada pelo Google Drive Desktop. O sistema continua salvando o backup localmente
-                e tambem envia o arquivo de backup e uma copia atual do banco para essa pasta.
-            </p>
+            <div data-backup-mode="pasta" class="stack-form stack-form--wide" {% if backup_config.destino_externo_tipo == 'google_drive' %}hidden{% endif %}>
+                <input
+                    type="text"
+                    name="destino_externo_pasta"
+                    value="{{ backup_config.destino_externo_pasta }}"
+                    list="pastas-sync-sugeridas"
+                    placeholder="Ex.: C:\\Users\\seu-usuario\\Google Drive\\Wagen Backups"
+                >
+                <datalist id="pastas-sync-sugeridas">
+                    {% for caminho in pastas_sync_sugeridas %}
+                    <option value="{{ caminho }}"></option>
+                    {% endfor %}
+                </datalist>
+
+                <p class="muted-text">
+                    Informe a pasta local sincronizada pelo Google Drive Desktop. O sistema salva o backup e, em
+                    seguida, replica o arquivo para essa pasta.
+                </p>
+            </div>
 
             <div class="actions-row actions-row--left">
                 <button type="submit">Salvar rotina</button>
@@ -438,6 +462,22 @@ document.querySelectorAll("[data-password-target]").forEach((button) => {
         button.textContent = mostrando ? "Mostrar senha" : "Ocultar senha";
     });
 });
+
+const backupDestinoSelector = document.querySelector("[data-backup-destino-selector]");
+const backupDestinoBlocos = document.querySelectorAll("[data-backup-mode]");
+
+function atualizarBackupDestino() {
+    if (!backupDestinoSelector) return;
+    const modo = backupDestinoSelector.value || "google_drive";
+    backupDestinoBlocos.forEach((bloco) => {
+        bloco.hidden = bloco.dataset.backupMode !== modo;
+    });
+}
+
+if (backupDestinoSelector) {
+    backupDestinoSelector.addEventListener("change", atualizarBackupDestino);
+    atualizarBackupDestino();
+}
 </script>
 
 {% endblock %}
