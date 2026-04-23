@@ -2508,7 +2508,16 @@ def diagnosticar_banco_online(force=False):
             "usuario_real": row[1] if len(row) > 1 else resultado["usuario"],
         })
     except Exception as e:
-        resultado["mensagem"] = f"Falha ao conectar no banco online: {e}"
+        texto_erro = str(e)
+        if "Network is unreachable" in texto_erro or "could not translate host name" in texto_erro:
+            resultado["mensagem"] = (
+                f"Falha ao conectar no banco online: {texto_erro}"
+                "\nA conexao direta da Supabase usa IPv6. Se seu servidor nao tem IPv6, "
+                "use a connection string do Session pooler no campo de URL completa ou "
+                "habilite o add-on IPv4 no Supabase."
+            )
+        else:
+            resultado["mensagem"] = f"Falha ao conectar no banco online: {texto_erro}"
 
     BANCO_ONLINE_STATUS_CACHE["testado_em"] = agora_ts
     BANCO_ONLINE_STATUS_CACHE["resultado"] = dict(resultado)
@@ -2664,6 +2673,7 @@ def salvar_configuracao_banco_form(form):
         modo = "sqlite"
 
     configuracao_atual = obter_configuracao_banco_form()
+    url_completa = normalizar_texto_campo(form.get("database_url"))
     host = normalizar_texto_campo(form.get("database_host")) or configuracao_atual.get("host") or ""
     porta = normalizar_texto_campo(form.get("database_port")) or configuracao_atual.get("porta") or "5432"
     database = normalizar_texto_campo(form.get("database_name")) or configuracao_atual.get("database") or "postgres"
@@ -2674,6 +2684,15 @@ def salvar_configuracao_banco_form(form):
     senha_atual = SUPABASE_DB_PASSWORD
 
     if modo == "postgres":
+        if url_completa:
+            partes_url = desmontar_url_postgres(url_completa)
+            host = partes_url.get("host") or host
+            porta = partes_url.get("porta") or porta
+            database = partes_url.get("database") or database
+            usuario = partes_url.get("usuario") or usuario
+            if not senha:
+                senha = partes_url.get("senha") or senha
+
         if host.lower() in {"postgres", "postgresql"} or "." not in host:
             host = configuracao_atual.get("host") or host
 
