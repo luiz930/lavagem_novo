@@ -3150,8 +3150,13 @@ def obter_status_banco_online():
     return status
 
 def conectar():
-    if banco_online_ativo():
+    if modo_banco_preferido() == "postgres":
         dsn = url_postgres_ajustada()
+        if not dsn:
+            raise RuntimeError(
+                "Banco online configurado, mas a connection string do Supabase esta incompleta."
+            )
+
         try:
             conn = conectar_postgres_com_fallback(dsn)
             return ConexaoCompat(conn, "postgres")
@@ -3163,10 +3168,11 @@ def conectar():
                 "conectado": False,
                 "backend": "postgres",
                 "backend_label": "Supabase / PostgreSQL",
-                "mensagem": f"Falha ao abrir conexao online. Usando SQLite local temporariamente: {e}",
+                "mensagem": f"Falha ao abrir conexao online: {e}",
                 "url_masked": mascarar_url_postgres(dsn),
             }
-            print("AVISO:", BANCO_ONLINE_STATUS_CACHE["resultado"]["mensagem"])
+            print("ERRO:", BANCO_ONLINE_STATUS_CACHE["resultado"]["mensagem"])
+            raise
 
     conn = sqlite3.connect(DATABASE_FILE)
     conn.row_factory = sqlite3.Row  # 🔥 ESSENCIAL
