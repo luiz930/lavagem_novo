@@ -1076,7 +1076,13 @@ def importar_sqlite_para_banco_atual(caminho_sqlite):
                     continue
 
                 colunas = list(registro_dict.keys())
-                valores = [registro_dict.get(coluna) for coluna in colunas]
+                if backend == "postgres":
+                    valores = [
+                        normalizar_valor_importacao_pg(tabela, coluna, registro_dict.get(coluna))
+                        for coluna in colunas
+                    ]
+                else:
+                    valores = [registro_dict.get(coluna) for coluna in colunas]
                 marcadores = ", ".join(["?"] * len(colunas))
                 sql = f"INSERT INTO {tabela} ({', '.join(colunas)}) VALUES ({marcadores})"
                 c.execute(sql, valores)
@@ -3874,18 +3880,64 @@ def interpretar_datahora_sistema(valor):
     return None
 
 def formatar_valor_monetario(valor):
-    try:
-        numero = float(str(valor or 0).replace(",", "."))
-    except Exception:
-        numero = 0.0
+    numero = converter_valor_numerico(valor)
 
     return f"{numero:.2f}"
 
 def converter_valor_numerico(valor):
     try:
-        return float(str(valor or 0).replace(",", "."))
+        texto = str(valor or "").strip()
+        if not texto:
+            return 0.0
+
+        texto = re.sub(r"[^0-9,.-]", "", texto)
+        if "," in texto and "." in texto:
+            if texto.rfind(",") > texto.rfind("."):
+                texto = texto.replace(".", "").replace(",", ".")
+            else:
+                texto = texto.replace(",", "")
+        else:
+            texto = texto.replace(",", ".")
+
+        return float(texto)
     except Exception:
         return 0.0
+
+def normalizar_valor_importacao_pg(tabela, coluna, valor):
+    if valor is None:
+        return None
+
+    texto_coluna = str(coluna or "").strip().lower()
+    tabela = str(tabela or "").strip().lower()
+
+    colunas_float = {
+        "valor", "valor_unitario", "valor_total", "subtotal", "desconto",
+        "total", "aliquota_padrao", "aliquota_iss", "valor_servicos",
+        "valor_iss",
+    }
+    colunas_int = {
+        "id", "validade_dias", "ordem", "ativo", "prioridade",
+        "tentativas_login", "retencao_arquivos", "destino_externo_ativo",
+        "intervalo_minutos", "rps_numero", "veiculo_id", "tipo_id",
+        "sync_id", "usuario_id",
+    }
+
+    if tabela == "tipos_servico" and texto_coluna == "valor":
+        return converter_valor_numerico(valor)
+
+    if tabela == "orcamentos" and texto_coluna == "numero":
+        return converter_inteiro(valor)
+
+    if tabela == "notas_fiscais" and texto_coluna == "rps_numero":
+        return converter_inteiro(valor)
+
+    if texto_coluna in colunas_float:
+        return converter_valor_numerico(valor)
+
+    if texto_coluna in colunas_int:
+        return converter_inteiro(valor)
+
+    return valor
 
 def converter_inteiro(valor, padrao=0):
     try:
@@ -7923,7 +7975,7 @@ def editar_servico_inline(id):
     data = request.get_json()
 
     nome = data.get("nome")
-    valor = data.get("valor")
+    valor = converter_valor_numerico(data.get("valor"))
 
     conn = conectar()
     c = conn.cursor()
@@ -7953,7 +8005,7 @@ def editar_servico(id):
 
     if request.method == "POST":
         nome = request.form['nome']
-        valor = request.form['valor']
+        valor = converter_valor_numerico(request.form['valor'])
 
         c.execute("UPDATE tipos_servico SET nome=?, valor=? WHERE id=?", (nome, valor, id))
         conn.commit()
@@ -9837,7 +9889,7 @@ def servico():
         return "Erro: tipo não encontrado"
 
     tipo_id = tipo["id"]
-    valor = tipo["valor"]
+    valor = converter_valor_numerico(tipo["valor"])
 
     # 🔥 PRIORIDADE
     c.execute("""
@@ -10186,7 +10238,7 @@ def cadastrar_servico():
 
     if request.method == "POST":
         nome = request.form["nome"]
-        valor = request.form["valor"]
+        valor = converter_valor_numerico(request.form["valor"])
 
         c.execute("INSERT INTO tipos_servico (nome, valor) VALUES (?, ?)", (nome, valor))
         conn.commit()
