@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, redirect, session, jsonify, h
 import csv
 import json
 import sqlite3
+import socket
 from zoneinfo import ZoneInfo
 import os
 import shutil
@@ -2494,7 +2495,7 @@ def diagnosticar_banco_online(force=False):
     })
 
     try:
-        conn = psycopg2.connect(dsn)
+        conn = conectar_postgres_com_fallback(dsn)
         c = conn.cursor()
         c.execute("SELECT current_database(), current_user")
         row = c.fetchone() or ("", "")
@@ -2581,6 +2582,47 @@ def desmontar_url_postgres(url):
     }
 
 
+def listar_ipv4_host(host, porta):
+    ips = []
+    try:
+        infos = socket.getaddrinfo(
+            host,
+            int(str(porta).strip()) if str(porta).strip().isdigit() else 5432,
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+        )
+    except Exception:
+        return ips
+    for info in infos:
+        ip = (info[4] or ("",))[0]
+        if ip and ip not in ips:
+            ips.append(ip)
+    return ips
+
+
+def conectar_postgres_com_fallback(dsn):
+    partes = desmontar_url_postgres(dsn)
+    host = partes.get("host") or ""
+    porta = partes.get("porta") or "5432"
+    tentativas = []
+    if host:
+        tentativas.extend(listar_ipv4_host(host, porta))
+
+    ultimo_erro = None
+    for hostaddr in tentativas:
+        try:
+            return psycopg2.connect(dsn, hostaddr=hostaddr)
+        except Exception as erro:
+            ultimo_erro = erro
+
+    try:
+        return psycopg2.connect(dsn)
+    except Exception as erro:
+        if ultimo_erro is not None:
+            raise ultimo_erro
+        raise erro
+
+
 def quebrar_url_postgres(url):
     partes = desmontar_url_postgres(url)
     return {
@@ -2665,7 +2707,7 @@ def conectar():
     if banco_online_ativo():
         dsn = url_postgres_ajustada()
         try:
-            conn = psycopg2.connect(dsn)
+            conn = conectar_postgres_com_fallback(dsn)
             return ConexaoCompat(conn, "postgres")
         except Exception as e:
             BANCO_ONLINE_STATUS_CACHE["testado_em"] = 0.0
