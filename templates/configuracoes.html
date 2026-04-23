@@ -80,7 +80,13 @@
         <p><b>Tamanho do ultimo backup:</b> {{ backup_status.ultimo_backup_tamanho_fmt }}</p>
         <p><b>Quantidade salva:</b> {{ backup_status.quantidade }} arquivo(s)</p>
         <p><b>Retencao:</b> ultimos {{ backup_status.retencao }} backups</p>
+        <p><b>Copia externa:</b> {% if backup_status.destino_externo_ativo %}Ativa{% else %}Desativada{% endif %}</p>
+        <p><b>Ultimo envio externo:</b> {{ backup_status.ultimo_destino_externo_em_fmt }}</p>
+        <p><b>Arquivos externos encontrados:</b> {{ backup_status.destino_externo_quantidade }}</p>
         <p class="muted-text">Pasta: {{ backup_status.pasta }}</p>
+        {% if backup_status.destino_externo_pasta %}
+        <p class="muted-text">Pasta sincronizada: {{ backup_status.destino_externo_pasta }}</p>
+        {% endif %}
         {% if backup_status.ultimo_backup_nome %}
         <p class="muted-text">Arquivo mais recente: {{ backup_status.ultimo_backup_nome }}</p>
         {% endif %}
@@ -115,6 +121,34 @@
                 >
             </div>
 
+            <label class="inline-toggle">
+                <input
+                    type="checkbox"
+                    name="destino_externo_ativo"
+                    value="1"
+                    {% if backup_config.destino_externo_ativo %}checked{% endif %}
+                >
+                Enviar backup e copia atual do banco para Google Drive / pasta sincronizada
+            </label>
+
+            <input
+                type="text"
+                name="destino_externo_pasta"
+                value="{{ backup_config.destino_externo_pasta }}"
+                list="pastas-sync-sugeridas"
+                placeholder="Ex.: C:\\Users\\seu-usuario\\Google Drive\\Wagen Backups"
+            >
+            <datalist id="pastas-sync-sugeridas">
+                {% for caminho in pastas_sync_sugeridas %}
+                <option value="{{ caminho }}"></option>
+                {% endfor %}
+            </datalist>
+
+            <p class="muted-text">
+                Informe a pasta local sincronizada pelo Google Drive Desktop. O sistema continua salvando o backup localmente
+                e tambem envia o arquivo de backup e uma copia atual do banco para essa pasta.
+            </p>
+
             <div class="actions-row actions-row--left">
                 <button type="submit">Salvar rotina</button>
             </div>
@@ -127,6 +161,7 @@
         </div>
 
         <p class="muted-text top-spacing">No modo sistema completo, o backup inclui banco principal, usuarios, fotos, perfis, uploads e arquivos locais de dados. Na restauracao, o sistema cria um backup preventivo automatico antes de sobrescrever o conteudo atual.</p>
+        <p class="muted-text">Se voce usar o Google Drive Desktop, prefira uma pasta espelhada/sincronizada. O sistema grava o backup local primeiro e depois copia o arquivo para a pasta informada.</p>
     </div>
     {% endif %}
 </div>

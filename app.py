@@ -51,6 +51,7 @@ UPLOADS_SERVICOS_FOLDER = os.path.join(UPLOAD_FOLDER, "servicos")
 UPLOADS_PERFIS_FOLDER = os.path.join(UPLOAD_FOLDER, "perfis")
 BACKUP_RETENCAO_PADRAO = 15
 BACKUP_TIPO_PADRAO = "completo"
+BACKUP_ARQUIVO_BANCO_ATUAL = "database_v2_atual.db"
 AGENDA_RETORNO_MARCOS = (15, 30, 45)
 AGENDA_RETORNO_LIMITE_ITENS = 18
 STATUS_RETORNO_PADRAO = "pendente"
@@ -232,6 +233,37 @@ def caminho_diretorio_backup():
     os.makedirs(BACKUP_FOLDER, exist_ok=True)
     return os.path.abspath(BACKUP_FOLDER)
 
+def bool_config_ativo(valor):
+    texto = str(valor or "").strip().lower()
+    return texto in {"1", "true", "on", "sim", "yes"}
+
+def normalizar_caminho_destino_externo(valor):
+    texto = str(valor or "").strip().strip('"').strip()
+    if not texto:
+        return ""
+
+    return os.path.abspath(os.path.expandvars(os.path.expanduser(texto)))
+
+def listar_pastas_sincronizadas_sugeridas():
+    usuario_home = os.path.expanduser("~")
+    candidatos = [
+        os.environ.get("OneDrive", ""),
+        os.environ.get("OneDriveCommercial", ""),
+        os.environ.get("OneDriveConsumer", ""),
+        os.path.join(usuario_home, "Google Drive"),
+        os.path.join(usuario_home, "My Drive"),
+        os.path.join(usuario_home, "Desktop", "Google Drive"),
+        os.path.join(usuario_home, "Desktop", "My Drive"),
+    ]
+    encontrados = []
+
+    for caminho in candidatos:
+        caminho_normalizado = normalizar_caminho_destino_externo(caminho)
+        if caminho_normalizado and os.path.isdir(caminho_normalizado):
+            encontrados.append(caminho_normalizado)
+
+    return sorted(set(encontrados))
+
 def normalizar_tipo_backup(valor):
     tipo = str(valor or BACKUP_TIPO_PADRAO).strip().lower()
     return tipo if tipo in {"banco", "completo"} else BACKUP_TIPO_PADRAO
@@ -259,6 +291,8 @@ def configuracao_backup_padrao():
         "frequencia": "diario",
         "tipo_backup": BACKUP_TIPO_PADRAO,
         "retencao_arquivos": BACKUP_RETENCAO_PADRAO,
+        "destino_externo_ativo": 0,
+        "destino_externo_pasta": "",
         "atualizado_em": "",
     }
 
@@ -276,6 +310,10 @@ def obter_configuracao_backup():
     frequencia = str(dados.get("frequencia") or "diario").strip().lower()
     dados["frequencia"] = frequencia if frequencia in {"diario", "semanal", "mensal"} else "diario"
     dados["tipo_backup"] = normalizar_tipo_backup(dados.get("tipo_backup"))
+    dados["destino_externo_ativo"] = 1 if bool_config_ativo(dados.get("destino_externo_ativo")) else 0
+    dados["destino_externo_pasta"] = normalizar_caminho_destino_externo(
+        dados.get("destino_externo_pasta"),
+    )
 
     try:
         retencao = int(dados.get("retencao_arquivos") or BACKUP_RETENCAO_PADRAO)
@@ -295,6 +333,10 @@ def salvar_configuracao_backup_form(form):
     if frequencia not in {"diario", "semanal", "mensal"}:
         frequencia = "diario"
     tipo_backup = normalizar_tipo_backup(form.get("tipo_backup"))
+    destino_externo_ativo = 1 if bool_config_ativo(form.get("destino_externo_ativo")) else 0
+    destino_externo_pasta = normalizar_caminho_destino_externo(
+        form.get("destino_externo_pasta"),
+    )
 
     try:
         retencao = int(form.get("retencao_arquivos") or BACKUP_RETENCAO_PADRAO)
@@ -306,17 +348,24 @@ def salvar_configuracao_backup_form(form):
     conn = conectar()
     c = conn.cursor()
     c.execute("""
-        INSERT INTO configuracao_backup (id, frequencia, tipo_backup, retencao_arquivos, atualizado_em)
-        VALUES (1, ?, ?, ?, ?)
+        INSERT INTO configuracao_backup (
+            id, frequencia, tipo_backup, retencao_arquivos,
+            destino_externo_ativo, destino_externo_pasta, atualizado_em
+        )
+        VALUES (1, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             frequencia=excluded.frequencia,
             tipo_backup=excluded.tipo_backup,
             retencao_arquivos=excluded.retencao_arquivos,
+            destino_externo_ativo=excluded.destino_externo_ativo,
+            destino_externo_pasta=excluded.destino_externo_pasta,
             atualizado_em=excluded.atualizado_em
     """, (
         frequencia,
         tipo_backup,
         retencao,
+        destino_externo_ativo,
+        destino_externo_pasta,
         agora_iso(),
     ))
     conn.commit()
@@ -405,8 +454,13 @@ def identificar_tipo_backup_por_nome(nome):
 
 def listar_arquivos_backup_banco(tipo_backup=None):
     pasta = caminho_diretorio_backup()
+    return listar_arquivos_backup_em_pasta(pasta, tipo_backup)
+
+def listar_arquivos_backup_em_pasta(pasta, tipo_backup=None):
     backups = []
     filtro_tipo = normalizar_tipo_backup(tipo_backup) if tipo_backup else ""
+    if not pasta or not os.path.isdir(pasta):
+        return backups
 
     for nome in os.listdir(pasta):
         tipo_item = identificar_tipo_backup_por_nome(nome)
@@ -437,8 +491,13 @@ def listar_arquivos_backup_banco(tipo_backup=None):
     backups.sort(key=lambda item: item["modificado_em"], reverse=True)
     return backups
 
-def limpar_backups_antigos_banco(tipo_backup=None):
-    backups = listar_arquivos_backup_banco(tipo_backup)
+def listar_arquivos_backup_destino_externo():
+    configuracao = obter_configuracao_backup()
+    pasta = configuracao.get("destino_externo_pasta") or ""
+    return listar_arquivos_backup_em_pasta(pasta)
+
+def limpar_backups_antigos_em_pasta(pasta, tipo_backup=None):
+    backups = listar_arquivos_backup_em_pasta(pasta, tipo_backup)
     retencao = obter_configuracao_backup()["retencao_arquivos"]
     removidos = 0
 
@@ -450,6 +509,124 @@ def limpar_backups_antigos_banco(tipo_backup=None):
             continue
 
     return removidos
+
+def limpar_backups_antigos_banco(tipo_backup=None):
+    return limpar_backups_antigos_em_pasta(caminho_diretorio_backup(), tipo_backup)
+
+def preparar_destino_externo_backup(configuracao=None, criar=False):
+    configuracao = configuracao or obter_configuracao_backup()
+    if not bool(int(configuracao.get("destino_externo_ativo") or 0)):
+        return ""
+
+    pasta = normalizar_caminho_destino_externo(configuracao.get("destino_externo_pasta"))
+    if not pasta:
+        return ""
+
+    if criar:
+        os.makedirs(pasta, exist_ok=True)
+
+    return pasta
+
+def copiar_arquivo_para_destino(origem_path, destino_path):
+    os.makedirs(os.path.dirname(destino_path), exist_ok=True)
+    caminho_temp = f"{destino_path}.tmp"
+
+    if os.path.exists(caminho_temp):
+        try:
+            os.remove(caminho_temp)
+        except Exception:
+            pass
+
+    shutil.copy2(origem_path, caminho_temp)
+    os.replace(caminho_temp, destino_path)
+
+def gerar_snapshot_banco_para_arquivo(destino_path):
+    origem = None
+    destino = None
+    caminho_origem = caminho_banco_absoluto()
+
+    if not os.path.exists(caminho_origem):
+        raise FileNotFoundError("Banco principal nao encontrado para sincronizacao externa.")
+
+    os.makedirs(os.path.dirname(destino_path), exist_ok=True)
+    caminho_temp = f"{destino_path}.tmp"
+
+    if os.path.exists(caminho_temp):
+        try:
+            os.remove(caminho_temp)
+        except Exception:
+            pass
+
+    try:
+        origem = sqlite3.connect(f"file:{caminho_origem}?mode=ro", uri=True)
+        destino = sqlite3.connect(caminho_temp)
+        with destino:
+            origem.backup(destino)
+    finally:
+        try:
+            if origem:
+                origem.close()
+        except Exception:
+            pass
+        try:
+            if destino:
+                destino.close()
+        except Exception:
+            pass
+
+    os.replace(caminho_temp, destino_path)
+
+def sincronizar_backup_destino_externo(caminho_backup=None, configuracao=None, incluir_snapshot=True):
+    configuracao = configuracao or obter_configuracao_backup()
+    ativo = bool(int(configuracao.get("destino_externo_ativo") or 0))
+    pasta = preparar_destino_externo_backup(configuracao, criar=ativo)
+
+    if not ativo:
+        return {
+            "ativo": False,
+            "sucesso": False,
+            "pasta": "",
+            "mensagem": "Destino externo desativado.",
+        }
+
+    if not pasta:
+        return {
+            "ativo": True,
+            "sucesso": False,
+            "pasta": "",
+            "mensagem": "Selecione uma pasta sincronizada para enviar o backup.",
+        }
+
+    copiados = []
+
+    try:
+        if caminho_backup and os.path.exists(caminho_backup):
+            destino_backup = os.path.join(pasta, os.path.basename(caminho_backup))
+            copiar_arquivo_para_destino(caminho_backup, destino_backup)
+            tipo_backup = identificar_tipo_backup_por_nome(os.path.basename(caminho_backup))
+            limpar_backups_antigos_em_pasta(pasta, tipo_backup)
+            copiados.append(os.path.basename(destino_backup))
+
+        if incluir_snapshot:
+            destino_banco = os.path.join(pasta, BACKUP_ARQUIVO_BANCO_ATUAL)
+            gerar_snapshot_banco_para_arquivo(destino_banco)
+            copiados.append(os.path.basename(destino_banco))
+
+        return {
+            "ativo": True,
+            "sucesso": True,
+            "pasta": pasta,
+            "arquivos": copiados,
+            "mensagem": "Sincronizacao externa atualizada com sucesso.",
+        }
+    except Exception as e:
+        return {
+            "ativo": True,
+            "sucesso": False,
+            "pasta": pasta,
+            "arquivos": copiados,
+            "mensagem": f"Falha ao copiar para a pasta sincronizada: {e}",
+        }
 
 def listar_fontes_backup_completo():
     fontes = []
@@ -566,13 +743,16 @@ def obter_status_backup_banco():
     configuracao = obter_configuracao_backup()
     tipo_backup = configuracao["tipo_backup"]
     backups = listar_arquivos_backup_banco(tipo_backup)
+    backups_externos = listar_arquivos_backup_destino_externo()
     ultimo = backups[0] if backups else None
+    ultimo_externo = backups_externos[0] if backups_externos else None
     caminho_ultimo = ultimo["caminho"] if ultimo else ""
     proximo_backup_dt = (
         calcular_proximo_backup_programado(ultimo.get("modificado_dt"), configuracao["frequencia"])
         if ultimo else None
     )
     proximo_backup_iso = proximo_backup_dt.isoformat(timespec="seconds") if proximo_backup_dt else ""
+    destino_externo_pasta = configuracao.get("destino_externo_pasta") or ""
 
     return {
         "ativo": True,
@@ -592,6 +772,14 @@ def obter_status_backup_banco():
         "proximo_backup_em": proximo_backup_iso,
         "proximo_backup_em_fmt": (
             formatar_datahora(proximo_backup_iso) if proximo_backup_iso else "Assim que a rotina rodar"
+        ),
+        "destino_externo_ativo": bool(int(configuracao.get("destino_externo_ativo") or 0)),
+        "destino_externo_pasta": destino_externo_pasta,
+        "destino_externo_disponivel": bool(destino_externo_pasta and os.path.isdir(destino_externo_pasta)),
+        "destino_externo_quantidade": len(backups_externos),
+        "ultimo_destino_externo_nome": ultimo_externo["nome"] if ultimo_externo else "",
+        "ultimo_destino_externo_em_fmt": (
+            ultimo_externo["modificado_em_fmt"] if ultimo_externo else "Nenhum envio externo ainda"
         ),
     }
 
@@ -614,12 +802,23 @@ def criar_backup_banco(force=False, tipo_backup=None):
             not force and
             periodo_backup_coberto(configuracao["frequencia"], ultimo_backup.get("modificado_dt"), agora_atual)
         ):
+            sync_externo = sincronizar_backup_destino_externo(
+                ultimo_backup["caminho"],
+                configuracao=configuracao,
+                incluir_snapshot=True,
+            )
+            mensagem_periodo = (
+                f"Backup {configuracao['frequencia_label'].lower()} "
+                f"{label_tipo_backup(tipo_efetivo).lower()} ja criado no periodo atual."
+            )
+            if sync_externo["ativo"]:
+                if sync_externo["sucesso"]:
+                    mensagem_periodo += " Copia externa atualizada."
+                else:
+                    mensagem_periodo += f" Aviso: {sync_externo['mensagem']}"
             return (
                 True,
-                (
-                    f"Backup {configuracao['frequencia_label'].lower()} "
-                    f"{label_tipo_backup(tipo_efetivo).lower()} ja criado no periodo atual."
-                ),
+                mensagem_periodo,
                 ultimo_backup["caminho"],
             )
 
@@ -628,7 +827,18 @@ def criar_backup_banco(force=False, tipo_backup=None):
         if tipo_efetivo == "completo":
             escrever_zip_backup_completo(destino_path)
             limpar_backups_antigos_banco(tipo_efetivo)
-            return True, "Backup completo do sistema criado com sucesso.", destino_path
+            mensagem = "Backup completo do sistema criado com sucesso."
+            sync_externo = sincronizar_backup_destino_externo(
+                destino_path,
+                configuracao=configuracao,
+                incluir_snapshot=True,
+            )
+            if sync_externo["ativo"]:
+                if sync_externo["sucesso"]:
+                    mensagem += " Copia externa atualizada."
+                else:
+                    mensagem += f" Aviso: {sync_externo['mensagem']}"
+            return True, mensagem, destino_path
 
         caminho_origem = caminho_banco_absoluto()
         if not os.path.exists(caminho_origem):
@@ -641,7 +851,18 @@ def criar_backup_banco(force=False, tipo_backup=None):
             origem.backup(destino)
 
         limpar_backups_antigos_banco(tipo_efetivo)
-        return True, "Backup automatico do banco criado com sucesso.", destino_path
+        mensagem = "Backup automatico do banco criado com sucesso."
+        sync_externo = sincronizar_backup_destino_externo(
+            destino_path,
+            configuracao=configuracao,
+            incluir_snapshot=True,
+        )
+        if sync_externo["ativo"]:
+            if sync_externo["sucesso"]:
+                mensagem += " Copia externa atualizada."
+            else:
+                mensagem += f" Aviso: {sync_externo['mensagem']}"
+        return True, mensagem, destino_path
     except Exception as e:
         return False, f"Erro ao criar backup: {e}", None
     finally:
@@ -701,14 +922,22 @@ def restaurar_backup_banco(nome_arquivo_backup):
             destino = None
 
         init_db()
+        sync_externo = sincronizar_backup_destino_externo(
+            None,
+            configuracao=obter_configuracao_backup(),
+            incluir_snapshot=True,
+        )
 
         nome_preventivo = os.path.basename(backup_preventivo) if backup_preventivo else ""
+        mensagem = (
+            f"Banco restaurado com sucesso usando {selecionado['nome']}. "
+            f"Backup preventivo salvo em {nome_preventivo}."
+        )
+        if sync_externo["ativo"] and not sync_externo["sucesso"]:
+            mensagem += f" Aviso: {sync_externo['mensagem']}"
         return (
             True,
-            (
-                f"Banco restaurado com sucesso usando {selecionado['nome']}. "
-                f"Backup preventivo salvo em {nome_preventivo}."
-            ),
+            mensagem,
         )
     except Exception as e:
         return False, f"Erro ao restaurar backup: {e}"
@@ -838,6 +1067,26 @@ def caminho_absoluto_usuario_foto(caminho):
 
     return os.path.normpath(os.path.join(caminho_uploads_perfis_absoluto(), os.path.basename(texto)))
 
+def caminho_relativo_usuario_foto(nome_arquivo):
+    nome = os.path.basename(str(nome_arquivo or "").replace("\\", "/").strip())
+    if not nome:
+        return ""
+
+    return f"static/uploads/perfis/{nome}"
+
+def normalizar_registro_usuario_foto(caminho):
+    texto = str(caminho or "").strip()
+    if not texto:
+        return ""
+
+    rel_static = caminho_relativo_static(texto)
+    if rel_static:
+        nome_rel = rel_static.replace("\\", "/")
+        if nome_rel.startswith("static/uploads/perfis/"):
+            return nome_rel
+
+    return caminho_relativo_usuario_foto(texto)
+
 def url_foto_usuario(caminho):
     return caminho_foto_para_url(caminho) if str(caminho or "").strip() else ""
 
@@ -853,6 +1102,77 @@ def remover_foto_perfil_antiga(caminho):
         os.remove(caminho_abs)
     except Exception:
         pass
+
+def localizar_arquivo_em_subpastas(pasta_base, nome_arquivo):
+    nome = os.path.basename(str(nome_arquivo or "").replace("\\", "/").strip())
+    if not nome or not os.path.exists(pasta_base):
+        return ""
+
+    for raiz, _, arquivos in os.walk(pasta_base):
+        if nome in arquivos:
+            return os.path.join(raiz, nome)
+
+    return ""
+
+def reparar_registros_foto_perfil():
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, foto_perfil
+        FROM usuarios
+        WHERE foto_perfil IS NOT NULL AND TRIM(foto_perfil) <> ''
+    """)
+    usuarios = c.fetchall()
+    atualizacoes = []
+
+    for usuario in usuarios:
+        registro_atual = str(usuario["foto_perfil"] or "").strip()
+        registro_normalizado = normalizar_registro_usuario_foto(registro_atual)
+        caminho_atual = caminho_absoluto_usuario_foto(registro_atual)
+        caminho_normalizado = caminho_absoluto_usuario_foto(registro_normalizado)
+
+        if caminho_normalizado and os.path.exists(caminho_normalizado):
+            if registro_atual != registro_normalizado:
+                atualizacoes.append((registro_normalizado, usuario["id"]))
+            continue
+
+        if caminho_atual and os.path.exists(caminho_atual):
+            if registro_atual != registro_normalizado:
+                atualizacoes.append((registro_normalizado, usuario["id"]))
+            continue
+
+        encontrado_em_orfaos = localizar_arquivo_em_subpastas(
+            caminho_uploads_orfaos_absoluto(),
+            registro_atual,
+        )
+        if not encontrado_em_orfaos:
+            continue
+
+        destino = caminho_absoluto_usuario_foto(registro_normalizado)
+        if not destino:
+            continue
+
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        try:
+            if os.path.normcase(os.path.normpath(encontrado_em_orfaos)) != os.path.normcase(
+                os.path.normpath(destino)
+            ):
+                if os.path.exists(destino):
+                    os.remove(destino)
+                shutil.move(encontrado_em_orfaos, destino)
+            atualizacoes.append((registro_normalizado, usuario["id"]))
+        except Exception:
+            continue
+
+    if atualizacoes:
+        c.executemany(
+            "UPDATE usuarios SET foto_perfil=? WHERE id=?",
+            atualizacoes,
+        )
+        conn.commit()
+
+    conn.close()
+    return len(atualizacoes)
 
 def coletar_metricas_diretorio(pasta, ignorar_subpastas=None):
     base = os.path.abspath(pasta)
@@ -1055,6 +1375,15 @@ def executar_manutencao_arquivos(force=False, registrar_log=True, usuario=None):
             caminho_ref = normalizar_caminho_arquivo(row["caminho"])
             if caminho_ref:
                 referenced.add(caminho_ref)
+        c.execute("""
+            SELECT foto_perfil
+            FROM usuarios
+            WHERE foto_perfil IS NOT NULL AND TRIM(foto_perfil) <> ''
+        """)
+        for row in c.fetchall():
+            caminho_ref = caminho_absoluto_usuario_foto(row["foto_perfil"])
+            if caminho_ref:
+                referenced.add(normalizar_caminho_arquivo(caminho_ref))
         conn.close()
 
         orfaos_movidos = 0
@@ -1619,6 +1948,8 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "configuracao_backup", "frequencia TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "tipo_backup TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "retencao_arquivos INTEGER")
+    adicionar_coluna_se_preciso(c, "configuracao_backup", "destino_externo_ativo INTEGER")
+    adicionar_coluna_se_preciso(c, "configuracao_backup", "destino_externo_pasta TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "atualizado_em TEXT")
     adicionar_coluna_se_preciso(c, "manutencao_arquivos", "ultimo_executado_em TEXT")
     adicionar_coluna_se_preciso(c, "manutencao_arquivos", "ultima_mensagem TEXT")
@@ -1632,6 +1963,10 @@ def atualizar_banco():
     c.execute("""
         UPDATE configuracao_backup
         SET tipo_backup=COALESCE(NULLIF(tipo_backup, ''), 'completo')
+    """)
+    c.execute("""
+        UPDATE configuracao_backup
+        SET destino_externo_ativo=COALESCE(destino_externo_ativo, 0)
     """)
     c.execute("""
         UPDATE usuarios
@@ -1828,6 +2163,10 @@ def atualizar_banco():
     c.execute("CREATE INDEX IF NOT EXISTS idx_retornos_clientes_status ON retornos_clientes(status, proximo_contato_em)")
 
     conn.commit()
+    try:
+        reparar_registros_foto_perfil()
+    except Exception:
+        pass
     conn.close()
 
 def init_db():
@@ -2244,6 +2583,8 @@ def criar_todas_tabelas():
         frequencia TEXT DEFAULT 'diario',
         tipo_backup TEXT DEFAULT 'completo',
         retencao_arquivos INTEGER DEFAULT 15,
+        destino_externo_ativo INTEGER DEFAULT 0,
+        destino_externo_pasta TEXT,
         atualizado_em TEXT
     )
     """)
@@ -3831,7 +4172,7 @@ def salvar_foto_perfil_usuario(foto, identificador="usuario"):
                 optimize=True,
                 progressive=True,
             )
-            return destino
+            return caminho_relativo_usuario_foto(destino)
         except (UnidentifiedImageError, OSError, ValueError):
             raise ValueError("Nao consegui processar a foto enviada. Tente outra imagem.")
         except Exception:
@@ -3844,7 +4185,7 @@ def salvar_foto_perfil_usuario(foto, identificador="usuario"):
     )
     foto.stream.seek(0)
     foto.save(destino)
-    return destino
+    return caminho_relativo_usuario_foto(destino)
 
 def salvar_arquivo_imagem_otimizado(foto):
     pasta_destino = caminho_uploads_servicos_diretorio()
@@ -6911,6 +7252,7 @@ def configuracoes():
         tipos_backup=TIPOS_BACKUP,
         backups_disponiveis=listar_arquivos_backup_banco(),
         arquivos_status=arquivos_status,
+        pastas_sync_sugeridas=listar_pastas_sincronizadas_sugeridas(),
     )
 
 @app.route("/configuracoes/backup", methods=["POST"])
@@ -6923,6 +7265,27 @@ def salvar_configuracao_backup():
         definir_feedback_configuracoes("erro", "Somente administradores podem alterar a rotina de backup.")
         return redirect("/configuracoes")
 
+    destino_externo_ativo = 1 if bool_config_ativo(request.form.get("destino_externo_ativo")) else 0
+    destino_externo_pasta = normalizar_caminho_destino_externo(
+        request.form.get("destino_externo_pasta"),
+    )
+    if destino_externo_ativo and not destino_externo_pasta:
+        definir_feedback_configuracoes(
+            "erro",
+            "Informe a pasta sincronizada do Google Drive antes de ativar a copia externa.",
+        )
+        return redirect("/configuracoes")
+
+    if destino_externo_ativo:
+        try:
+            os.makedirs(destino_externo_pasta, exist_ok=True)
+        except Exception as e:
+            definir_feedback_configuracoes(
+                "erro",
+                f"Nao foi possivel acessar a pasta sincronizada informada: {e}",
+            )
+            return redirect("/configuracoes")
+
     configuracao = salvar_configuracao_backup_form(request.form)
     registrar_auditoria(
         "configurou_backup",
@@ -6931,6 +7294,8 @@ def salvar_configuracao_backup():
             "frequencia": configuracao["frequencia"],
             "tipo_backup": configuracao["tipo_backup"],
             "retencao_arquivos": configuracao["retencao_arquivos"],
+            "destino_externo_ativo": bool(int(configuracao["destino_externo_ativo"] or 0)),
+            "destino_externo_pasta": configuracao["destino_externo_pasta"],
         },
     )
     definir_feedback_configuracoes(
@@ -6939,7 +7304,8 @@ def salvar_configuracao_backup():
             f"Rotina de backup atualizada para "
             f"{configuracao['frequencia_label'].lower()} "
             f"em modo {configuracao['tipo_backup_label'].lower()} "
-            f"com retencao de {configuracao['retencao_arquivos']} arquivo(s)."
+            f"com retencao de {configuracao['retencao_arquivos']} arquivo(s). "
+            f"{'Copia externa ativada.' if int(configuracao['destino_externo_ativo'] or 0) else 'Copia externa desativada.'}"
         )
     )
     return redirect("/configuracoes")
