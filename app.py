@@ -3381,12 +3381,42 @@ def obter_momento_registro_sync(registro):
     return None
 
 
-def decidir_atualizar_registro_sync(registro_origem, registro_destino, origem_prevalece_em_empate=False):
+def obter_status_operacional_sync(registro):
+    if not registro:
+        return ""
+
+    for chave in ("status", "status_atendimento"):
+        valor = normalizar_texto_campo(registro.get(chave)).upper()
+        if valor:
+            return valor
+    return ""
+
+
+def decidir_atualizar_registro_sync(
+    registro_origem,
+    registro_destino,
+    origem_prevalece_em_empate=False,
+    tabela=None,
+):
     hash_origem = hash_registro_sync(registro_origem)
     hash_destino = hash_registro_sync(registro_destino)
 
     if hash_origem == hash_destino:
         return False
+
+    if tabela in {"servicos", "veiculos"}:
+        status_origem = obter_status_operacional_sync(registro_origem)
+        status_destino = obter_status_operacional_sync(registro_destino)
+
+        if status_origem == "FINALIZADO" and status_destino != "FINALIZADO":
+            return True
+        if status_destino == "FINALIZADO" and status_origem != "FINALIZADO":
+            return False
+
+        if status_origem == "EM ANDAMENTO" and status_destino == "FINALIZADO":
+            return False
+        if status_destino == "EM ANDAMENTO" and status_origem == "FINALIZADO":
+            return True
 
     momento_origem = obter_momento_registro_sync(registro_origem)
     momento_destino = obter_momento_registro_sync(registro_destino)
@@ -3644,6 +3674,7 @@ def sincronizar_tabela_incremental(origem_conn, destino_conn, tabela, origem_pre
                 registro_dict,
                 registro_destino,
                 origem_prevalece_em_empate=origem_prevalece_em_empate,
+                tabela=tabela,
             ):
                 estatisticas["ignorados"] += 1
                 continue
