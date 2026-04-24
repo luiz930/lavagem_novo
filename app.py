@@ -12006,20 +12006,12 @@ def checklist_servico(id):
                 id,
             ))
 
-            c.execute("""
-                SELECT veiculo_id, placa
-                FROM servicos
-                WHERE id=?
-            """, (id,))
-            servico_finalizado = c.fetchone()
-            veiculo_finalizado_id = servico_finalizado["veiculo_id"] if servico_finalizado else None
-            placa_finalizada = normalizar_texto_campo(
-                (servico_finalizado or {}).get("placa") or servico["placa"]
-            ).upper()
+            veiculo_finalizado_id = servico["veiculo_id"]
+            placa_finalizada = normalizar_texto_campo(servico.get("placa") or "-").upper()
 
             sincronizar_resumo_veiculo_cliente(
                 c,
-                veiculo_finalizado_id or servico["veiculo_id"],
+                veiculo_finalizado_id,
                 placa=placa_finalizada,
                 status_atendimento="FINALIZADO",
                 entrega=agora_iso(),
