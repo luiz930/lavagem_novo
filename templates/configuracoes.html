@@ -68,6 +68,30 @@
     </div>
 </div>
 
+<div class="page-card top-spacing">
+    <p class="pill-label">Versao do sistema</p>
+    <h2 class="section-title top-spacing">{{ configuracao_empresa.versao_sistema_label }}</h2>
+    <p class="muted-text">Essa versao aparece no HUD, no rodape e nas telas do sistema. Ela vem direto do banco e pode ser ajustada sem alterar o codigo.</p>
+
+    {% if admin_logado %}
+    <form action="/configuracoes/versao" method="POST" class="stack-form stack-form--wide top-spacing">
+        <input
+            name="versao_sistema"
+            type="text"
+            value="{{ configuracao_empresa.versao_sistema }}"
+            placeholder="Ex.: 0.8.0-beta"
+            autocomplete="off"
+            required
+        >
+        <div class="actions-row actions-row--left">
+            <button type="submit">Salvar versao</button>
+        </div>
+    </form>
+    {% else %}
+    <p class="muted-text top-spacing">Somente administradores podem alterar a versao oficial do sistema.</p>
+    {% endif %}
+</div>
+
 <div class="page-grid top-spacing">
     <div class="page-card">
         <p class="pill-label">Banco online</p>
@@ -242,13 +266,29 @@
             </label>
 
             <div data-backup-mode="google_drive" class="stack-form stack-form--wide" {% if backup_config.destino_externo_tipo != 'google_drive' %}hidden{% endif %}>
-                <input
-                    type="text"
-                    name="destino_externo_drive_folder_id"
-                    value="{{ backup_config.destino_externo_drive_folder_id }}"
-                    placeholder="ID da pasta do Google Drive"
-                    autocomplete="off"
-                >
+                <div class="password-toggle-row connection-toggle-row">
+                    <input
+                        type="text"
+                        name="destino_externo_drive_folder_id"
+                        value="{{ backup_config.destino_externo_drive_folder_id }}"
+                        placeholder="ID da pasta do Google Drive"
+                        autocomplete="off"
+                        readonly
+                        data-backup-drive-folder-id-input
+                    >
+                    <button type="button" class="password-toggle-button" data-toggle-backup-drive-folder-id>Editar pasta</button>
+                </div>
+                <p>
+                    <span class="status-badge {% if backup_config.destino_externo_ativo and backup_status.destino_externo_escrevivel %}status-badge--success{% elif backup_config.destino_externo_ativo %}status-badge--warning{% else %}status-badge--muted{% endif %}">
+                        {% if backup_config.destino_externo_ativo and backup_status.destino_externo_escrevivel %}
+                        Drive conectado
+                        {% elif backup_config.destino_externo_ativo %}
+                        Drive configurado, mas offline
+                        {% else %}
+                        Drive desativado
+                        {% endif %}
+                    </span>
+                </p>
                 <p class="muted-text">
                     Cole o ID da pasta do Google Drive online. A credencial da conta de servico fica fora do GitHub,
                     em variavel de ambiente ou arquivo seguro do servidor.
@@ -524,6 +564,8 @@ if (backupDestinoSelector) {
 
 const databaseUrlInput = document.querySelector("[data-database-url-input]");
 const databaseUrlToggle = document.querySelector("[data-toggle-database-url]");
+const backupDriveFolderInput = document.querySelector("[data-backup-drive-folder-id-input]");
+const backupDriveFolderToggle = document.querySelector("[data-toggle-backup-drive-folder-id]");
 
 if (databaseUrlInput && databaseUrlToggle) {
     databaseUrlToggle.addEventListener("click", () => {
@@ -536,6 +578,21 @@ if (databaseUrlInput && databaseUrlToggle) {
         } else {
             databaseUrlInput.setAttribute("readonly", "readonly");
             databaseUrlToggle.textContent = "Editar conexão";
+        }
+    });
+}
+
+if (backupDriveFolderInput && backupDriveFolderToggle) {
+    backupDriveFolderToggle.addEventListener("click", () => {
+        const bloqueado = backupDriveFolderInput.hasAttribute("readonly");
+        if (bloqueado) {
+            backupDriveFolderInput.removeAttribute("readonly");
+            backupDriveFolderToggle.textContent = "Travar pasta";
+            backupDriveFolderInput.focus();
+            backupDriveFolderInput.select();
+        } else {
+            backupDriveFolderInput.setAttribute("readonly", "readonly");
+            backupDriveFolderToggle.textContent = "Editar pasta";
         }
     });
 }

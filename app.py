@@ -2615,7 +2615,8 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = False
 app.secret_key = "wagen_super_segura_123"
 
-APP_VERSION = "Versão: 0.7.5-alpha (Em Desenvolvimento)"
+VERSAO_SISTEMA_PADRAO = "0.7.5-alpha (Em Desenvolvimento)"
+APP_VERSION = f"Versão: {VERSAO_SISTEMA_PADRAO}"
 MESES_CURTOS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 PERIODOS_FINANCEIRO = [
     {"value": "hoje", "label": "Hoje"},
@@ -2644,6 +2645,7 @@ ACOES_AUDITORIA_LABELS = {
     "atualizou_integracao_fiscal": "Atualizou integracao fiscal",
     "configurou_backup": "Configurou rotina de backup",
     "criou_usuario": "Criou usuario",
+    "atualizou_versao_sistema": "Atualizou versao do sistema",
     "finalizou_atendimento": "Finalizou atendimento",
     "gerou_backup_manual": "Gerou backup manual",
     "gerou_nota_fiscal": "Gerou nota fiscal",
@@ -2730,9 +2732,37 @@ ALIASES_CAMPOS_SYNC = {
 }
 
 
+def normalizar_versao_sistema(valor):
+    texto = normalizar_texto_campo(valor)
+    if not texto:
+        return VERSAO_SISTEMA_PADRAO
+    texto = re.sub(r"(?i)^\s*vers[aã]o\s*:\s*", "", texto).strip()
+    return texto or VERSAO_SISTEMA_PADRAO
+
+
+def formatar_versao_sistema(valor):
+    return f"Versão: {normalizar_versao_sistema(valor)}"
+
+
+def obter_versao_sistema():
+    try:
+        conn = conectar()
+        c = conn.cursor()
+        c.execute("SELECT versao_sistema FROM configuracao_empresa WHERE id=1")
+        item = c.fetchone()
+        conn.close()
+
+        if item:
+            return formatar_versao_sistema(item["versao_sistema"])
+    except Exception:
+        pass
+
+    return APP_VERSION
+
+
 @app.context_processor
 def inject_global_template_context():
-    return {"app_version": APP_VERSION}
+    return {"app_version": obter_versao_sistema()}
 
 
 sync_lock = Lock()
@@ -3791,6 +3821,7 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "veiculos", "atendimento_ativo INTEGER DEFAULT 0")
     adicionar_coluna_se_preciso(c, "veiculos", "ultima_entrada TEXT")
     adicionar_coluna_se_preciso(c, "veiculos", "ultima_entrega TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "versao_sistema TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "frequencia TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "tipo_backup TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "retencao_arquivos INTEGER")
@@ -3990,6 +4021,7 @@ def atualizar_banco():
         cep TEXT,
         codigo_servico_padrao TEXT,
         aliquota_padrao REAL DEFAULT 0,
+        versao_sistema TEXT,
         atualizado_em TEXT
     )
     """)
@@ -4411,6 +4443,7 @@ def criar_todas_tabelas():
         cep TEXT,
         codigo_servico_padrao TEXT,
         aliquota_padrao REAL DEFAULT 0,
+        versao_sistema TEXT,
         atualizado_em TEXT
     )
     """)
@@ -5064,6 +5097,7 @@ def empresa_snapshot_padrao():
         "cep": "",
         "codigo_servico_padrao": "",
         "aliquota_padrao": 0.0,
+        "versao_sistema": VERSAO_SISTEMA_PADRAO,
     }
 
 def obter_configuracao_empresa():
@@ -5078,10 +5112,36 @@ def obter_configuracao_empresa():
     if item:
         dados.update(dict(item))
 
+    dados["versao_sistema"] = normalizar_versao_sistema(dados.get("versao_sistema"))
+    dados["versao_sistema_label"] = formatar_versao_sistema(dados.get("versao_sistema"))
     dados["cnpj_formatado"] = formatar_documento_fiscal(dados.get("cnpj"))
     dados["cep_formatado"] = formatar_cep(dados.get("cep"))
     dados["aliquota_padrao"] = converter_valor_numerico(dados.get("aliquota_padrao"))
     return dados
+
+def salvar_configuracao_versao_form(form):
+    versao = normalizar_versao_sistema(form.get("versao_sistema"))
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO configuracao_empresa (
+            id, versao_sistema, atualizado_em
+        )
+        VALUES (
+            1, ?, ?
+        )
+        ON CONFLICT(id) DO UPDATE SET
+            versao_sistema=excluded.versao_sistema,
+            atualizado_em=excluded.atualizado_em
+    """, (
+        versao,
+        agora_iso(),
+    ))
+    conn.commit()
+    conn.close()
+
+    return versao
 
 def salvar_configuracao_empresa_form(form):
     conn = conectar()
@@ -9338,7 +9398,7 @@ def api_hud():
     total = c.fetchone()[0] or 0
 
     # ⚙️ em andamento
-    c.execute("SELECT COUNT(*) FROM servicos WHERE status='EM ANDAMENTO'")
+    c.execute("SELECT COUNT(*) FROM servicos WHERE COALESCE(TRIM(UPPER(status)), '')='EM ANDAMENTO'")
     andamento = c.fetchone()[0]
 
     # 📦 finalizados hoje
@@ -9353,7 +9413,7 @@ def api_hud():
     ticket = total / quantidade if quantidade > 0 else 0
 
     # 🚨 atrasados (>2h)
-    c.execute("SELECT entrada FROM servicos WHERE status='EM ANDAMENTO'")
+    c.execute("SELECT entrada FROM servicos WHERE COALESCE(TRIM(UPPER(status)), '')='EM ANDAMENTO'")
     servicos = c.fetchall()
 
     atrasados = 0
@@ -9381,7 +9441,7 @@ def api_hud():
         LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
         LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
         LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
-        WHERE servicos.status='EM ANDAMENTO'
+        WHERE COALESCE(TRIM(UPPER(servicos.status)), '')='EM ANDAMENTO'
     """)
     entregas_raw = [dict(row) for row in c.fetchall()]
     resumo_entregas = resumir_entregas_em_andamento(entregas_raw, referencia=agora)
@@ -9556,7 +9616,7 @@ def api_hud():
         "banco_online_resumo": banco_online_resumo,
         "banco_online_mensagem": banco_online_mensagem,
         "banco_online_backend_label": banco_online_backend,
-        "versao": APP_VERSION,
+        "versao": obter_versao_sistema(),
         "usuario": session.get("usuario") or "",
         "usuario_nome": session.get("usuario_nome") or session.get("usuario") or "",
         "usuario_iniciais": session.get("usuario_iniciais") or obter_iniciais_usuario(
@@ -9866,6 +9926,7 @@ def configuracoes():
     sincronizar_sessao_usuario()
     pode_gerenciar_usuarios = usuario_admin() and not session.get("senha_alteracao_obrigatoria")
     usuarios = carregar_usuarios_configuracao() if pode_gerenciar_usuarios else []
+    configuracao_empresa = obter_configuracao_empresa()
     banco_status = obter_status_banco_online()
     banco_config = obter_configuracao_banco_form()
     backup_config = obter_configuracao_backup()
@@ -9890,6 +9951,7 @@ def configuracoes():
         },
         usuarios=usuarios,
         admin_logado=pode_gerenciar_usuarios,
+        configuracao_empresa=configuracao_empresa,
         banco_status=banco_status,
         banco_config=banco_config,
         backup_status=obter_status_backup_banco(),
@@ -9900,6 +9962,35 @@ def configuracoes():
         arquivos_status=arquivos_status,
         pastas_sync_sugeridas=listar_pastas_sincronizadas_sugeridas(),
     )
+
+@app.route("/configuracoes/versao", methods=["POST"])
+def salvar_configuracao_versao():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_admin():
+        definir_feedback_configuracoes("erro", "Somente administradores podem alterar a versao do sistema.")
+        return redirect("/configuracoes")
+
+    try:
+        versao = salvar_configuracao_versao_form(request.form)
+    except Exception as e:
+        definir_feedback_configuracoes("erro", f"Nao foi possivel salvar a versao do sistema: {e}")
+        return redirect("/configuracoes")
+
+    registrar_auditoria(
+        "atualizou_versao_sistema",
+        "configuracao_empresa",
+        detalhes={
+            "versao_sistema": versao,
+        },
+    )
+    definir_feedback_configuracoes(
+        "sucesso",
+        f"Versao do sistema atualizada para {formatar_versao_sistema(versao)}.",
+    )
+    return redirect("/configuracoes")
 
 @app.route("/configuracoes/banco", methods=["POST"])
 def salvar_configuracao_banco():
@@ -11094,7 +11185,7 @@ def index():
         buscou=buscou,
         placa=placa,
         lavagem_info=lavagem_info,
-        version=APP_VERSION,
+        version=obter_versao_sistema(),
         feedback_index=session.pop("index_feedback", None),
         servicos_lista=servicos_lista,
         produtos_pneu=produtos_pneu
@@ -11589,7 +11680,7 @@ def servico():
     # 🔥 PRIORIDADE
     c.execute("""
         SELECT MAX(prioridade) FROM servicos 
-        WHERE status='EM ANDAMENTO'
+        WHERE COALESCE(TRIM(UPPER(status)), '')='EM ANDAMENTO'
     """)
 
     resultado = c.fetchone()[0]
@@ -11903,7 +11994,10 @@ def checklist_servico(id):
             fotos_saida_salvas = salvar_fotos_servico(c, id, fotos_saida, "saida")
             c.execute("""
                 UPDATE servicos
-                SET status='FINALIZADO', entrega=?, finalizado_por_usuario=?, finalizado_por_nome=?
+                SET status='FINALIZADO',
+                    entrega=?,
+                    finalizado_por_usuario=?,
+                    finalizado_por_nome=?
                 WHERE id=?
             """, (
                 agora_iso(),
@@ -11912,10 +12006,21 @@ def checklist_servico(id):
                 id,
             ))
 
+            c.execute("""
+                SELECT veiculo_id, placa
+                FROM servicos
+                WHERE id=?
+            """, (id,))
+            servico_finalizado = c.fetchone()
+            veiculo_finalizado_id = servico_finalizado["veiculo_id"] if servico_finalizado else None
+            placa_finalizada = normalizar_texto_campo(
+                (servico_finalizado or {}).get("placa") or servico["placa"]
+            ).upper()
+
             sincronizar_resumo_veiculo_cliente(
                 c,
-                servico["veiculo_id"],
-                placa=servico["placa"],
+                veiculo_finalizado_id or servico["veiculo_id"],
+                placa=placa_finalizada,
                 status_atendimento="FINALIZADO",
                 entrega=agora_iso(),
             )
@@ -11999,14 +12104,14 @@ def prioridade(id, acao):
     if acao == "up":
         c.execute("""
         SELECT id, prioridade FROM servicos
-        WHERE prioridade < ? AND status='EM ANDAMENTO'
+        WHERE prioridade < ? AND COALESCE(TRIM(UPPER(status)), '')='EM ANDAMENTO'
         ORDER BY prioridade DESC LIMIT 1
         """, (atual,))
 
     elif acao == "down":
         c.execute("""
         SELECT id, prioridade FROM servicos
-        WHERE prioridade > ? AND status='EM ANDAMENTO'
+        WHERE prioridade > ? AND COALESCE(TRIM(UPPER(status)), '')='EM ANDAMENTO'
         ORDER BY prioridade ASC LIMIT 1
         """, (atual,))
 
@@ -12246,7 +12351,7 @@ def listar_servicos_em_andamento_voz():
         LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
         LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
         LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
-        WHERE servicos.status='EM ANDAMENTO'
+        WHERE COALESCE(TRIM(UPPER(servicos.status)), '')='EM ANDAMENTO'
         ORDER BY servicos.id DESC
         """
     )
@@ -12332,7 +12437,7 @@ def painel():
         LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
         LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
         LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
-        WHERE status='EM ANDAMENTO'
+        WHERE COALESCE(TRIM(UPPER(status)), '')='EM ANDAMENTO'
         ORDER BY servicos.id DESC
     """)
 
