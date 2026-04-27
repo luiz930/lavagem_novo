@@ -161,6 +161,7 @@ DATABASE_BACKEND_RAW = (
 ).strip().lower()
 AUTO_MIGRAR_BANCO_RAW = (os.environ.get("AUTO_MIGRAR_BANCO") or "1").strip().lower()
 DATABASE_ONLINE_MIGRADO_RAW = (os.environ.get("DATABASE_ONLINE_MIGRADO") or "0").strip().lower()
+STRICT_ONLINE_DATABASE_RAW = (os.environ.get("STRICT_ONLINE_DATABASE") or "").strip().lower()
 
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -2823,6 +2824,24 @@ def modo_banco_preferido():
     return "postgres"
 
 
+def ambiente_render():
+    return any(
+        str(os.environ.get(chave) or "").strip()
+        for chave in (
+            "RENDER",
+            "RENDER_SERVICE_ID",
+            "RENDER_EXTERNAL_URL",
+            "IS_RENDER",
+        )
+    )
+
+
+def banco_online_estritamente_obrigatorio():
+    if STRICT_ONLINE_DATABASE_RAW in {"1", "true", "yes", "on"}:
+        return True
+    return ambiente_render() and modo_banco_preferido() == "postgres"
+
+
 def migracao_online_automatica_ativa():
     return bool_config_ativo(AUTO_MIGRAR_BANCO_RAW)
 
@@ -3282,6 +3301,10 @@ def conectar():
     if modo_banco_preferido() == "postgres":
         dsn = url_postgres_ajustada()
         if not dsn:
+            if banco_online_estritamente_obrigatorio():
+                raise RuntimeError(
+                    "Banco online obrigatorio neste ambiente, mas a connection string nao foi carregada."
+                )
             conn = sqlite3.connect(DATABASE_FILE)
             conn.row_factory = sqlite3.Row
             return ConexaoCompat(conn, "sqlite")
@@ -3301,6 +3324,11 @@ def conectar():
                 "url_masked": mascarar_url_postgres(dsn),
             }
             print("ERRO:", BANCO_ONLINE_STATUS_CACHE["resultado"]["mensagem"])
+            if banco_online_estritamente_obrigatorio():
+                raise RuntimeError(
+                    "Banco online obrigatorio neste ambiente e a conexao falhou: "
+                    f"{BANCO_ONLINE_STATUS_CACHE['resultado']['mensagem']}"
+                ) from e
             conn = sqlite3.connect(DATABASE_FILE)
             conn.row_factory = sqlite3.Row
             return ConexaoCompat(conn, "sqlite")
@@ -4185,6 +4213,11 @@ def init_db():
     if modo_banco_preferido() == "postgres":
         status_boot = diagnosticar_banco_online(force=True)
         if not status_boot.get("conectado"):
+            if banco_online_estritamente_obrigatorio():
+                raise RuntimeError(
+                    "Banco online obrigatorio no boot, mas a conexao nao foi estabelecida. "
+                    f"Detalhe: {status_boot.get('mensagem') or 'sem detalhes'}"
+                )
             print(
                 "AVISO: banco online indisponivel no boot. "
                 "O sistema vai iniciar em modo local e sincronizar quando a rede voltar."
