@@ -3392,6 +3392,27 @@ def obter_status_operacional_sync(registro):
     return ""
 
 
+def nivel_restricao_usuario_sync(registro):
+    if not registro:
+        return 0
+
+    nivel = 0
+
+    ativo = registro.get("ativo")
+    if ativo is not None and not bool(int(ativo or 0)):
+        nivel = max(nivel, 2)
+
+    bloqueado_ate = interpretar_datahora_sistema(registro.get("bloqueado_ate"))
+    if bloqueado_ate and bloqueado_ate > agora():
+        nivel = max(nivel, 3)
+
+    obrigatoria = registro.get("senha_alteracao_obrigatoria")
+    if obrigatoria is not None and bool(int(obrigatoria or 0)):
+        nivel = max(nivel, 1)
+
+    return nivel
+
+
 def decidir_atualizar_registro_sync(
     registro_origem,
     registro_destino,
@@ -3417,6 +3438,13 @@ def decidir_atualizar_registro_sync(
             return False
         if status_destino == "EM ANDAMENTO" and status_origem == "FINALIZADO":
             return True
+
+    if tabela == "usuarios":
+        nivel_origem = nivel_restricao_usuario_sync(registro_origem)
+        nivel_destino = nivel_restricao_usuario_sync(registro_destino)
+
+        if nivel_origem != nivel_destino:
+            return nivel_origem > nivel_destino
 
     momento_origem = obter_momento_registro_sync(registro_origem)
     momento_destino = obter_momento_registro_sync(registro_destino)
