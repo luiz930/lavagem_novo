@@ -2782,6 +2782,7 @@ HUD_CACHE = {
 HUD_CACHE_TTL = 4
 ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS = 0.0
 SYNC_FONTES_SOB_DEMANDA_INTERVALO = 20
+USUARIO_SESSAO_SYNC_TTL = 10
 BANCO_ONLINE_STATUS_CACHE = {
     "testado_em": 0.0,
     "resultado": {},
@@ -5057,19 +5058,23 @@ def preencher_sessao_usuario(usuario_row, limpar=True):
     session["usuario_foto_url"] = url_foto_usuario(usuario_row["foto_perfil"])
     session["usuario_perfil"] = perfil_usuario
     session["senha_alteracao_obrigatoria"] = usuario_precisa_trocar_senha(usuario_row)
+    session["usuario_sync_em"] = time.time()
     session.permanent = True
 
-def sincronizar_sessao_usuario():
+def sincronizar_sessao_usuario(force=False):
     if not session.get("usuario"):
         return
 
     if (
+        not force and
         session.get("usuario_id") and
         session.get("usuario_nome") and
         session.get("usuario_perfil") and
         "usuario_iniciais" in session and
         "usuario_foto_url" in session and
-        "senha_alteracao_obrigatoria" in session
+        "senha_alteracao_obrigatoria" in session and
+        float(session.get("usuario_sync_em") or 0.0) > 0 and
+        (time.time() - float(session.get("usuario_sync_em") or 0.0) < USUARIO_SESSAO_SYNC_TTL)
     ):
         return
 
@@ -10244,7 +10249,7 @@ def configuracoes():
     if not session.get("usuario"):
         return redirect("/login")
 
-    sincronizar_sessao_usuario()
+    sincronizar_sessao_usuario(force=True)
     senha_pendente = bool(session.get("senha_alteracao_obrigatoria"))
     perfil_logado = normalizar_perfil_usuario(
         session.get("usuario_perfil") or (
