@@ -4,6 +4,8 @@ import json
 import math
 import sqlite3
 import socket
+import base64
+import mimetypes
 from zoneinfo import ZoneInfo
 import os
 import shutil
@@ -399,7 +401,34 @@ def sanitizar_para_json(obj):
     if isinstance(obj, dt_time):  # 👈 corrigido
         return obj.strftime("%H:%M:%S")
     
+    if isinstance(obj, memoryview):
+        obj = obj.tobytes()
+
+    if isinstance(obj, (bytes, bytearray)):
+        return {"__bytes_b64__": base64.b64encode(bytes(obj)).decode("ascii")}
+
     return obj
+
+
+def desserializar_valor_json(obj):
+    if (
+        isinstance(obj, dict) and
+        set(obj.keys()) == {"__bytes_b64__"} and
+        obj.get("__bytes_b64__")
+    ):
+        try:
+            return base64.b64decode(obj["__bytes_b64__"])
+        except Exception:
+            return b""
+    return obj
+
+
+def serializar_registro_snapshot(registro):
+    registro_dict = dict(registro or {}) if not isinstance(registro, dict) else dict(registro)
+    return {
+        chave: sanitizar_para_json(valor)
+        for chave, valor in registro_dict.items()
+    }
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -531,6 +560,7 @@ def traduzir_sql_para_postgres(sql):
         texto,
         flags=re.IGNORECASE,
     )
+    texto = re.sub(r"\bBLOB\b", "BYTEA", texto, flags=re.IGNORECASE)
     return texto
 
 class CursorCompat:
@@ -1294,7 +1324,10 @@ def exportar_snapshot_banco_atual():
         for tabela in TABELAS_SISTEMA_ORDENADAS:
             try:
                 c.execute(f"SELECT * FROM {tabela} ORDER BY id")
-                snapshot["tabelas"][tabela] = [dict(row) for row in c.fetchall()]
+                snapshot["tabelas"][tabela] = [
+                    serializar_registro_snapshot(row)
+                    for row in c.fetchall()
+                ]
             except Exception:
                 snapshot["tabelas"][tabela] = []
         return snapshot
@@ -1379,7 +1412,10 @@ def importar_snapshot_banco_json(caminho_json):
 
             for registro in registros:
                 colunas = list(registro.keys())
-                valores = [registro.get(coluna) for coluna in colunas]
+                valores = [
+                    desserializar_valor_json(registro.get(coluna))
+                    for coluna in colunas
+                ]
                 marcadores = ", ".join(["?"] * len(colunas))
                 sql = f"INSERT INTO {tabela} ({', '.join(colunas)}) VALUES ({marcadores})"
                 c.execute(sql, valores)
@@ -2780,6 +2816,11 @@ HUD_CACHE = {
     "resultado": None,
 }
 HUD_CACHE_TTL = 4
+CLIMA_CACHE = {
+    "testado_em": 0.0,
+    "resultado": None,
+}
+CLIMA_CACHE_TTL = 600
 ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS = 0.0
 SYNC_FONTES_SOB_DEMANDA_INTERVALO = 20
 USUARIO_SESSAO_SYNC_TTL = 10
@@ -4067,6 +4108,9 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "fotos", "tamanho_bytes INTEGER")
     adicionar_coluna_se_preciso(c, "fotos", "largura INTEGER")
     adicionar_coluna_se_preciso(c, "fotos", "altura INTEGER")
+    adicionar_coluna_se_preciso(c, "fotos", "arquivo_blob BLOB")
+    adicionar_coluna_se_preciso(c, "fotos", "mime_type TEXT")
+    adicionar_coluna_se_preciso(c, "fotos", "arquivo_nome TEXT")
     adicionar_coluna_se_preciso(c, "usuarios", "nome TEXT")
     adicionar_coluna_se_preciso(c, "usuarios", "perfil TEXT")
     adicionar_coluna_se_preciso(c, "usuarios", "ativo INTEGER")
@@ -4132,6 +4176,45 @@ def atualizar_banco():
         UPDATE usuarios
         SET senha_atualizada_em=COALESCE(senha_atualizada_em, criado_em, ?)
     """, (agora().isoformat(timespec="seconds"),))
+
+    try:
+        c.execute("""
+            SELECT id, caminho, arquivo_blob, mime_type, arquivo_nome
+            FROM fotos
+            WHERE caminho IS NOT NULL AND TRIM(caminho) <> ''
+        """)
+        for foto in c.fetchall():
+            caminho_abs = caminho_absoluto_foto_servico(foto["caminho"])
+            if not caminho_abs or not os.path.isfile(caminho_abs):
+                continue
+
+            blob_atual = foto["arquivo_blob"]
+            mime_atual = str(foto["mime_type"] or "").strip()
+            nome_atual = str(foto["arquivo_nome"] or "").strip()
+            if blob_atual and mime_atual and nome_atual:
+                continue
+
+            try:
+                blob = blob_atual or ler_bytes_arquivo(caminho_abs)
+                mime_type = mime_atual or detectar_mime_type_arquivo(caminho_abs)
+                arquivo_nome = nome_atual or os.path.basename(caminho_abs)
+                c.execute(
+                    """
+                    UPDATE fotos
+                    SET arquivo_blob=?,
+                        mime_type=?,
+                        arquivo_nome=?
+                    WHERE id=?
+                    """,
+                    (blob, mime_type, arquivo_nome, foto["id"]),
+                )
+            except Exception:
+                continue
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
     c.execute("""
         UPDATE clientes
@@ -4606,6 +4689,9 @@ def criar_todas_tabelas():
         tamanho_bytes INTEGER,
         largura INTEGER,
         altura INTEGER,
+        arquivo_blob BLOB,
+        mime_type TEXT,
+        arquivo_nome TEXT,
         criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(servico_id) REFERENCES servicos(id)
     )
@@ -6597,6 +6683,17 @@ def salvar_foto_perfil_usuario(foto, identificador="usuario"):
     foto.save(destino)
     return caminho_relativo_usuario_foto(destino)
 
+
+def detectar_mime_type_arquivo(caminho):
+    mime_type = mimetypes.guess_type(str(caminho or ""))[0] or ""
+    return mime_type or "application/octet-stream"
+
+
+def ler_bytes_arquivo(caminho):
+    with open(caminho, "rb") as arquivo:
+        return arquivo.read()
+
+
 def salvar_arquivo_imagem_otimizado(foto):
     pasta_destino = caminho_uploads_servicos_diretorio()
     nome_seguro = secure_filename(foto.filename or "") or "foto"
@@ -6635,6 +6732,9 @@ def salvar_arquivo_imagem_otimizado(foto):
                 "tamanho_bytes": tamanho_bytes,
                 "largura": largura,
                 "altura": altura,
+                "arquivo_blob": ler_bytes_arquivo(destino),
+                "mime_type": "image/jpeg",
+                "arquivo_nome": os.path.basename(destino),
                 "compactada": True,
             }
         except (UnidentifiedImageError, OSError, ValueError):
@@ -6664,6 +6764,9 @@ def salvar_arquivo_imagem_otimizado(foto):
         "tamanho_bytes": os.path.getsize(destino),
         "largura": largura,
         "altura": altura,
+        "arquivo_blob": ler_bytes_arquivo(destino),
+        "mime_type": detectar_mime_type_arquivo(destino),
+        "arquivo_nome": os.path.basename(destino),
         "compactada": False,
     }
 
@@ -6802,9 +6905,10 @@ def salvar_fotos_servico(cursor, servico_id, fotos, tipo):
         cursor.execute(
             """
             INSERT INTO fotos (
-                servico_id, tipo, caminho, usuario, usuario_nome, tamanho_bytes, largura, altura
+                servico_id, tipo, caminho, usuario, usuario_nome, tamanho_bytes, largura, altura,
+                arquivo_blob, mime_type, arquivo_nome
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 servico_id,
@@ -6815,6 +6919,9 @@ def salvar_fotos_servico(cursor, servico_id, fotos, tipo):
                 arquivo_salvo.get("tamanho_bytes"),
                 arquivo_salvo.get("largura"),
                 arquivo_salvo.get("altura"),
+                arquivo_salvo.get("arquivo_blob"),
+                arquivo_salvo.get("mime_type"),
+                arquivo_salvo.get("arquivo_nome"),
             )
         )
         total_salvas += 1
@@ -6842,6 +6949,77 @@ def caminho_foto_para_url(caminho):
 
     return "/static/uploads/" + quote(os.path.basename(texto))
 
+
+def caminho_absoluto_foto_servico(caminho):
+    texto = str(caminho or "").strip()
+    if not texto:
+        return ""
+
+    texto_normalizado = texto.replace("\\", "/")
+    if texto_normalizado.startswith("/static/"):
+        return os.path.abspath(texto_normalizado.lstrip("/"))
+    if texto_normalizado.startswith("static/"):
+        return os.path.abspath(texto_normalizado)
+
+    rel_static = caminho_relativo_static(texto_normalizado)
+    if rel_static:
+        return os.path.abspath(rel_static)
+
+    return normalizar_caminho_arquivo(texto)
+
+
+def foto_local_disponivel(caminho):
+    texto = str(caminho or "").strip()
+    if not texto:
+        return False
+
+    texto_normalizado = texto.replace("\\", "/").lower()
+    if texto_normalizado.startswith("http://") or texto_normalizado.startswith("https://"):
+        return True
+
+    caminho_abs = caminho_absoluto_foto_servico(texto)
+    return bool(caminho_abs and os.path.isfile(caminho_abs))
+
+
+@app.route("/fotos/<int:foto_id>/arquivo")
+def servir_foto_banco(foto_id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT id, caminho, arquivo_blob, mime_type, arquivo_nome
+        FROM fotos
+        WHERE id=?
+        """,
+        (foto_id,),
+    )
+    foto = c.fetchone()
+    conn.close()
+
+    if not foto:
+        return ("Foto nao encontrada.", 404)
+
+    caminho = foto["caminho"]
+    if foto_local_disponivel(caminho):
+        return redirect(caminho_foto_para_url(caminho))
+
+    blob = foto["arquivo_blob"]
+    if not blob:
+        return ("Foto nao encontrada.", 404)
+
+    nome_arquivo = str(foto["arquivo_nome"] or "").strip() or os.path.basename(str(caminho or "").replace("\\", "/")) or f"foto_{foto_id}.jpg"
+    mime_type = str(foto["mime_type"] or "").strip() or detectar_mime_type_arquivo(nome_arquivo)
+    return send_file(
+        BytesIO(bytes(blob)),
+        mimetype=mime_type,
+        download_name=nome_arquivo,
+        max_age=86400,
+    )
+
+
 def listar_fotos_servicos(ids_servicos):
     ids = [int(item) for item in (ids_servicos or []) if item]
 
@@ -6852,7 +7030,9 @@ def listar_fotos_servicos(ids_servicos):
     c = conn.cursor()
     placeholders = ",".join(["?"] * len(ids))
     c.execute(f"""
-        SELECT id, servico_id, tipo, caminho, criado_em, usuario, usuario_nome, tamanho_bytes, largura, altura
+        SELECT id, servico_id, tipo, caminho, criado_em, usuario, usuario_nome, tamanho_bytes, largura, altura,
+               mime_type, arquivo_nome,
+               CASE WHEN arquivo_blob IS NOT NULL THEN 1 ELSE 0 END AS possui_blob
         FROM fotos
         WHERE servico_id IN ({placeholders})
         ORDER BY
@@ -6875,7 +7055,12 @@ def listar_fotos_servicos(ids_servicos):
     for row in c.fetchall():
         foto = dict(row)
         foto["url"] = caminho_foto_para_url(foto.get("caminho"))
-        foto["arquivo_nome"] = os.path.basename(str(foto.get("caminho") or "").replace("\\", "/"))
+        if not foto_local_disponivel(foto.get("caminho")) and bool(int(foto.get("possui_blob") or 0)):
+            foto["url"] = f"/fotos/{foto['id']}/arquivo"
+        foto["arquivo_nome"] = (
+            str(foto.get("arquivo_nome") or "").strip()
+            or os.path.basename(str(foto.get("caminho") or "").replace("\\", "/"))
+        )
         foto["tipo_label"] = labels.get(foto.get("tipo"), "Foto")
         foto["criado_em_fmt"] = formatar_datahora(foto.get("criado_em"))
         foto["usuario_nome_exibicao"] = formatar_usuario_exibicao(
@@ -9567,28 +9752,71 @@ def registrar_emissao_nota_fiscal(id):
 
 @app.route("/api/clima")
 def api_clima():
+    fallback = {
+        "clima": "Clima indisponivel",
+        "temp": "--",
+        "icone": "⚠️",
+        "sugestao": "💡 Consulte o radar do clima.",
+    }
+    agora_ts = time.time()
+    cache = CLIMA_CACHE.get("resultado")
+    ultimo_teste = float(CLIMA_CACHE.get("testado_em") or 0.0)
+
+    if cache and agora_ts - ultimo_teste < CLIMA_CACHE_TTL:
+        return dict(cache)
+
     try:
-        import requests
+        sessao_http = requests.Session()
+        sessao_http.trust_env = False
+        headers = {
+            "User-Agent": "WagenEstetica/1.0",
+            "Accept": "application/json",
+        }
+        urls = [
+            (
+                "https://api.open-meteo.com/v1/forecast"
+                "?latitude=-29.68&longitude=-51.13"
+                "&current=temperature_2m,weather_code"
+                "&timezone=America%2FSao_Paulo"
+            ),
+            (
+                "https://api.open-meteo.com/v1/forecast"
+                "?latitude=-29.68&longitude=-51.13"
+                "&current_weather=true"
+            ),
+        ]
 
-        url = "https://api.open-meteo.com/v1/forecast?latitude=-29.68&longitude=-51.13&current_weather=true"
-        resposta = requests.get(url, timeout=5)
+        dados = None
+        for url in urls:
+            resposta = sessao_http.get(url, timeout=8, headers=headers)
+            if resposta.status_code == 200:
+                dados = resposta.json()
+                break
 
-        if resposta.status_code != 200:
-            return {"erro": "api offline"}
+        if not dados:
+            if cache:
+                return dict(cache)
+            return fallback
 
-        dados = resposta.json()
-
-        print("CLIMA DEBUG:", dados)
-
-        cw = dados.get("current_weather")
+        cw = dados.get("current") or dados.get("current_weather") or {}
 
         if not cw:
-            return {"erro": "sem dados"}
+            if cache:
+                return dict(cache)
+            return fallback
 
-        temp = cw.get("temperature", 0)
-        codigo = cw.get("weathercode", 0)
+        temp = (
+            cw.get("temperature_2m")
+            if cw.get("temperature_2m") is not None
+            else cw.get("temperature", "--")
+        )
+        codigo = (
+            cw.get("weather_code")
+            if cw.get("weather_code") is not None
+            else cw.get("weathercode", 0)
+        )
 
-        # 🔥 LÓGICA
+        # Logica simplificada para recomendacao de lavagem.
         if codigo >= 61:
             icone = "🌧️"
             clima = "Chuva"
@@ -9602,16 +9830,21 @@ def api_clima():
             clima = "Nublado"
             sugestao = "💡 Lavagem simples"
 
-        return {
+        resultado = {
             "clima": clima,
             "temp": temp,
             "icone": icone,
             "sugestao": sugestao
         }
+        CLIMA_CACHE["testado_em"] = agora_ts
+        CLIMA_CACHE["resultado"] = dict(resultado)
+        return resultado
 
     except Exception as e:
         print("ERRO CLIMA:", e)
-        return {"erro": str(e)}
+        if cache:
+            return dict(cache)
+        return fallback
 
 @app.route("/clientes/importar-local")
 def importar_local():

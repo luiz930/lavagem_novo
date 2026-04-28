@@ -2372,15 +2372,18 @@ async function atualizarHUD() {
 async function atualizarClima() {
     try {
         const res = await fetch("/api/clima");
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+        }
         const data = await res.json();
 
-        if (!data.erro) {
+        if (data && data.clima) {
             climaTexto = `${data.icone} ${data.clima} (${data.temp}°C)`;
             sugestaoTexto = data.sugestao;
         }
     } catch (e) {
-        climaTexto = "⚠️";
-        sugestaoTexto = "";
+        climaTexto = "⚠️ Clima indisponível";
+        sugestaoTexto = "💡 Consulte o radar do clima.";
     }
 }
 
