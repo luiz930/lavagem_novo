@@ -2774,6 +2774,14 @@ backup_lock = Lock()
 backup_worker_iniciado = False
 maintenance_lock = Lock()
 maintenance_worker_iniciado = False
+HUD_CACHE = {
+    "testado_em": 0.0,
+    "usuario": "",
+    "resultado": None,
+}
+HUD_CACHE_TTL = 4
+ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS = 0.0
+SYNC_FONTES_SOB_DEMANDA_INTERVALO = 20
 BANCO_ONLINE_STATUS_CACHE = {
     "testado_em": 0.0,
     "resultado": {},
@@ -3413,8 +3421,9 @@ def obter_status_operacional_sync(registro):
     if not registro:
         return ""
 
+    registro_dict = dict(registro) if not isinstance(registro, dict) else registro
     for chave in ("status", "status_atendimento"):
-        valor = normalizar_texto_campo(registro.get(chave)).upper()
+        valor = normalizar_texto_campo(registro_dict.get(chave)).upper()
         if valor:
             return valor
     return ""
@@ -3424,17 +3433,18 @@ def nivel_restricao_usuario_sync(registro):
     if not registro:
         return 0
 
+    registro_dict = dict(registro) if not isinstance(registro, dict) else registro
     nivel = 0
 
-    ativo = registro.get("ativo")
+    ativo = registro_dict.get("ativo")
     if ativo is not None and not bool(int(ativo or 0)):
         nivel = max(nivel, 2)
 
-    bloqueado_ate = interpretar_datahora_sistema(registro.get("bloqueado_ate"))
+    bloqueado_ate = interpretar_datahora_sistema(registro_dict.get("bloqueado_ate"))
     if bloqueado_ate and bloqueado_ate > agora():
         nivel = max(nivel, 3)
 
-    obrigatoria = registro.get("senha_alteracao_obrigatoria")
+    obrigatoria = registro_dict.get("senha_alteracao_obrigatoria")
     if obrigatoria is not None and bool(int(obrigatoria or 0)):
         nivel = max(nivel, 1)
 
@@ -3669,6 +3679,79 @@ def garantir_atualizado_em_sync(cursor):
                 pass
 
 
+CHAVES_UNICAS_SYNC = {
+    "veiculos": ("placa",),
+    "usuarios": ("usuario",),
+    "retornos_clientes": ("placa",),
+    "orcamentos": ("numero",),
+    "notas_fiscais": ("rps_numero",),
+}
+
+
+def encontrar_registro_destino_por_chave_unica(cursor_destino, tabela, registro_dict):
+    campos = CHAVES_UNICAS_SYNC.get(tabela) or ()
+    if not campos:
+        return None
+
+    condicoes = []
+    parametros = []
+
+    for campo in campos:
+        valor = registro_dict.get(campo)
+        if valor is None or str(valor).strip() == "":
+            return None
+
+        if campo == "placa":
+            condicoes.append("TRIM(UPPER(placa))=TRIM(UPPER(?))")
+            parametros.append(normalizar_texto_campo(valor).upper())
+        elif campo == "usuario":
+            condicoes.append("TRIM(LOWER(usuario))=TRIM(LOWER(?))")
+            parametros.append(normalizar_texto_campo(valor).lower())
+        else:
+            condicoes.append(f"{campo}=?")
+            parametros.append(valor)
+
+    try:
+        cursor_destino.execute(
+            f"SELECT * FROM {tabela} WHERE {' AND '.join(condicoes)} LIMIT 1",
+            tuple(parametros),
+        )
+        return cursor_destino.fetchone()
+    except Exception:
+        return None
+
+
+def executar_update_sync_seguro(cursor_destino, tabela, colunas_update, valores_update, id_destino):
+    if not colunas_update or id_destino is None:
+        return False
+
+    sql_update = (
+        f"UPDATE {tabela} SET "
+        + ", ".join(f"{coluna}=?" for coluna in colunas_update)
+        + " WHERE id=?"
+    )
+
+    try:
+        cursor_destino.execute("SAVEPOINT sync_update_registro")
+    except Exception:
+        pass
+
+    try:
+        cursor_destino.execute(sql_update, tuple(valores_update) + (id_destino,))
+        try:
+            cursor_destino.execute("RELEASE SAVEPOINT sync_update_registro")
+        except Exception:
+            pass
+        return True
+    except Exception:
+        try:
+            cursor_destino.execute("ROLLBACK TO SAVEPOINT sync_update_registro")
+            cursor_destino.execute("RELEASE SAVEPOINT sync_update_registro")
+        except Exception:
+            pass
+        return False
+
+
 def sincronizar_tabela_incremental(origem_conn, destino_conn, tabela, origem_prevalece_em_empate=False):
     if not tabela_existe_no_backend(origem_conn, tabela) or not tabela_existe_no_backend(destino_conn, tabela):
         return {"lidos": 0, "inseridos": 0, "atualizados": 0, "ignorados": 0}
@@ -3743,21 +3826,111 @@ def sincronizar_tabela_incremental(origem_conn, destino_conn, tabela, origem_pre
                     for coluna, valor in zip(colunas_update, valores_update)
                 ]
 
-            if colunas_update:
-                sql_update = (
-                    f"UPDATE {tabela} SET "
-                    + ", ".join(f"{coluna}=?" for coluna in colunas_update)
-                    + " WHERE id=?"
-                )
-                cursor_destino.execute(sql_update, tuple(valores_update) + (id_registro,))
+            if executar_update_sync_seguro(
+                cursor_destino,
+                tabela,
+                colunas_update,
+                valores_update,
+                id_registro,
+            ):
+                estatisticas["atualizados"] += 1
+            else:
+                estatisticas["ignorados"] += 1
+            continue
+
+        registro_destino = encontrar_registro_destino_por_chave_unica(
+            cursor_destino,
+            tabela,
+            registro_dict,
+        )
+        if registro_destino is not None:
+            if not decidir_atualizar_registro_sync(
+                registro_dict,
+                registro_destino,
+                origem_prevalece_em_empate=origem_prevalece_em_empate,
+                tabela=tabela,
+            ):
+                estatisticas["ignorados"] += 1
+                continue
+
+            id_destino = registro_destino["id"] if hasattr(registro_destino, "__getitem__") else None
+            colunas_update = [coluna for coluna in colunas if coluna != "id"]
+            valores_update = [registro_dict.get(coluna) for coluna in colunas_update]
+            if getattr(destino_conn, "backend", "") == "postgres":
+                valores_update = [
+                    normalizar_valor_importacao_pg(tabela, coluna, valor)
+                    for coluna, valor in zip(colunas_update, valores_update)
+                ]
+
+            if executar_update_sync_seguro(
+                cursor_destino,
+                tabela,
+                colunas_update,
+                valores_update,
+                id_destino,
+            ):
                 estatisticas["atualizados"] += 1
             else:
                 estatisticas["ignorados"] += 1
             continue
 
         sql_insert = f"INSERT INTO {tabela} ({', '.join(colunas)}) VALUES ({', '.join(['?'] * len(colunas))})"
-        cursor_destino.execute(sql_insert, valores)
-        estatisticas["inseridos"] += 1
+        try:
+            cursor_destino.execute("SAVEPOINT sync_insert_registro")
+        except Exception:
+            pass
+
+        try:
+            cursor_destino.execute(sql_insert, valores)
+            try:
+                cursor_destino.execute("RELEASE SAVEPOINT sync_insert_registro")
+            except Exception:
+                pass
+            estatisticas["inseridos"] += 1
+        except Exception:
+            try:
+                cursor_destino.execute("ROLLBACK TO SAVEPOINT sync_insert_registro")
+                cursor_destino.execute("RELEASE SAVEPOINT sync_insert_registro")
+            except Exception:
+                pass
+
+            registro_destino = encontrar_registro_destino_por_chave_unica(
+                cursor_destino,
+                tabela,
+                registro_dict,
+            )
+            if registro_destino is None:
+                estatisticas["ignorados"] += 1
+                continue
+
+            if not decidir_atualizar_registro_sync(
+                registro_dict,
+                registro_destino,
+                origem_prevalece_em_empate=origem_prevalece_em_empate,
+                tabela=tabela,
+            ):
+                estatisticas["ignorados"] += 1
+                continue
+
+            id_destino = registro_destino["id"] if hasattr(registro_destino, "__getitem__") else None
+            colunas_update = [coluna for coluna in colunas if coluna != "id"]
+            valores_update = [registro_dict.get(coluna) for coluna in colunas_update]
+            if getattr(destino_conn, "backend", "") == "postgres":
+                valores_update = [
+                    normalizar_valor_importacao_pg(tabela, coluna, valor)
+                    for coluna, valor in zip(colunas_update, valores_update)
+                ]
+
+            if executar_update_sync_seguro(
+                cursor_destino,
+                tabela,
+                colunas_update,
+                valores_update,
+                id_destino,
+            ):
+                estatisticas["atualizados"] += 1
+            else:
+                estatisticas["ignorados"] += 1
 
     try:
         destino_conn.commit()
@@ -4868,6 +5041,11 @@ def limpar_status_login_usuario(c, usuario_id, registrar_login=False):
 def preencher_sessao_usuario(usuario_row, limpar=True):
     if limpar:
         session.clear()
+    perfil_usuario = normalizar_perfil_usuario(
+        usuario_row["perfil"] or (
+            "admin" if usuario_row["usuario"] == "admin" else "funcionario"
+        )
+    )
     session["usuario"] = usuario_row["usuario"]
     session["usuario_id"] = usuario_row["id"]
     session["usuario_nome"] = (usuario_row["nome"] or usuario_row["usuario"])
@@ -4877,10 +5055,7 @@ def preencher_sessao_usuario(usuario_row, limpar=True):
     )
     session["usuario_foto"] = str(usuario_row["foto_perfil"] or "").strip()
     session["usuario_foto_url"] = url_foto_usuario(usuario_row["foto_perfil"])
-    session["usuario_perfil"] = (
-        usuario_row["perfil"] or
-        ("admin" if usuario_row["usuario"] == "admin" else "funcionario")
-    )
+    session["usuario_perfil"] = perfil_usuario
     session["senha_alteracao_obrigatoria"] = usuario_precisa_trocar_senha(usuario_row)
     session.permanent = True
 
@@ -4914,7 +5089,26 @@ def usuario_admin():
     )
 
 def normalizar_perfil_usuario(valor):
-    return "admin" if str(valor or "").strip().lower() == "admin" else "funcionario"
+    perfil = str(valor or "").strip().lower()
+    if perfil == "desenvolvedor":
+        return "desenvolvedor"
+    if perfil == "admin":
+        return "admin"
+    return "funcionario"
+
+def rotulo_perfil_usuario(valor):
+    perfil = normalizar_perfil_usuario(valor)
+    if perfil == "desenvolvedor":
+        return "Desenvolvedor"
+    if perfil == "admin":
+        return "Administrador"
+    return "Funcionario"
+
+def usuario_desenvolvedor():
+    return normalizar_perfil_usuario(session.get("usuario_perfil")) == "desenvolvedor"
+
+def usuario_gerencia_acessos():
+    return usuario_admin() or usuario_desenvolvedor()
 
 def normalizar_periodo_financeiro(valor):
     periodo = str(valor or "mes").strip().lower()
@@ -8871,11 +9065,28 @@ def preparar_sincronizacoes():
     iniciar_worker_manutencao_arquivos()
     iniciar_worker_sincronizacao()
     iniciar_worker_sincronizacao_bancos()
-    garantir_schema_banco_online()
+    if not SCHEMA_BANCO_ONLINE_GARANTIDO:
+        garantir_schema_banco_online()
 
-    if session.get("usuario"):
+    global ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS
+
+    endpoint = request.endpoint or ""
+    pode_tentar_sync_sob_demanda = (
+        bool(session.get("usuario"))
+        and request.method == "GET"
+        and not endpoint.startswith("api_")
+        and endpoint not in {"login", "logout"}
+    )
+
+    if pode_tentar_sync_sob_demanda:
         try:
-            sincronizar_fontes_pendentes()
+            agora_ts = time.time()
+            if (
+                agora_ts - ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS
+                >= SYNC_FONTES_SOB_DEMANDA_INTERVALO
+            ):
+                sincronizar_fontes_pendentes()
+                ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS = agora_ts
         except Exception as e:
             print("AVISO SYNC PENDENTE:", e)
 
@@ -9473,6 +9684,15 @@ def api_hud():
     if not session.get("usuario"):
         return {"erro": "nao autorizado"}
 
+    usuario_cache = str(session.get("usuario") or "")
+    agora_cache_ts = time.time()
+    if (
+        HUD_CACHE.get("resultado") is not None
+        and HUD_CACHE.get("usuario") == usuario_cache
+        and agora_cache_ts - float(HUD_CACHE.get("testado_em") or 0.0) < HUD_CACHE_TTL
+    ):
+        return dict(HUD_CACHE["resultado"])
+
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -9687,7 +9907,7 @@ def api_hud():
         else (status_banco.get("mensagem") or "Banco online indisponivel")
     )
 
-    return {
+    resultado = {
         "total": round(total, 2),
         "andamento": andamento,
         "atrasados": atrasados,
@@ -9718,6 +9938,10 @@ def api_hud():
         "usuario_foto_url": session.get("usuario_foto_url") or "",
         "sync_token": sync_token,
     }
+    HUD_CACHE["testado_em"] = agora_cache_ts
+    HUD_CACHE["usuario"] = usuario_cache
+    HUD_CACHE["resultado"] = dict(resultado)
+    return resultado
 
 @app.route("/status_sync")
 def status_sync():
@@ -9894,7 +10118,11 @@ def carregar_usuarios_configuracao():
                senha_alteracao_obrigatoria, foto_perfil
         FROM usuarios
         ORDER BY
-            CASE WHEN LOWER(COALESCE(perfil, ''))='admin' THEN 0 ELSE 1 END,
+            CASE
+                WHEN LOWER(COALESCE(perfil, ''))='desenvolvedor' THEN 0
+                WHEN LOWER(COALESCE(perfil, ''))='admin' THEN 1
+                ELSE 2
+            END,
             LOWER(COALESCE(nome, usuario, '')),
             LOWER(COALESCE(usuario, nome, ''))
     """)
@@ -9904,6 +10132,7 @@ def carregar_usuarios_configuracao():
     for item in usuarios:
         item["nome"] = item.get("nome") or item.get("usuario")
         item["perfil"] = normalizar_perfil_usuario(item.get("perfil"))
+        item["perfil_label"] = rotulo_perfil_usuario(item.get("perfil"))
         item["ativo"] = int(item.get("ativo") or 0)
         item["criado_em_fmt"] = formatar_datahora(item.get("criado_em"))
         item["ultimo_login_em_fmt"] = formatar_datahora(item.get("ultimo_login_em"))
@@ -10016,13 +10245,23 @@ def configuracoes():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    pode_gerenciar_usuarios = usuario_admin() and not session.get("senha_alteracao_obrigatoria")
+    senha_pendente = bool(session.get("senha_alteracao_obrigatoria"))
+    perfil_logado = normalizar_perfil_usuario(
+        session.get("usuario_perfil") or (
+            "admin" if session.get("usuario") == "admin" else "funcionario"
+        )
+    )
+    pode_gerenciar_usuarios = usuario_gerencia_acessos() and not senha_pendente
+    pode_gerenciar_base = usuario_desenvolvedor() and not senha_pendente
     usuarios = carregar_usuarios_configuracao() if pode_gerenciar_usuarios else []
-    configuracao_empresa = obter_configuracao_empresa()
-    banco_status = obter_status_banco_online()
-    banco_config = obter_configuracao_banco_form()
-    backup_config = obter_configuracao_backup()
-    arquivos_status = obter_status_arquivos()
+    configuracao_empresa = obter_configuracao_empresa() if pode_gerenciar_base else {}
+    banco_status = obter_status_banco_online() if pode_gerenciar_base else {}
+    banco_config = obter_configuracao_banco_form() if pode_gerenciar_base else {}
+    backup_status = obter_status_backup_banco() if pode_gerenciar_base else {}
+    backup_config = obter_configuracao_backup() if pode_gerenciar_base else {}
+    arquivos_status = obter_status_arquivos() if pode_gerenciar_base else {}
+    backups_disponiveis = listar_arquivos_backup_banco() if pode_gerenciar_base else []
+    pastas_sync_sugeridas = listar_pastas_sincronizadas_sugeridas() if pode_gerenciar_base else []
 
     return render_template(
         "configuracoes.html",
@@ -10036,23 +10275,23 @@ def configuracoes():
                 session.get("usuario"),
             ),
             "foto_url": session.get("usuario_foto_url") or "",
-            "perfil": session.get("usuario_perfil") or (
-                "admin" if session.get("usuario") == "admin" else "funcionario"
-            ),
-            "senha_alteracao_obrigatoria": bool(session.get("senha_alteracao_obrigatoria")),
+            "perfil": perfil_logado,
+            "perfil_label": rotulo_perfil_usuario(perfil_logado),
+            "senha_alteracao_obrigatoria": senha_pendente,
         },
         usuarios=usuarios,
-        admin_logado=pode_gerenciar_usuarios,
+        gerencia_usuarios_logado=pode_gerenciar_usuarios,
+        desenvolvedor_logado=pode_gerenciar_base,
         configuracao_empresa=configuracao_empresa,
         banco_status=banco_status,
         banco_config=banco_config,
-        backup_status=obter_status_backup_banco(),
+        backup_status=backup_status,
         backup_config=backup_config,
         frequencias_backup=FREQUENCIAS_BACKUP,
         tipos_backup=TIPOS_BACKUP,
-        backups_disponiveis=listar_arquivos_backup_banco(),
+        backups_disponiveis=backups_disponiveis,
         arquivos_status=arquivos_status,
-        pastas_sync_sugeridas=listar_pastas_sincronizadas_sugeridas(),
+        pastas_sync_sugeridas=pastas_sync_sugeridas,
     )
 
 @app.route("/configuracoes/versao", methods=["POST"])
@@ -10061,8 +10300,8 @@ def salvar_configuracao_versao():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem alterar a versao do sistema.")
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem alterar a versao do sistema.")
         return redirect("/configuracoes")
 
     try:
@@ -10090,8 +10329,8 @@ def salvar_configuracao_banco():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem alterar o banco online.")
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem alterar o banco online.")
         return redirect("/configuracoes")
 
     try:
@@ -10135,8 +10374,8 @@ def testar_configuracao_banco():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem testar o banco online.")
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem testar o banco online.")
         return redirect("/configuracoes")
 
     status = diagnosticar_banco_online(force=True)
@@ -10162,8 +10401,8 @@ def migrar_banco_para_supabase():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem migrar o banco para o Supabase.")
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem migrar o banco para o Supabase.")
         return redirect("/configuracoes")
 
     status = diagnosticar_banco_online(force=True)
@@ -10208,8 +10447,8 @@ def salvar_configuracao_backup():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem alterar a rotina de backup.")
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem alterar a rotina de backup.")
         return redirect("/configuracoes")
 
     destino_externo_ativo = 1 if bool_config_ativo(request.form.get("destino_externo_ativo")) else 0
@@ -10285,8 +10524,8 @@ def gerar_backup_agora():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem gerar backups manuais.")
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem gerar backups manuais.")
         return redirect("/configuracoes")
 
     sucesso, mensagem, caminho = criar_backup_banco(force=True)
@@ -10313,8 +10552,8 @@ def restaurar_backup_configuracoes():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem restaurar backups.")
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem restaurar backups.")
         return redirect("/configuracoes")
 
     nome_backup = request.form.get("backup_nome") or ""
@@ -10338,8 +10577,8 @@ def executar_manutencao_arquivos_configuracoes():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem executar a manutencao de arquivos.")
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem executar a manutencao de arquivos.")
         return redirect("/configuracoes")
 
     sucesso, mensagem, _ = executar_manutencao_arquivos(
@@ -10491,8 +10730,8 @@ def criar_usuario_funcionario():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem criar novos acessos.")
+    if not usuario_gerencia_acessos():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem criar novos acessos.")
         return redirect("/configuracoes")
 
     nome = (request.form.get("nome") or "").strip()
@@ -10508,6 +10747,13 @@ def criar_usuario_funcionario():
     erro_forca = validar_forca_senha(senha, usuario)
     if erro_forca:
         definir_feedback_configuracoes("erro", erro_forca)
+        return redirect("/configuracoes")
+
+    if perfil == "desenvolvedor" and not usuario_desenvolvedor():
+        definir_feedback_configuracoes(
+            "erro",
+            "Somente um desenvolvedor pode criar um acesso com perfil Desenvolvedor.",
+        )
         return redirect("/configuracoes")
 
     conn = conectar()
@@ -10585,8 +10831,8 @@ def redefinir_senha_usuario(usuario_id):
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem redefinir senhas.")
+    if not usuario_gerencia_acessos():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem redefinir senhas.")
         return redirect("/configuracoes")
 
     nova_senha = request.form.get("nova_senha") or ""
@@ -10599,6 +10845,17 @@ def redefinir_senha_usuario(usuario_id):
     if not alvo:
         conn.close()
         definir_feedback_configuracoes("erro", "Usuario nao encontrado.")
+        return redirect("/configuracoes")
+
+    if (
+        normalizar_perfil_usuario(alvo["perfil"]) == "desenvolvedor" and
+        not usuario_desenvolvedor()
+    ):
+        conn.close()
+        definir_feedback_configuracoes(
+            "erro",
+            "Somente um desenvolvedor pode redefinir a senha de outro desenvolvedor.",
+        )
         return redirect("/configuracoes")
 
     erro_forca = validar_forca_senha(nova_senha, alvo["usuario"])
@@ -10639,8 +10896,8 @@ def atualizar_foto_usuario(usuario_id):
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem atualizar fotos de acessos.")
+    if not usuario_gerencia_acessos():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem atualizar fotos de acessos.")
         return redirect("/configuracoes")
 
     foto = request.files.get("foto_perfil")
@@ -10652,6 +10909,17 @@ def atualizar_foto_usuario(usuario_id):
     if not alvo:
         conn.close()
         definir_feedback_configuracoes("erro", "Usuario nao encontrado.")
+        return redirect("/configuracoes")
+
+    if (
+        normalizar_perfil_usuario(alvo["perfil"]) == "desenvolvedor" and
+        not usuario_desenvolvedor()
+    ):
+        conn.close()
+        definir_feedback_configuracoes(
+            "erro",
+            "Somente um desenvolvedor pode atualizar a foto de outro desenvolvedor.",
+        )
         return redirect("/configuracoes")
 
     antiga_foto = alvo["foto_perfil"]
@@ -10705,8 +10973,8 @@ def alternar_status_usuario(usuario_id):
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem alterar o status de acessos.")
+    if not usuario_gerencia_acessos():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem alterar o status de acessos.")
         return redirect("/configuracoes")
 
     conn = conectar()
@@ -10717,6 +10985,17 @@ def alternar_status_usuario(usuario_id):
     if not alvo:
         conn.close()
         definir_feedback_configuracoes("erro", "Usuario nao encontrado.")
+        return redirect("/configuracoes")
+
+    if (
+        normalizar_perfil_usuario(alvo["perfil"]) == "desenvolvedor" and
+        not usuario_desenvolvedor()
+    ):
+        conn.close()
+        definir_feedback_configuracoes(
+            "erro",
+            "Somente um desenvolvedor pode alterar o status de outro desenvolvedor.",
+        )
         return redirect("/configuracoes")
 
     if alvo["usuario"] == "admin" or normalizar_perfil_usuario(alvo["perfil"]) == "admin":
@@ -10883,8 +11162,8 @@ def pagina_auditoria():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_admin():
-        definir_feedback_configuracoes("erro", "Somente administradores podem acessar a auditoria.")
+    if not usuario_gerencia_acessos():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem acessar a auditoria.")
         return redirect("/configuracoes")
 
     contexto = carregar_contexto_auditoria(request.args)

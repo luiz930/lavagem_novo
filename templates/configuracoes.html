@@ -38,7 +38,7 @@
             <div class="profile-user-copy">
                 <h2 class="section-title">{{ usuario_logado.nome }}</h2>
                 <p><b>Login:</b> {{ usuario_logado.usuario }}</p>
-                <p><b>Perfil:</b> {{ "Administrador" if usuario_logado.perfil == "admin" else "Funcionario" }}</p>
+                <p><b>Perfil:</b> {{ usuario_logado.perfil_label }}</p>
             </div>
         </div>
         <p class="muted-text top-spacing">Use esta area para manter o acesso da equipe organizado e o login principal protegido.</p>
@@ -68,12 +68,12 @@
     </div>
 </div>
 
+{% if desenvolvedor_logado %}
 <div class="page-card top-spacing">
     <p class="pill-label">Versao do sistema</p>
     <h2 class="section-title top-spacing">{{ configuracao_empresa.versao_sistema_label }}</h2>
     <p class="muted-text">Essa versao aparece no HUD, no rodape e nas telas do sistema. Ela vem direto do banco e pode ser ajustada sem alterar o codigo.</p>
 
-    {% if admin_logado %}
     <form action="/configuracoes/versao" method="POST" class="stack-form stack-form--wide top-spacing">
         <input
             name="versao_sistema"
@@ -87,11 +87,10 @@
             <button type="submit">Salvar versao</button>
         </div>
     </form>
-    {% else %}
-    <p class="muted-text top-spacing">Somente administradores podem alterar a versao oficial do sistema.</p>
-    {% endif %}
 </div>
+{% endif %}
 
+{% if desenvolvedor_logado %}
 <div class="page-grid top-spacing">
     <div class="page-card">
         <p class="pill-label">Banco online</p>
@@ -139,7 +138,6 @@
         </div>
     </div>
 
-    {% if admin_logado %}
     <div class="page-card">
         <h2 class="section-title">Configurar banco online</h2>
         <p class="muted-text">Troque a conexao sem editar codigo. A senha fica somente no arquivo local `.env` e nao vai para o GitHub.</p>
@@ -189,9 +187,10 @@
             </form>
         </div>
     </div>
-    {% endif %}
 </div>
+{% endif %}
 
+{% if desenvolvedor_logado %}
 <div class="page-grid top-spacing">
     <div class="page-card">
         <p class="pill-label">Backup automatico</p>
@@ -222,7 +221,6 @@
         {% endif %}
     </div>
 
-    {% if admin_logado %}
     <div class="page-card">
         <h2 class="section-title">Configurar rotina</h2>
         <p class="muted-text">Defina a frequencia automatica, o modo do backup, quantos arquivos manter e gere backups manuais quando quiser.</p>
@@ -329,7 +327,6 @@
         <p class="muted-text top-spacing">No modo sistema completo, o backup inclui banco principal, usuarios, fotos, perfis, uploads e arquivos locais de dados. Na restauracao, o sistema cria um backup preventivo automatico antes de sobrescrever o conteudo atual.</p>
         <p class="muted-text">Se voce usar o Google Drive Desktop, prefira uma pasta espelhada/sincronizada. O sistema grava o backup local primeiro e depois copia o arquivo para a pasta informada.</p>
     </div>
-    {% endif %}
 </div>
 
 <div class="top-spacing">
@@ -343,14 +340,12 @@
             <p class="muted-text">Criado em: {{ item.modificado_em_fmt }}</p>
             <p class="muted-text">Tamanho: {{ item.tamanho_fmt }}</p>
 
-            {% if admin_logado %}
             <div class="actions-row actions-row--left top-spacing">
                 <form action="/configuracoes/backup/restaurar" method="POST" onsubmit="return confirm('Restaurar este backup agora? O banco atual sera substituido, mas um backup preventivo sera criado antes.');">
                     <input type="hidden" name="backup_nome" value="{{ item.nome }}">
                     <button type="submit">Restaurar este backup</button>
                 </form>
             </div>
-            {% endif %}
         </div>
         {% else %}
         <div class="page-card page-card--soft">
@@ -390,7 +385,6 @@
 
         <p class="muted-text top-spacing">A rotina roda automaticamente uma vez por dia para mover uploads sem referencia para quarentena, limpar miniaturas antigas e remover diretorios vazios.</p>
 
-        {% if admin_logado %}
         <div class="actions-row actions-row--left top-spacing">
             <form action="/configuracoes/arquivos/manutencao" method="POST">
                 <button type="submit">Executar manutencao agora</button>
@@ -399,11 +393,11 @@
                 <button type="button">Abrir auditoria</button>
             </a>
         </div>
-        {% endif %}
     </div>
 </div>
+{% endif %}
 
-{% if admin_logado %}
+{% if gerencia_usuarios_logado %}
 <div class="page-card top-spacing">
     <h2 class="section-title">Novo login de funcionario</h2>
     <p class="muted-text">Crie acessos individuais para a equipe com senha forte. No primeiro login, a troca de senha sera obrigatoria.</p>
@@ -435,6 +429,9 @@
             <select name="perfil">
                 <option value="funcionario">Funcionario</option>
                 <option value="admin">Administrador</option>
+                {% if desenvolvedor_logado %}
+                <option value="desenvolvedor">Desenvolvedor</option>
+                {% endif %}
             </select>
         </div>
 
@@ -465,7 +462,7 @@
                 <span class="status-badge {% if item.ativo %}status-badge--success{% else %}status-badge--muted{% endif %}">
                     {% if item.ativo %}Ativo{% else %}Pausado{% endif %}
                 </span>
-                <span class="pill-label">{{ "Administrador" if item.perfil == "admin" else "Funcionario" }}</span>
+                <span class="pill-label">{{ item.perfil_label }}</span>
                 {% if item.troca_senha_obrigatoria %}
                 <span class="status-badge status-badge--warning">Troca de senha pendente</span>
                 {% endif %}
