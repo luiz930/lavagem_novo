@@ -436,6 +436,23 @@ from zoneinfo import ZoneInfo
 def agora():
     return datetime.now(ZoneInfo("America/Sao_Paulo"))
 
+
+def normalizar_datetime_brasilia(valor):
+    if not valor:
+        return None
+
+    if not isinstance(valor, datetime):
+        return None
+
+    timezone_brasilia = ZoneInfo("America/Sao_Paulo")
+    if valor.tzinfo is None:
+        return valor.replace(tzinfo=timezone_brasilia)
+
+    try:
+        return valor.astimezone(timezone_brasilia)
+    except Exception:
+        return valor
+
 def caminho_banco_absoluto():
     return os.path.abspath(DATABASE_FILE)
 
@@ -704,7 +721,7 @@ def configuracao_backup_padrao():
     }
 
 def obter_configuracao_backup():
-    conn = conectar()
+    conn = conectar_somente_leitura()
     c = conn.cursor()
     c.execute("SELECT * FROM configuracao_backup WHERE id=1")
     row = c.fetchone()
@@ -2375,7 +2392,11 @@ def executar_manutencao_arquivos(force=False, registrar_log=True, usuario=None):
         maintenance_lock.release()
 
 def loop_worker_manutencao_arquivos():
+    primeira_execucao = True
     while True:
+        if primeira_execucao:
+            primeira_execucao = False
+            time.sleep(WORKER_MANUTENCAO_DELAY_INICIAL)
         try:
             sucesso, mensagem, _ = executar_manutencao_arquivos(
                 force=False,
@@ -2529,7 +2550,11 @@ def carregar_contexto_auditoria(args):
     }
 
 def loop_worker_backup_banco():
+    primeira_execucao = True
     while True:
+        if primeira_execucao:
+            primeira_execucao = False
+            time.sleep(WORKER_BACKUP_DELAY_INICIAL)
         try:
             sucesso, mensagem, caminho = criar_backup_banco(force=False)
             if caminho and "criado com sucesso" in mensagem.lower():
@@ -2819,12 +2844,35 @@ maintenance_worker_iniciado = False
 init_db_lock = Lock()
 INIT_DB_EXECUTADO = False
 bootstrap_init_thread_started = False
+schema_bootstrap_thread_started = False
+WORKER_SYNC_DELAY_INICIAL = 45
+WORKER_SYNC_BANCOS_DELAY_INICIAL = 180
+WORKER_MANUTENCAO_DELAY_INICIAL = 180
+WORKER_BACKUP_DELAY_INICIAL = 300
 HUD_CACHE = {
     "testado_em": 0.0,
     "usuario": "",
     "resultado": None,
 }
-HUD_CACHE_TTL = 4
+HUD_CACHE_TTL = 10
+NOTIFICACOES_CACHE = {
+    "testado_em": 0.0,
+    "usuario": "",
+    "resultado": None,
+}
+NOTIFICACOES_CACHE_TTL = 15
+AGENDA_RETORNO_CACHE = {
+    "testado_em": 0.0,
+    "usuario": "",
+    "resultado": None,
+}
+AGENDA_RETORNO_CACHE_TTL = 60
+VOZ_CACHE = {
+    "testado_em": 0.0,
+    "usuario": "",
+    "resultado": None,
+}
+VOZ_CACHE_TTL = 20
 CLIMA_CACHE = {
     "testado_em": 0.0,
     "resultado": None,
@@ -2839,6 +2887,10 @@ BANCO_ONLINE_STATUS_CACHE = {
 }
 BANCO_ONLINE_STATUS_CACHE_TTL = 30
 SCHEMA_BANCO_ONLINE_GARANTIDO = False
+SCHEMA_SQLITE_LOCAL_GARANTIDO = False
+BANCO_ONLINE_BLOQUEADO_ATE_TS = 0.0
+BANCO_ONLINE_ULTIMO_LOG = {"mensagem": "", "testado_em": 0.0}
+schema_sqlite_local_lock = Lock()
 
 
 def atualizar_configuracao_banco_runtime(database_url=None, senha=None, backend=None, auto_migrar=None, migrado=None):
@@ -2893,6 +2945,22 @@ def ambiente_render():
             "IS_RENDER",
         )
     )
+
+
+def ambiente_fly():
+    return any(
+        str(os.environ.get(chave) or "").strip()
+        for chave in (
+            "FLY_APP_NAME",
+            "FLY_ALLOC_ID",
+            "FLY_REGION",
+            "IS_FLY",
+        )
+    )
+
+
+def ambiente_hospedado_gerenciado():
+    return ambiente_render() or ambiente_fly()
 
 
 def banco_online_estritamente_obrigatorio():
@@ -2995,9 +3063,16 @@ def mascarar_url_postgres(url):
 
 
 def diagnosticar_banco_online(force=False):
+    global BANCO_ONLINE_BLOQUEADO_ATE_TS
     agora_ts = time.time()
     cache = BANCO_ONLINE_STATUS_CACHE.get("resultado") or {}
     testado_em = float(BANCO_ONLINE_STATUS_CACHE.get("testado_em") or 0.0)
+    if (
+        not force
+        and BANCO_ONLINE_BLOQUEADO_ATE_TS > agora_ts
+        and cache
+    ):
+        return dict(cache)
     if (
         not force
         and cache
@@ -3023,6 +3098,21 @@ def diagnosticar_banco_online(force=False):
         "database": "",
         "usuario": "",
     }
+
+    if (
+        not force
+        and BANCO_ONLINE_BLOQUEADO_ATE_TS > agora_ts
+        and banco_online_configurado()
+        and not cache
+    ):
+        restante = max(1, int(BANCO_ONLINE_BLOQUEADO_ATE_TS - agora_ts))
+        resultado["mensagem"] = (
+            "Banco online em respiro temporario por excesso de conexoes. "
+            f"Nova tentativa automatica em cerca de {restante}s."
+        )
+        BANCO_ONLINE_STATUS_CACHE["testado_em"] = agora_ts
+        BANCO_ONLINE_STATUS_CACHE["resultado"] = dict(resultado)
+        return resultado
 
     if not banco_online_configurado():
         if banco_online_travado_localmente():
@@ -3084,6 +3174,9 @@ def diagnosticar_banco_online(force=False):
             )
         else:
             resultado["mensagem"] = f"Falha ao conectar no banco online: {texto_erro}"
+        if erro_limite_conexoes_banco_online(texto_erro):
+            BANCO_ONLINE_BLOQUEADO_ATE_TS = max(BANCO_ONLINE_BLOQUEADO_ATE_TS, agora_ts + 45)
+            resultado["mensagem"] += " O pool online atingiu o limite de conexoes e vai entrar em respiro temporario."
 
     BANCO_ONLINE_STATUS_CACHE["testado_em"] = agora_ts
     BANCO_ONLINE_STATUS_CACHE["resultado"] = dict(resultado)
@@ -3146,6 +3239,28 @@ def iniciar_bootstrap_init_db():
 
     bootstrap_init_thread_started = True
     Thread(target=_bootstrap_init_db_assincrono, daemon=True).start()
+    return True
+
+
+def _bootstrap_schema_online_assincrono():
+    global schema_bootstrap_thread_started
+    try:
+        garantir_schema_banco_online()
+    except Exception as e:
+        print("AVISO BOOTSTRAP SCHEMA:", e)
+    finally:
+        if not SCHEMA_BANCO_ONLINE_GARANTIDO:
+            schema_bootstrap_thread_started = False
+
+
+def iniciar_bootstrap_schema_online():
+    global schema_bootstrap_thread_started
+
+    if schema_bootstrap_thread_started or SCHEMA_BANCO_ONLINE_GARANTIDO:
+        return False
+
+    schema_bootstrap_thread_started = True
+    Thread(target=_bootstrap_schema_online_assincrono, daemon=True).start()
     return True
 
 
@@ -3393,6 +3508,8 @@ def obter_status_banco_online():
     return status
 
 def conectar():
+    global BANCO_ONLINE_BLOQUEADO_ATE_TS
+
     if modo_banco_preferido() == "postgres":
         dsn = url_postgres_ajustada()
         if not dsn:
@@ -3400,30 +3517,50 @@ def conectar():
                 raise RuntimeError(
                     "Banco online obrigatorio neste ambiente, mas a connection string nao foi carregada."
                 )
+            garantir_schema_sqlite_local_minima()
+            conn = sqlite3.connect(DATABASE_FILE)
+            conn.row_factory = sqlite3.Row
+            return ConexaoCompat(conn, "sqlite")
+
+        if (
+            not banco_online_estritamente_obrigatorio()
+            and BANCO_ONLINE_BLOQUEADO_ATE_TS > time.time()
+        ):
+            garantir_schema_sqlite_local_minima()
             conn = sqlite3.connect(DATABASE_FILE)
             conn.row_factory = sqlite3.Row
             return ConexaoCompat(conn, "sqlite")
 
         try:
             conn = conectar_postgres_com_fallback(dsn)
+            BANCO_ONLINE_BLOQUEADO_ATE_TS = 0.0
             return ConexaoCompat(conn, "postgres")
         except Exception as e:
-            BANCO_ONLINE_STATUS_CACHE["testado_em"] = 0.0
+            if erro_limite_conexoes_banco_online(e):
+                BANCO_ONLINE_BLOQUEADO_ATE_TS = time.time() + 120
+            BANCO_ONLINE_STATUS_CACHE["testado_em"] = time.time()
+            mensagem_erro = f"Falha ao abrir conexao online: {e}"
+            if erro_limite_conexoes_banco_online(e):
+                mensagem_erro += " Banco online em respiro temporario."
             BANCO_ONLINE_STATUS_CACHE["resultado"] = {
                 "configurado": True,
                 "ativo": False,
                 "conectado": False,
                 "backend": "postgres",
                 "backend_label": "Supabase / PostgreSQL",
-                "mensagem": f"Falha ao abrir conexao online: {e}",
+                "mensagem": mensagem_erro,
                 "url_masked": mascarar_url_postgres(dsn),
             }
-            print("ERRO:", BANCO_ONLINE_STATUS_CACHE["resultado"]["mensagem"])
+            registrar_log_banco_online(
+                BANCO_ONLINE_STATUS_CACHE["resultado"]["mensagem"],
+                intervalo_segundos=120 if erro_limite_conexoes_banco_online(e) else 60,
+            )
             if banco_online_estritamente_obrigatorio():
                 raise RuntimeError(
                     "Banco online obrigatorio neste ambiente e a conexao falhou: "
                     f"{BANCO_ONLINE_STATUS_CACHE['resultado']['mensagem']}"
                 ) from e
+            garantir_schema_sqlite_local_minima()
             conn = sqlite3.connect(DATABASE_FILE)
             conn.row_factory = sqlite3.Row
             return ConexaoCompat(conn, "sqlite")
@@ -3437,6 +3574,222 @@ def conectar_banco_local_forcado():
     conn = sqlite3.connect(DATABASE_FILE)
     conn.row_factory = sqlite3.Row
     return ConexaoCompat(conn, "sqlite")
+
+
+def erro_limite_conexoes_banco_online(erro):
+    texto = normalizar_texto_comparacao(str(erro or ""))
+    sinais = (
+        "maxclientsinsessionmode",
+        "max clients reached",
+        "too many clients",
+        "remaining connection slots",
+        "pool_size",
+    )
+    return any(sinal in texto for sinal in sinais)
+
+
+def registrar_log_banco_online(mensagem, intervalo_segundos=60):
+    global BANCO_ONLINE_ULTIMO_LOG
+
+    texto = str(mensagem or "").strip()
+    if not texto:
+        return
+
+    agora_ts = time.time()
+    ultimo_texto = str(BANCO_ONLINE_ULTIMO_LOG.get("mensagem") or "")
+    ultimo_em = float(BANCO_ONLINE_ULTIMO_LOG.get("testado_em") or 0.0)
+    if texto == ultimo_texto and (agora_ts - ultimo_em) < max(5, int(intervalo_segundos or 60)):
+        return
+
+    BANCO_ONLINE_ULTIMO_LOG["mensagem"] = texto
+    BANCO_ONLINE_ULTIMO_LOG["testado_em"] = agora_ts
+    print("ERRO:", texto)
+
+
+def conectar_somente_leitura():
+    conn = conectar()
+    if getattr(conn, "backend", "") != "postgres":
+        return conn
+
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+
+    try:
+        conn.set_session(readonly=True, autocommit=True)
+    except Exception:
+        try:
+            conn.autocommit = True
+        except Exception:
+            pass
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SET lock_timeout TO '750ms'")
+        cursor.execute("SET statement_timeout TO '2500ms'")
+        cursor.close()
+    except Exception:
+        pass
+    return conn
+
+
+def garantir_schema_sqlite_local_minima(force=False):
+    global SCHEMA_SQLITE_LOCAL_GARANTIDO
+
+    if SCHEMA_SQLITE_LOCAL_GARANTIDO and not force:
+        return True
+
+    with schema_sqlite_local_lock:
+        if SCHEMA_SQLITE_LOCAL_GARANTIDO and not force:
+            return True
+
+        conn = conectar_banco_local_forcado()
+        c = conn.cursor()
+        try:
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS clientes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome TEXT NOT NULL,
+                telefone TEXT,
+                placa_principal TEXT
+            )
+            """)
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS veiculos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                placa TEXT UNIQUE NOT NULL,
+                modelo TEXT,
+                cor TEXT,
+                cliente_id INTEGER,
+                status_atendimento TEXT DEFAULT 'SEM_ATENDIMENTO',
+                atendimento_ativo INTEGER DEFAULT 0,
+                ultima_entrada TEXT,
+                ultima_entrega TEXT,
+                FOREIGN KEY(cliente_id) REFERENCES clientes(id)
+            )
+            """)
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS servicos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                veiculo_id INTEGER,
+                tipo_id INTEGER,
+                valor REAL,
+                entrada TEXT,
+                entrega_prevista TEXT,
+                entrega TEXT,
+                status TEXT,
+                prioridade INTEGER DEFAULT 0,
+                observacoes TEXT,
+                origem TEXT,
+                guarita TEXT,
+                pneu TEXT,
+                cera TEXT,
+                hidro_lataria TEXT,
+                hidro_vidros TEXT,
+                valor_adicional REAL DEFAULT 0,
+                criado_por_usuario TEXT,
+                criado_por_nome TEXT,
+                operacional_por_usuario TEXT,
+                operacional_por_nome TEXT,
+                finalizado_por_usuario TEXT,
+                finalizado_por_nome TEXT
+            )
+            """)
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS fotos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                servico_id INTEGER,
+                tipo TEXT,
+                caminho TEXT,
+                usuario TEXT,
+                usuario_nome TEXT,
+                tamanho_bytes INTEGER,
+                largura INTEGER,
+                altura INTEGER,
+                arquivo_blob BLOB,
+                mime_type TEXT,
+                arquivo_nome TEXT,
+                criado_em TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS configuracao_empresa (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                versao_sistema TEXT,
+                clima_ativo INTEGER DEFAULT 1,
+                clima_api_url TEXT,
+                clima_local_label TEXT,
+                clima_latitude REAL,
+                clima_longitude REAL,
+                clima_timezone TEXT,
+                clima_timeout_segundos INTEGER DEFAULT 8,
+                atualizado_em TEXT
+            )
+            """)
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS sincronizacoes_clientes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome TEXT,
+                url TEXT NOT NULL,
+                intervalo_minutos INTEGER NOT NULL DEFAULT 60,
+                campo_placa TEXT NOT NULL,
+                campo_nome TEXT,
+                campo_telefone TEXT,
+                campo_modelo TEXT,
+                campo_cor TEXT,
+                campo_servico TEXT,
+                campo_data TEXT,
+                ativo INTEGER NOT NULL DEFAULT 1,
+                ultimo_sync_em TEXT,
+                proximo_sync_em TEXT,
+                ultimo_status TEXT,
+                ultima_mensagem TEXT,
+                ultimo_hash TEXT,
+                colunas_ultima_sync TEXT,
+                criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+                atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+
+            adicionar_coluna_se_preciso(c, "clientes", "placa_principal TEXT")
+            adicionar_coluna_se_preciso(c, "veiculos", "status_atendimento TEXT DEFAULT 'SEM_ATENDIMENTO'")
+            adicionar_coluna_se_preciso(c, "veiculos", "atendimento_ativo INTEGER DEFAULT 0")
+            adicionar_coluna_se_preciso(c, "veiculos", "ultima_entrada TEXT")
+            adicionar_coluna_se_preciso(c, "veiculos", "ultima_entrega TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "entrega_prevista TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "valor_adicional REAL DEFAULT 0")
+            adicionar_coluna_se_preciso(c, "servicos", "origem TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "guarita TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "pneu TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "cera TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "hidro_lataria TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "hidro_vidros TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "criado_por_usuario TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "criado_por_nome TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "operacional_por_usuario TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "operacional_por_nome TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "finalizado_por_usuario TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "finalizado_por_nome TEXT")
+            adicionar_coluna_se_preciso(c, "fotos", "arquivo_blob BLOB")
+            adicionar_coluna_se_preciso(c, "fotos", "mime_type TEXT")
+            adicionar_coluna_se_preciso(c, "fotos", "arquivo_nome TEXT")
+            adicionar_coluna_se_preciso(c, "configuracao_empresa", "versao_sistema TEXT")
+            adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_ativo INTEGER DEFAULT 1")
+            adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_api_url TEXT")
+            adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_local_label TEXT")
+            adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_latitude REAL")
+            adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_longitude REAL")
+            adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_timezone TEXT")
+            adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_timeout_segundos INTEGER DEFAULT 8")
+            adicionar_coluna_se_preciso(c, "sincronizacoes_clientes", "ultimo_hash TEXT")
+            adicionar_coluna_se_preciso(c, "sincronizacoes_clientes", "colunas_ultima_sync TEXT")
+            adicionar_coluna_se_preciso(c, "sincronizacoes_clientes", "criado_em TEXT")
+            adicionar_coluna_se_preciso(c, "sincronizacoes_clientes", "atualizado_em TEXT")
+            conn.commit()
+            SCHEMA_SQLITE_LOCAL_GARANTIDO = True
+            return True
+        finally:
+            conn.close()
 
 
 def conectar_banco_online_forcado():
@@ -3637,6 +3990,15 @@ def garantir_atualizado_em_sync(cursor):
     backend = getattr(cursor, "backend", "")
 
     if backend == "postgres":
+        aplicar_triggers_sync_no_boot = bool_config_ativo(
+            os.environ.get("APLICAR_TRIGGERS_SYNC_NO_BOOT", "")
+        )
+
+        if not aplicar_triggers_sync_no_boot:
+            for tabela in TABELAS_COM_ATUALIZADO_EM_SYNC:
+                adicionar_coluna_se_preciso(cursor, tabela, "atualizado_em TEXT")
+            return
+
         try:
             cursor.execute("""
                 CREATE OR REPLACE FUNCTION public.atualizar_atualizado_em_generico()
@@ -4087,6 +4449,8 @@ def sincronizar_bancos_incremental(force=False):
             pass
 
 def salvar_notificacao(mensagem, tipo="info"):
+    global NOTIFICACOES_CACHE
+    global HUD_CACHE
     try:
         conn = conectar()
         c = conn.cursor()
@@ -4097,6 +4461,10 @@ def salvar_notificacao(mensagem, tipo="info"):
         """, (mensagem, tipo, agora_iso()))
 
         conn.commit()
+        NOTIFICACOES_CACHE["testado_em"] = 0.0
+        NOTIFICACOES_CACHE["resultado"] = None
+        HUD_CACHE["testado_em"] = 0.0
+        HUD_CACHE["resultado"] = None
 
     except Exception as e:
         print("ERRO AO SALVAR NOTIFICACAO:", e)
@@ -4530,6 +4898,11 @@ def atualizar_banco():
     conn.close()
 
 def init_db():
+    try:
+        garantir_schema_sqlite_local_minima(force=True)
+    except Exception as e:
+        print("AVISO SCHEMA SQLITE LOCAL:", e)
+
     if modo_banco_preferido() == "postgres":
         status_boot = diagnosticar_banco_online(force=True)
         if not status_boot.get("conectado"):
@@ -5375,7 +5748,10 @@ def formatar_tempo_restante(valor_iso):
         return "Sem agendamento"
 
     try:
-        diferenca = int((datetime.fromisoformat(valor_iso) - agora()).total_seconds())
+        referencia = interpretar_datahora_sistema(valor_iso)
+        if not referencia:
+            return "Horario invalido"
+        diferenca = int((referencia - agora()).total_seconds())
     except Exception:
         return "Horario invalido"
 
@@ -5459,7 +5835,7 @@ def interpretar_datahora_sistema(valor):
         return None
 
     if isinstance(valor, datetime):
-        return valor
+        return normalizar_datetime_brasilia(valor)
 
     texto = str(valor).strip()
 
@@ -5468,7 +5844,7 @@ def interpretar_datahora_sistema(valor):
         lambda item: datetime.strptime(item, "%d/%m/%Y %H:%M"),
     ):
         try:
-            return parser(texto)
+            return normalizar_datetime_brasilia(parser(texto))
         except Exception:
             continue
 
@@ -8872,6 +9248,7 @@ def buscar_sincronizacao_cliente(sync_id):
 
 def executar_sincronizacao_cliente(sync_id):
     sync = buscar_sincronizacao_cliente(sync_id)
+    debug_sync = bool_config_ativo(os.environ.get("DEBUG_SYNC_PLANILHA", ""))
 
     if not sync:
         return False, "Sincronização não encontrada."
@@ -9068,56 +9445,72 @@ def importar_planilha_local():
         return False, mensagem
 
 def listar_registros_clientes(busca=""):
-    conn = conectar()
-    c = conn.cursor()
+    def executar_listagem(conn):
+        c = conn.cursor()
 
-    if busca:
-        termo = f"%{busca}%"
-        c.execute("""
-            SELECT
-                veiculos.id AS veiculo_id,
-                veiculos.placa,
-                veiculos.modelo,
-                veiculos.cor,
-                clientes.id AS cliente_id,
-                clientes.nome,
-                clientes.telefone,
-                clientes.placa_principal
-            FROM veiculos
-            LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
-            WHERE veiculos.placa LIKE ? OR veiculos.modelo LIKE ? OR clientes.nome LIKE ?
-            ORDER BY veiculos.id DESC
-        """, (termo, termo, termo))
-    else:
-        c.execute("""
-            SELECT
-                veiculos.id AS veiculo_id,
-                veiculos.placa,
-                veiculos.modelo,
-                veiculos.cor,
-                clientes.id AS cliente_id,
-                clientes.nome,
-                clientes.telefone,
-                clientes.placa_principal
-            FROM veiculos
-            LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
-            ORDER BY veiculos.id DESC
-        """)
+        if busca:
+            termo = f"%{busca}%"
+            c.execute("""
+                SELECT
+                    veiculos.id AS veiculo_id,
+                    veiculos.placa,
+                    veiculos.modelo,
+                    veiculos.cor,
+                    clientes.id AS cliente_id,
+                    clientes.nome,
+                    clientes.telefone,
+                    clientes.placa_principal
+                FROM veiculos
+                LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
+                WHERE veiculos.placa LIKE ? OR veiculos.modelo LIKE ? OR clientes.nome LIKE ?
+                ORDER BY veiculos.id DESC
+            """, (termo, termo, termo))
+        else:
+            c.execute("""
+                SELECT
+                    veiculos.id AS veiculo_id,
+                    veiculos.placa,
+                    veiculos.modelo,
+                    veiculos.cor,
+                    clientes.id AS cliente_id,
+                    clientes.nome,
+                    clientes.telefone,
+                    clientes.placa_principal
+                FROM veiculos
+                LEFT JOIN clientes ON clientes.id = veiculos.cliente_id
+                ORDER BY veiculos.id DESC
+            """)
 
-    registros = []
+        registros = []
+        for row in c.fetchall():
+            item = dict(row)
+            item["nome"] = item.get("nome") or ""
+            item["telefone"] = item.get("telefone") or ""
+            item["modelo"] = item.get("modelo") or ""
+            item["cor"] = item.get("cor") or ""
+            item["placa_original"] = item.get("placa") or ""
+            item["placa_principal"] = item.get("placa_principal") or item["placa_original"]
+            registros.append(item)
+        return registros
 
-    for row in c.fetchall():
-        item = dict(row)
-        item["nome"] = item.get("nome") or ""
-        item["telefone"] = item.get("telefone") or ""
-        item["modelo"] = item.get("modelo") or ""
-        item["cor"] = item.get("cor") or ""
-        item["placa_original"] = item.get("placa") or ""
-        item["placa_principal"] = item.get("placa_principal") or item["placa_original"]
-        registros.append(item)
-
-    conn.close()
-    return registros
+    conn = None
+    try:
+        conn = conectar_somente_leitura()
+        return executar_listagem(conn)
+    except Exception as e:
+        print("AVISO CLIENTES LISTA:", e)
+        try:
+            garantir_schema_sqlite_local_minima(force=True)
+            conn = conectar_banco_local_forcado()
+            return executar_listagem(conn)
+        except Exception:
+            raise
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 def montar_resumo_base_dados(registros):
     clientes_unicos = set()
@@ -9601,13 +9994,17 @@ def sincronizar_fontes_pendentes():
         sync_lock.release()
 
 def loop_worker_sincronizacao():
+    primeira_execucao = True
     while True:
+        if primeira_execucao:
+            primeira_execucao = False
+            time.sleep(WORKER_SYNC_DELAY_INICIAL)
         try:
             sincronizar_fontes_pendentes()
         except Exception as e:
             print("ERRO WORKER SYNC:", e)
 
-        time.sleep(60)
+        time.sleep(120)
 
 def iniciar_worker_sincronizacao():
     global sync_worker_iniciado
@@ -9620,7 +10017,11 @@ def iniciar_worker_sincronizacao():
 
 
 def loop_worker_sincronizacao_bancos():
+    primeira_execucao = True
     while True:
+        if primeira_execucao:
+            primeira_execucao = False
+            time.sleep(WORKER_SYNC_BANCOS_DELAY_INICIAL)
         try:
             resultado = sincronizar_bancos_incremental()
             if resultado.get("conectado"):
@@ -9628,7 +10029,7 @@ def loop_worker_sincronizacao_bancos():
         except Exception as e:
             print("ERRO WORKER SYNC BANCOS:", e)
 
-        time.sleep(45)
+        time.sleep(180)
 
 
 def iniciar_worker_sincronizacao_bancos():
@@ -9650,16 +10051,33 @@ def carregar_contexto_clientes(busca="", limpar=False):
     busca_aplicada = "" if limpar else busca
     clientes = listar_registros_clientes(busca_aplicada)
 
-    conn = conectar()
-    c = conn.cursor()
-
-    c.execute("""
-        SELECT *
-        FROM sincronizacoes_clientes
-        ORDER BY id DESC
-    """)
-    sincronizacoes_raw = c.fetchall()
-    conn.close()
+    conn = None
+    try:
+        conn = conectar_somente_leitura()
+        c = conn.cursor()
+        c.execute("""
+            SELECT *
+            FROM sincronizacoes_clientes
+            ORDER BY id DESC
+        """)
+        sincronizacoes_raw = c.fetchall()
+    except Exception as e:
+        print("AVISO CONTEXTO CLIENTES:", e)
+        garantir_schema_sqlite_local_minima(force=True)
+        conn = conectar_banco_local_forcado()
+        c = conn.cursor()
+        c.execute("""
+            SELECT *
+            FROM sincronizacoes_clientes
+            ORDER BY id DESC
+        """)
+        sincronizacoes_raw = c.fetchall()
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
     sincronizacoes = []
 
@@ -9691,17 +10109,23 @@ def preparar_sincronizacoes():
     endpoint = request.endpoint or ""
     sessao_ativa = bool(session.get("usuario"))
 
-    if not sessao_ativa and request.method == "GET":
+    if not INIT_DB_EXECUTADO:
         iniciar_bootstrap_init_db()
-        return
 
-    garantir_init_db()
+        if request.method in {"GET", "HEAD", "OPTIONS"}:
+            return
+
+        if ambiente_hospedado_gerenciado():
+            return
+
+        garantir_init_db()
+
     iniciar_worker_backup_banco()
     iniciar_worker_manutencao_arquivos()
     iniciar_worker_sincronizacao()
     iniciar_worker_sincronizacao_bancos()
     if modo_banco_preferido() == "postgres" and not SCHEMA_BANCO_ONLINE_GARANTIDO:
-        garantir_schema_banco_online()
+        iniciar_bootstrap_schema_online()
 
     global ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS
 
@@ -9719,8 +10143,8 @@ def preparar_sincronizacoes():
                 agora_ts - ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS
                 >= SYNC_FONTES_SOB_DEMANDA_INTERVALO
             ):
-                sincronizar_fontes_pendentes()
                 ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS = agora_ts
+                Thread(target=sincronizar_fontes_pendentes, daemon=True).start()
         except Exception as e:
             print("AVISO SYNC PENDENTE:", e)
 
@@ -10331,19 +10755,39 @@ def api_notificacoes():
     if not session.get("usuario"):
         return jsonify([])
 
-    conn = conectar()
-    c = conn.cursor()
+    usuario_cache = str(session.get("usuario") or "")
+    agora_cache_ts = time.time()
+    if (
+        NOTIFICACOES_CACHE.get("resultado") is not None
+        and NOTIFICACOES_CACHE.get("usuario") == usuario_cache
+        and agora_cache_ts - float(NOTIFICACOES_CACHE.get("testado_em") or 0.0) < NOTIFICACOES_CACHE_TTL
+    ):
+        return jsonify(NOTIFICACOES_CACHE["resultado"])
 
-    c.execute("""
-        SELECT * FROM notificacoes
-        ORDER BY id DESC
-        LIMIT 20
-    """)
-
-    dados = c.fetchall()
-    conn.close()
-
-    return jsonify([dict(row) for row in dados])
+    conn = None
+    try:
+        conn = conectar_somente_leitura()
+        c = conn.cursor()
+        c.execute("""
+            SELECT * FROM notificacoes
+            ORDER BY id DESC
+            LIMIT 20
+        """)
+        dados = c.fetchall()
+    except Exception as e:
+        print("ERRO API NOTIFICACOES:", e)
+        dados = []
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+    resultado = [dict(row) for row in dados]
+    NOTIFICACOES_CACHE["testado_em"] = agora_cache_ts
+    NOTIFICACOES_CACHE["usuario"] = usuario_cache
+    NOTIFICACOES_CACHE["resultado"] = list(resultado)
+    return jsonify(resultado)
 
 @app.route("/api/notificacoes/lida/<int:id>", methods=["POST"])
 def marcar_notificacao_lida(id):
@@ -10357,6 +10801,10 @@ def marcar_notificacao_lida(id):
 
     conn.commit()
     conn.close()
+    NOTIFICACOES_CACHE["testado_em"] = 0.0
+    NOTIFICACOES_CACHE["resultado"] = None
+    HUD_CACHE["testado_em"] = 0.0
+    HUD_CACHE["resultado"] = None
 
     return jsonify({"status": "ok"})
 
@@ -10372,6 +10820,10 @@ def limpar_notificacoes():
     c.execute("DELETE FROM notificacoes")
     conn.commit()
     conn.close()
+    NOTIFICACOES_CACHE["testado_em"] = 0.0
+    NOTIFICACOES_CACHE["resultado"] = None
+    HUD_CACHE["testado_em"] = 0.0
+    HUD_CACHE["resultado"] = None
 
     return jsonify({"status": "ok", "removidas": total})
 
@@ -10381,7 +10833,19 @@ def api_agenda_retorno():
         return jsonify({"erro": "nao autorizado"}), 401
 
     try:
+        usuario_cache = str(session.get("usuario") or "")
+        agora_cache_ts = time.time()
+        if (
+            AGENDA_RETORNO_CACHE.get("resultado") is not None
+            and AGENDA_RETORNO_CACHE.get("usuario") == usuario_cache
+            and agora_cache_ts - float(AGENDA_RETORNO_CACHE.get("testado_em") or 0.0) < AGENDA_RETORNO_CACHE_TTL
+        ):
+            return jsonify(AGENDA_RETORNO_CACHE["resultado"])
+
         dados = listar_agenda_retorno_lavagens()
+        AGENDA_RETORNO_CACHE["testado_em"] = agora_cache_ts
+        AGENDA_RETORNO_CACHE["usuario"] = usuario_cache
+        AGENDA_RETORNO_CACHE["resultado"] = dict(dados)
         return jsonify(dados)
     except Exception as e:
         print("ERRO AGENDA RETORNOS:", e)
@@ -10389,6 +10853,101 @@ def api_agenda_retorno():
             "erro": "nao foi possivel carregar a agenda agora",
             "detalhe": str(e),
         }), 500
+
+
+def montar_resultado_hud_basico(sync_token="init-pendente"):
+    status_banco = obter_status_banco_online()
+    banco_online_ativo = bool(status_banco.get("conectado"))
+    banco_online_backend = status_banco.get("backend_label") or "Supabase / PostgreSQL"
+    banco_online_resumo = (
+        "Banco online ativo"
+        if banco_online_ativo
+        else "Banco online indisponivel"
+    )
+    banco_online_mensagem = (
+        f"Banco online ativo e gravando em tempo real ({banco_online_backend})"
+        if banco_online_ativo
+        else (status_banco.get("mensagem") or "Banco online indisponivel")
+    )
+    return {
+        "total": 0.0,
+        "andamento": 0,
+        "atrasados": 0,
+        "ticket": 0.0,
+        "entregas_ativas": 0,
+        "entregas_com_horario": 0,
+        "entregas_sem_horario": 0,
+        "entregas_vencidas": 0,
+        "entrega_proxima_em_minutos": None,
+        "entrega_proxima_placa": "",
+        "entrega_proxima_hora": "",
+        "entrega_mensagem": "Painel carregando dados...",
+        "retornos_acao_agora": 0,
+        "retornos_reagendados_vencidos": 0,
+        "retornos_contatados_hoje": 0,
+        "retornos_mensagem": "Painel retornos em dia",
+        "banco_online_ativo": banco_online_ativo,
+        "banco_online_resumo": banco_online_resumo,
+        "banco_online_mensagem": banco_online_mensagem,
+        "banco_online_backend_label": banco_online_backend,
+        "versao": obter_versao_sistema(),
+        "usuario": session.get("usuario") or "",
+        "usuario_nome": session.get("usuario_nome") or session.get("usuario") or "",
+        "usuario_iniciais": session.get("usuario_iniciais") or obter_iniciais_usuario(
+            session.get("usuario_nome"),
+            session.get("usuario"),
+        ),
+        "usuario_foto_url": session.get("usuario_foto_url") or "",
+        "sync_token": sync_token,
+    }
+
+
+def gerar_sync_token_leve():
+    usuario_cache = str(session.get("usuario") or "")
+    cache = HUD_CACHE.get("resultado") or {}
+    cache_usuario = HUD_CACHE.get("usuario") or ""
+    if cache and cache_usuario == usuario_cache and cache.get("sync_token"):
+        return str(cache.get("sync_token"))
+
+    if not INIT_DB_EXECUTADO or (
+        modo_banco_preferido() == "postgres" and not SCHEMA_BANCO_ONLINE_GARANTIDO
+    ):
+        return "init-pendente"
+
+    conn = None
+    try:
+        conn = conectar_somente_leitura()
+        c = conn.cursor()
+        partes = []
+        for tabela in ("servicos", "veiculos", "clientes", "notificacoes", "auditoria", "usuarios"):
+            c.execute(
+                f"""
+                SELECT
+                    COALESCE(COUNT(*), 0) AS total,
+                    COALESCE(MAX(id), 0) AS ultimo_id
+                FROM {tabela}
+                """
+            )
+            total, ultimo_id = c.fetchone() or (0, 0)
+            partes.extend([total, ultimo_id])
+        token_bruto = "|".join(str(valor) for valor in partes)
+        return hashlib.sha1(token_bruto.encode("utf-8")).hexdigest()
+    except Exception as e:
+        print("ERRO SYNC TOKEN:", e)
+        return str(cache.get("sync_token") or "sync-indisponivel")
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/sync-token")
+def api_sync_token():
+    if not session.get("usuario"):
+        return jsonify({"erro": "nao autorizado"}), 401
+    return jsonify({"sync_token": gerar_sync_token_leve()})
 
 @app.route("/api/hud")
 def api_hud():
@@ -10404,10 +10963,19 @@ def api_hud():
     ):
         return dict(HUD_CACHE["resultado"])
 
+    if not INIT_DB_EXECUTADO or (
+        modo_banco_preferido() == "postgres" and not SCHEMA_BANCO_ONLINE_GARANTIDO
+    ):
+        resultado = montar_resultado_hud_basico(sync_token="init-pendente")
+        HUD_CACHE["testado_em"] = agora_cache_ts
+        HUD_CACHE["usuario"] = usuario_cache
+        HUD_CACHE["resultado"] = dict(resultado)
+        return resultado
+
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
-    conn = conectar()
+    conn = conectar_somente_leitura()
     c = conn.cursor()
 
     hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y")
@@ -10444,8 +11012,8 @@ def api_hud():
 
     for s in servicos:
         try:
-            entrada = datetime.fromisoformat(s["entrada"])
-            diff = (agora - entrada).total_seconds()
+            entrada = interpretar_datahora_sistema(s["entrada"])
+            diff = (agora - entrada).total_seconds() if entrada else 0
 
             if diff > 7200:
                 atrasados += 1
@@ -10659,7 +11227,7 @@ def status_sync():
     if not session.get("usuario"):
         return jsonify({"status": "erro"})
 
-    conn = conectar()
+    conn = conectar_somente_leitura()
     c = conn.cursor()
 
     c.execute("""
@@ -10676,18 +11244,12 @@ def status_sync():
         return jsonify({"status": "vazio"})
 
     # 🔥 limpa a mensagem depois de ler (ANTI-SPAM)
-    c.execute("""
-        UPDATE sincronizacoes_clientes
-        SET ultima_mensagem=NULL
-        WHERE id=?
-    """, (row["id"],))
-
-    conn.commit()
     conn.close()
 
     return jsonify({
         "status": row["ultimo_status"],
-        "mensagem": row["ultima_mensagem"]
+        "mensagem": row["ultima_mensagem"],
+        "id": row["id"],
     })
 
 @app.route("/editar_servico_inline/<int:id>", methods=["POST"])
@@ -10781,7 +11343,17 @@ def criar_admin():
                 senha_hash_bcrypt(senha_temporaria),
                 agora_iso(),
             ))
-        elif senha_padrao_admin_ativa(admin_atualizado) or not senha_usa_bcrypt(admin_atualizado["senha"]):
+        elif not senha_usa_bcrypt(admin_atualizado["senha"]):
+            c.execute("""
+                UPDATE usuarios
+                SET senha_alteracao_obrigatoria=1
+                WHERE usuario='admin'
+            """)
+        elif (
+            not ambiente_hospedado_gerenciado()
+            and not int(admin_atualizado["senha_alteracao_obrigatoria"] or 0)
+            and senha_padrao_admin_ativa(admin_atualizado)
+        ):
             c.execute("""
                 UPDATE usuarios
                 SET senha_alteracao_obrigatoria=1
@@ -13368,7 +13940,12 @@ def api_salvar_base():
 
 
 def listar_servicos_em_andamento_voz():
-    conn = conectar()
+    if not INIT_DB_EXECUTADO or (
+        modo_banco_preferido() == "postgres" and not SCHEMA_BANCO_ONLINE_GARANTIDO
+    ):
+        return []
+
+    conn = conectar_somente_leitura()
     c = conn.cursor()
     c.execute(
         """
@@ -13441,13 +14018,36 @@ def api_operacional_voz():
     if not session.get("usuario"):
         return jsonify({"status": "erro", "mensagem": "nao autorizado"}), 401
 
-    return jsonify(
-        {
+    usuario_cache = str(session.get("usuario") or "")
+    agora_cache_ts = time.time()
+    if (
+        VOZ_CACHE.get("resultado") is not None
+        and VOZ_CACHE.get("usuario") == usuario_cache
+        and agora_cache_ts - float(VOZ_CACHE.get("testado_em") or 0.0) < VOZ_CACHE_TTL
+    ):
+        return jsonify(VOZ_CACHE["resultado"])
+
+    try:
+        resultado = {
             "status": "ok",
             "gerado_em": agora_iso(),
             "servicos": listar_servicos_em_andamento_voz(),
         }
-    )
+        VOZ_CACHE["testado_em"] = agora_cache_ts
+        VOZ_CACHE["usuario"] = usuario_cache
+        VOZ_CACHE["resultado"] = dict(resultado)
+        return jsonify(resultado)
+    except Exception as e:
+        print("ERRO OPERACIONAL VOZ:", e)
+        resultado = {
+            "status": "ok",
+            "gerado_em": agora_iso(),
+            "servicos": [],
+        }
+        VOZ_CACHE["testado_em"] = agora_cache_ts
+        VOZ_CACHE["usuario"] = usuario_cache
+        VOZ_CACHE["resultado"] = dict(resultado)
+        return jsonify(resultado)
 
 
 

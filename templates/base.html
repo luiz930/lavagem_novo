@@ -454,7 +454,7 @@ function toggleSidebar() {
 let baseSyncToken = "";
 let baseSyncExecutando = false;
 let baseSyncIntervalHandle = null;
-const baseSyncIntervalPadrao = 12;
+const baseSyncIntervalPadrao = 90;
 const baseSyncIntervalChave = "wagen_sync_interval_seconds";
 
 function baseObterIntervaloSincronia() {
@@ -495,7 +495,7 @@ async function verificarSincroniaBancoBase() {
     baseSyncExecutando = true;
 
     try {
-        const resposta = await fetch("/api/hud", { cache: "no-store" });
+        const resposta = await fetch("/api/sync-token", { cache: "no-store" });
         const dados = await resposta.json();
 
         if (!dados.erro) {
@@ -521,7 +521,7 @@ window.reiniciarSincroniaBancoBase = baseReiniciarAgendamentoSincronia;
 
 {% if session.get("usuario") %}
 baseReiniciarAgendamentoSincronia();
-verificarSincroniaBancoBase();
+setTimeout(verificarSincroniaBancoBase, 8000);
 
 document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {

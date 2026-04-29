@@ -4,7 +4,8 @@
     const VOZ_LIDER_KEY = "wagenPainelVozLider";
     const VOZ_TAB_ID_KEY = "wagenPainelVozTabId";
     const VOZ_ENDPOINT = "/api/operacional/voz";
-    const POLLING_MS = 30000;
+    const UI_REFRESH_MS = 30000;
+    const SNAPSHOT_POLLING_MS = 180000;
     const LIDER_TTL_MS = 45000;
     const STATUS_PADRAO =
         "A cada 10 minutos, o sistema avisa em portugues do Brasil quais veiculos continuam em atendimento. Veiculos com entrega agendada avisam somente quando faltarem 30 minutos.";
@@ -48,6 +49,13 @@
 
     function obterCardsServicos() {
         return Array.from(document.querySelectorAll(".js-servico-card"));
+    }
+
+    function deveInicializarAvisosOperacionais() {
+        return (
+            obterCardsServicos().length > 0 ||
+            Boolean(obterBotaoVoz() || obterBotaoTesteVoz() || obterStatusVoz())
+        );
     }
 
     function vozOperacionalAtiva() {
@@ -492,26 +500,34 @@
     }
 
     function iniciarAvisosOperacionais() {
+        if (!deveInicializarAvisosOperacionais()) {
+            return;
+        }
+
         conectarControlesVoz();
         atualizarCardsPainel();
         atualizarStatusControlesVoz();
-        atualizarSnapshotOperacional();
+        setTimeout(() => {
+            atualizarSnapshotOperacional();
+        }, 1200);
 
         setInterval(() => {
             atualizarCardsPainel();
             atualizarStatusControlesVoz();
             verificarAlertasOperacionais();
-        }, POLLING_MS);
+        }, UI_REFRESH_MS);
 
         setInterval(() => {
-            atualizarSnapshotOperacional();
-        }, POLLING_MS);
+            if (vozOperacionalAtiva()) {
+                atualizarSnapshotOperacional();
+            }
+        }, SNAPSHOT_POLLING_MS);
 
         setInterval(() => {
-            if (estaAbaResponsavelPelosAvisos()) {
+            if (vozOperacionalAtiva() && estaAbaResponsavelPelosAvisos()) {
                 renovarLideranca();
             }
-        }, 15000);
+        }, 30000);
     }
 
     document.addEventListener("DOMContentLoaded", () => {

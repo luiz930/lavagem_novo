@@ -1632,8 +1632,13 @@ function abrirServico() {
 
 let ultimaMensagem = "";
 let ultimoErro = "";
+const SYNC_STATUS_MS = 30000;
 
 async function verificarSync() {
+    if (document.hidden) {
+        return;
+    }
+
     try {
         const res = await fetch("/status_sync");
         const data = await res.json();
@@ -1663,8 +1668,8 @@ async function verificarSync() {
     }
 }
 
-// roda a cada 10 segundos
-setInterval(verificarSync, 10000);
+setInterval(verificarSync, SYNC_STATUS_MS);
+setTimeout(verificarSync, 2500);
 </script>
 
 <script>
@@ -1713,6 +1718,10 @@ let agendaRetornoData = {
     restantes: 0
 };
 const AGENDA_RETORNO_STORAGE_KEY = "wagen_agenda_retorno_dispensada_v2";
+const NOTIFICACOES_REFRESH_MS = 30000;
+const AGENDA_REFRESH_MS = 180000;
+let notificacoesCarregadasEm = 0;
+let agendaRetornoCarregadaEm = 0;
 
 function carregarAgendaRetornoDispensada() {
     try {
@@ -1990,11 +1999,22 @@ function renderizarAgendaRetorno() {
     badge.style.display = totalAgenda > 0 ? "inline-flex" : "none";
 }
 
-async function carregarNotificacoes() {
+async function carregarNotificacoes(force = false) {
+    const dropdown = document.getElementById("dropdown-notificacoes");
+    const agora = Date.now();
+    if (
+        !force &&
+        dropdown &&
+        dropdown.childElementCount > 0 &&
+        (agora - notificacoesCarregadasEm) < NOTIFICACOES_REFRESH_MS
+    ) {
+        return;
+    }
+
     const res = await fetch("/api/notificacoes");
     const dados = await res.json();
 
-    const dropdown = document.getElementById("dropdown-notificacoes");
+    notificacoesCarregadasEm = agora;
     const badge = document.getElementById("badge");
 
     dropdown.innerHTML = "";
@@ -2012,7 +2032,7 @@ async function carregarNotificacoes() {
 
         div.onclick = async () => {
             await fetch(`/api/notificacoes/lida/${n.id}`, { method: "POST" });
-            carregarNotificacoes();
+            carregarNotificacoes(true);
         };
 
         dropdown.appendChild(div);
@@ -2028,15 +2048,22 @@ async function carregarNotificacoes() {
     badge.innerText = naoLidas;
 }
 
-async function carregarAgendaRetorno() {
+async function carregarAgendaRetorno(force = false) {
     try {
         garantirAgendaRetornoUI();
+
+        const agora = Date.now();
+        if (!force && agendaRetornoData.itens.length && (agora - agendaRetornoCarregadaEm) < AGENDA_REFRESH_MS) {
+            renderizarAgendaRetorno();
+            return;
+        }
 
         const res = await fetch("/api/agenda-retornos");
         const dados = await res.json();
 
         if (dados && !dados.erro) {
             agendaRetornoData = dados;
+            agendaRetornoCarregadaEm = agora;
             normalizarAgendaRetornoDispensada();
             renderizarAgendaRetorno();
         }
@@ -2045,7 +2072,7 @@ async function carregarAgendaRetorno() {
     }
 }
 
-function toggleAgendaRetornoDropdown(event) {
+async function toggleAgendaRetornoDropdown(event) {
     if (event) {
         event.stopPropagation();
     }
@@ -2059,13 +2086,19 @@ function toggleAgendaRetornoDropdown(event) {
     }
 
     dropdown.classList.toggle("hidden");
+    if (!dropdown.classList.contains("hidden")) {
+        await carregarAgendaRetorno();
+    }
 }
 
-document.getElementById("btn-sino").onclick = (event) => {
+document.getElementById("btn-sino").onclick = async (event) => {
     event.stopPropagation();
     fecharDropdownsCabecalho("dropdown-notificacoes");
     const drop = document.getElementById("dropdown-notificacoes");
     drop.classList.toggle("hidden");
+    if (!drop.classList.contains("hidden")) {
+        await carregarNotificacoes();
+    }
 };
 
 document.addEventListener("click", (event) => {
@@ -2077,15 +2110,13 @@ document.addEventListener("click", (event) => {
     fecharDropdownsCabecalho();
 });
 
-setInterval(carregarNotificacoes, 5000);
-setInterval(carregarAgendaRetorno, 60000);
 garantirAgendaRetornoUI();
-carregarNotificacoes();
-carregarAgendaRetorno();
 </script>
 
 <script>
 const APP_VERSION = "{{ app_version }}";
+const HUD_REFRESH_MS = 15000;
+const CLIMA_REFRESH_MS = 180000;
 let climaTexto = "🌤️ Carregando...";
 let sugestaoTexto = "";
 
@@ -2122,6 +2153,9 @@ const HUD_AUTO_COLLAPSE_MS = 30000;
 let hudExpandido = carregarEstadoHudExpandido();
 let hudAutoCollapseTimer = null;
 let ultimoSyncToken = "";
+let ultimoAvisoSyncToken = "";
+let hudExecutando = false;
+let climaExecutando = false;
 
 function obterIniciaisUsuario(nome) {
     const texto = String(nome || "").trim();
@@ -2352,6 +2386,11 @@ function montarLinhasHud(agora) {
 }
 
 async function atualizarHUD() {
+    if (hudExecutando || document.hidden) {
+        return;
+    }
+
+    hudExecutando = true;
     try {
         const res = await fetch("/api/hud");
         const data = await res.json();
@@ -2375,18 +2414,25 @@ async function atualizarHUD() {
                 );
 
                 if (!estaEditando) {
-                    window.location.reload();
-                    return;
+                    if (ultimoAvisoSyncToken !== ultimoSyncToken) {
+                        ultimoAvisoSyncToken = ultimoSyncToken;
+                        mostrarPopup("Dados do painel atualizados.", "sucesso");
+                    }
                 }
             }
         }
     } catch (e) {
         console.log("Erro HUD");
+    } finally {
+        hudExecutando = false;
     }
 }
 
 // CLIMA
 async function atualizarClima() {
+    if (document.hidden) {
+        return;
+    }
     try {
         const res = await fetch("/api/clima");
         if (!res.ok) {
@@ -2468,12 +2514,12 @@ function atualizarRelogio() {
 } // 🔥 FECHAMENTO CORRETO DA FUNÇÃO
 // LOOP
 setInterval(atualizarRelogio, 1000);
-setInterval(atualizarClima, 60000);
-setInterval(atualizarHUD, 5000);
+setInterval(atualizarClima, CLIMA_REFRESH_MS);
+setInterval(atualizarHUD, HUD_REFRESH_MS);
 
 // INICIAR
-atualizarClima();
-atualizarHUD();
+setTimeout(atualizarHUD, 250);
+setTimeout(atualizarClima, 1200);
 agendarRecolhimentoHud();
 atualizarRelogio();
 </script>
@@ -2491,7 +2537,7 @@ async function limparNotificacoes() {
         return;
     }
 
-    carregarNotificacoes();
+    carregarNotificacoes(true);
 }
 </script>
 
