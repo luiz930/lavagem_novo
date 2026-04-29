@@ -24,6 +24,9 @@
         <h2 class="section-title top-spacing">{{ servico.placa or "-" }}</h2>
         <p><b>Cliente:</b> {{ servico.cliente_nome or "Nao informado" }}</p>
         <p><b>Veiculo:</b> {{ servico.modelo or "Nao informado" }}{% if servico.cor %} / {{ servico.cor }}{% endif %}</p>
+        <p><b>Etapa atual:</b> {{ servico.etapa_atual_exibicao }}</p>
+        <p><b>Tempo de lavagem:</b> {{ servico.lavagem_tempo_exibicao }}</p>
+        <p><b>Tempo de finalizacao:</b> {{ servico.finalizacao_tempo_exibicao }}</p>
         <p><b>Entrada por:</b> {{ servico.criado_por_nome_exibicao }}</p>
         <p><b>Finalizado por:</b> {{ servico.finalizado_por_nome_exibicao }}</p>
         {% if servico.entrega_prevista_exibicao %}

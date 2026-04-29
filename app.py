@@ -3819,6 +3819,12 @@ def garantir_schema_sqlite_local_minima(force=False):
                 valor_adicional REAL DEFAULT 0,
                 criado_por_usuario TEXT,
                 criado_por_nome TEXT,
+                etapa_atual TEXT DEFAULT 'LAVAGEM',
+                etapa_atual_iniciada_em TEXT,
+                lavagem_iniciada_em TEXT,
+                finalizacao_iniciada_em TEXT,
+                lavagem_segundos INTEGER DEFAULT 0,
+                finalizacao_segundos INTEGER DEFAULT 0,
                 operacional_por_usuario TEXT,
                 operacional_por_nome TEXT,
                 finalizado_por_usuario TEXT,
@@ -3896,6 +3902,12 @@ def garantir_schema_sqlite_local_minima(force=False):
             adicionar_coluna_se_preciso(c, "servicos", "hidro_vidros TEXT")
             adicionar_coluna_se_preciso(c, "servicos", "criado_por_usuario TEXT")
             adicionar_coluna_se_preciso(c, "servicos", "criado_por_nome TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "etapa_atual TEXT DEFAULT 'LAVAGEM'")
+            adicionar_coluna_se_preciso(c, "servicos", "etapa_atual_iniciada_em TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "lavagem_iniciada_em TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "finalizacao_iniciada_em TEXT")
+            adicionar_coluna_se_preciso(c, "servicos", "lavagem_segundos INTEGER DEFAULT 0")
+            adicionar_coluna_se_preciso(c, "servicos", "finalizacao_segundos INTEGER DEFAULT 0")
             adicionar_coluna_se_preciso(c, "servicos", "operacional_por_usuario TEXT")
             adicionar_coluna_se_preciso(c, "servicos", "operacional_por_nome TEXT")
             adicionar_coluna_se_preciso(c, "servicos", "finalizado_por_usuario TEXT")
@@ -4642,6 +4654,12 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "servicos", "entrega_prevista TEXT")
     adicionar_coluna_se_preciso(c, "servicos", "criado_por_usuario TEXT")
     adicionar_coluna_se_preciso(c, "servicos", "criado_por_nome TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "etapa_atual TEXT DEFAULT 'LAVAGEM'")
+    adicionar_coluna_se_preciso(c, "servicos", "etapa_atual_iniciada_em TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "lavagem_iniciada_em TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "finalizacao_iniciada_em TEXT")
+    adicionar_coluna_se_preciso(c, "servicos", "lavagem_segundos INTEGER DEFAULT 0")
+    adicionar_coluna_se_preciso(c, "servicos", "finalizacao_segundos INTEGER DEFAULT 0")
     adicionar_coluna_se_preciso(c, "servicos", "operacional_por_usuario TEXT")
     adicionar_coluna_se_preciso(c, "servicos", "operacional_por_nome TEXT")
     adicionar_coluna_se_preciso(c, "servicos", "finalizado_por_usuario TEXT")
@@ -5214,6 +5232,12 @@ def criar_todas_tabelas():
         valor_adicional REAL DEFAULT 0,
         criado_por_usuario TEXT,
         criado_por_nome TEXT,
+        etapa_atual TEXT DEFAULT 'LAVAGEM',
+        etapa_atual_iniciada_em TEXT,
+        lavagem_iniciada_em TEXT,
+        finalizacao_iniciada_em TEXT,
+        lavagem_segundos INTEGER DEFAULT 0,
+        finalizacao_segundos INTEGER DEFAULT 0,
         operacional_por_usuario TEXT,
         operacional_por_nome TEXT,
         finalizado_por_usuario TEXT,
@@ -5935,6 +5959,195 @@ def formatar_duracao_segundos(segundos):
         partes.append(f"{segundos}s")
 
     return " ".join(partes[:3])
+
+
+ETAPAS_OPERACIONAIS_VALIDAS = {"LAVAGEM", "FINALIZACAO"}
+
+
+def normalizar_etapa_operacional(valor, fallback="LAVAGEM"):
+    texto = normalizar_texto_campo(valor).upper()
+    texto = texto.replace("FINALIZAÇÃO", "FINALIZACAO")
+    if texto not in ETAPAS_OPERACIONAIS_VALIDAS:
+        return fallback
+    return texto
+
+
+def _campo_segundos_etapa(etapa):
+    return "lavagem_segundos" if etapa == "LAVAGEM" else "finalizacao_segundos"
+
+
+def _campo_inicio_primeiro_etapa(etapa):
+    return "lavagem_iniciada_em" if etapa == "LAVAGEM" else "finalizacao_iniciada_em"
+
+
+def obter_inicio_etapa_servico(servico, etapa, incluir_entrada=False):
+    servico = dict(servico or {})
+    candidatos = [servico.get("etapa_atual_iniciada_em")]
+    status_em_andamento = normalizar_texto_campo(servico.get("status")).upper() == "EM ANDAMENTO"
+
+    if status_em_andamento and not normalizar_texto_campo(servico.get("etapa_atual_iniciada_em")):
+        candidatos.append(servico.get(_campo_inicio_primeiro_etapa(etapa)))
+
+    if status_em_andamento and incluir_entrada and etapa == "LAVAGEM":
+        candidatos.append(servico.get("entrada"))
+
+    for valor in candidatos:
+        inicio = interpretar_datahora_sistema(valor)
+        inicio = normalizar_datetime_brasilia(inicio)
+        if inicio:
+            return inicio
+
+    return None
+
+
+def atualizar_campos_servico(cursor, servico_id, updates):
+    if not updates:
+        return
+
+    colunas = []
+    parametros = []
+
+    for chave, valor in updates.items():
+        colunas.append(f"{chave}=?")
+        parametros.append(valor)
+
+    parametros.append(servico_id)
+    cursor.execute(
+        f"UPDATE servicos SET {', '.join(colunas)} WHERE id=?",
+        tuple(parametros),
+    )
+
+
+def calcular_segundos_etapa_servico(servico, etapa, referencia=None):
+    servico = dict(servico or {})
+    referencia = referencia or agora()
+    etapa = normalizar_etapa_operacional(etapa)
+    campo_segundos = _campo_segundos_etapa(etapa)
+    total = converter_inteiro(servico.get(campo_segundos), 0)
+    etapa_atual = normalizar_etapa_operacional(servico.get("etapa_atual"), fallback="LAVAGEM")
+    etapa_iniciada_em = obter_inicio_etapa_servico(
+        servico,
+        etapa_atual,
+        incluir_entrada=True,
+    )
+
+    if etapa_iniciada_em and etapa_atual == etapa:
+        total += max(0, int((referencia - etapa_iniciada_em).total_seconds()))
+
+    return max(0, total)
+
+
+def enriquecer_etapas_operacionais_servico(servico, referencia=None):
+    referencia = referencia or agora()
+    etapa_atual = normalizar_etapa_operacional(servico.get("etapa_atual"), fallback="LAVAGEM")
+    etapa_atual_iniciada = obter_inicio_etapa_servico(
+        servico,
+        etapa_atual,
+        incluir_entrada=True,
+    )
+
+    servico["etapa_atual_normalizada"] = etapa_atual
+    servico["etapa_atual_exibicao"] = "Lavagem" if etapa_atual == "LAVAGEM" else "Finalizacao"
+    servico["etapa_atual_iniciada_em_iso"] = (
+        etapa_atual_iniciada.isoformat(timespec="seconds")
+        if etapa_atual_iniciada else ""
+    )
+    servico["lavagem_segundos_base"] = converter_inteiro(servico.get("lavagem_segundos"), 0)
+    servico["finalizacao_segundos_base"] = converter_inteiro(servico.get("finalizacao_segundos"), 0)
+    servico["lavagem_segundos_total"] = calcular_segundos_etapa_servico(servico, "LAVAGEM", referencia=referencia)
+    servico["finalizacao_segundos_total"] = calcular_segundos_etapa_servico(servico, "FINALIZACAO", referencia=referencia)
+    servico["lavagem_tempo_exibicao"] = formatar_duracao_segundos(servico["lavagem_segundos_total"])
+    servico["finalizacao_tempo_exibicao"] = formatar_duracao_segundos(servico["finalizacao_segundos_total"])
+    servico["proxima_etapa"] = "FINALIZACAO" if etapa_atual == "LAVAGEM" else "LAVAGEM"
+    servico["proxima_etapa_exibicao"] = "Finalizacao" if servico["proxima_etapa"] == "FINALIZACAO" else "Lavagem"
+    servico["botao_trocar_etapa"] = (
+        "Ir para finalizacao"
+        if servico["proxima_etapa"] == "FINALIZACAO"
+        else "Voltar para lavagem"
+    )
+    return servico
+
+
+def registrar_transicao_etapa_servico(cursor, servico, etapa_destino, instante=None):
+    if not servico:
+        return None
+
+    servico_dict = dict(servico)
+    instante = normalizar_datetime_brasilia(instante or agora())
+    instante_iso = instante.isoformat(timespec="seconds")
+    etapa_atual = normalizar_etapa_operacional(servico_dict.get("etapa_atual"), fallback="LAVAGEM")
+    etapa_destino = normalizar_etapa_operacional(etapa_destino, fallback=etapa_atual)
+    updates = {}
+
+    if etapa_atual == etapa_destino:
+        if not normalizar_texto_campo(servico_dict.get("etapa_atual_iniciada_em")):
+            updates["etapa_atual_iniciada_em"] = instante_iso
+        campo_inicio_destino = _campo_inicio_primeiro_etapa(etapa_destino)
+        if not normalizar_texto_campo(servico_dict.get(campo_inicio_destino)):
+            updates[campo_inicio_destino] = instante_iso
+        atualizar_campos_servico(cursor, servico_dict["id"], updates)
+        servico_dict.update(updates)
+        return servico_dict
+
+    etapa_iniciada_em = obter_inicio_etapa_servico(
+        servico_dict,
+        etapa_atual,
+        incluir_entrada=True,
+    )
+
+    if etapa_iniciada_em:
+        campo_segundos_atual = _campo_segundos_etapa(etapa_atual)
+        base_atual = converter_inteiro(servico_dict.get(campo_segundos_atual), 0)
+        updates[campo_segundos_atual] = base_atual + max(
+            0,
+            int((instante - etapa_iniciada_em).total_seconds()),
+        )
+
+    updates["etapa_atual"] = etapa_destino
+    updates["etapa_atual_iniciada_em"] = instante_iso
+    campo_inicio_destino = _campo_inicio_primeiro_etapa(etapa_destino)
+    if not normalizar_texto_campo(servico_dict.get(campo_inicio_destino)):
+        updates[campo_inicio_destino] = instante_iso
+
+    atualizar_campos_servico(cursor, servico_dict["id"], updates)
+    servico_dict.update(updates)
+    return servico_dict
+
+
+def consolidar_tempo_etapa_atual_servico(cursor, servico, instante=None, etapa_final=None):
+    if not servico:
+        return None
+
+    servico_dict = dict(servico)
+    instante = normalizar_datetime_brasilia(instante or agora())
+    etapa_atual = normalizar_etapa_operacional(servico_dict.get("etapa_atual"), fallback="LAVAGEM")
+    etapa_iniciada_em = obter_inicio_etapa_servico(
+        servico_dict,
+        etapa_atual,
+        incluir_entrada=True,
+    )
+    updates = {}
+
+    if etapa_iniciada_em:
+        campo_segundos_atual = _campo_segundos_etapa(etapa_atual)
+        base_atual = converter_inteiro(servico_dict.get(campo_segundos_atual), 0)
+        updates[campo_segundos_atual] = base_atual + max(
+            0,
+            int((instante - etapa_iniciada_em).total_seconds()),
+        )
+
+    if etapa_final:
+        etapa_final = normalizar_etapa_operacional(etapa_final, fallback=etapa_atual)
+        updates["etapa_atual"] = etapa_final
+        campo_inicio_final = _campo_inicio_primeiro_etapa(etapa_final)
+        if not normalizar_texto_campo(servico_dict.get(campo_inicio_final)):
+            updates[campo_inicio_final] = instante.isoformat(timespec="seconds")
+
+    updates["etapa_atual_iniciada_em"] = None
+
+    atualizar_campos_servico(cursor, servico_dict["id"], updates)
+    servico_dict.update(updates)
+    return servico_dict
 
 def interpretar_hora_brasilia(valor_hora, referencia=None):
     texto = normalizar_texto_campo(valor_hora)
@@ -8145,6 +8358,7 @@ def formatar_item_historico_servico(servico, checklist_itens=None, fotos_por_ser
     )
     s_dict["tem_cobrancas_extras"] = bool(s_dict["cobrancas_extras_info"]["itens"])
     enriquecer_responsaveis_servico(s_dict)
+    enriquecer_etapas_operacionais_servico(s_dict)
     return {
         "servico": s_dict,
         "tempo_str": tempo_str,
@@ -8196,6 +8410,12 @@ def listar_historico_servicos(placa=None, busca="", limite=None):
                 servicos.entrega_prevista,
                 servicos.entrega,
                 servicos.status,
+                servicos.etapa_atual,
+                servicos.etapa_atual_iniciada_em,
+                servicos.lavagem_iniciada_em,
+                servicos.finalizacao_iniciada_em,
+                servicos.lavagem_segundos,
+                servicos.finalizacao_segundos,
                 servicos.observacoes,
                 servicos.origem,
                 servicos.guarita,
@@ -14030,9 +14250,10 @@ def servico():
         (
             veiculo_id, tipo_id, valor, valor_adicional, entrada, entrega_prevista, status, prioridade,
             observacoes, origem, guarita, pneu, cera, hidro_lataria, hidro_vidros,
+            etapa_atual, etapa_atual_iniciada_em, lavagem_iniciada_em, lavagem_segundos, finalizacao_segundos,
             criado_por_usuario, criado_por_nome
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         veiculo_id,
         tipo_id,
@@ -14049,6 +14270,11 @@ def servico():
         normalizar_flag_sim_nao(data.get("cera")),
         normalizar_flag_sim_nao(data.get("hidro_lataria")),
         normalizar_flag_sim_nao(data.get("hidro_vidros")),
+        "LAVAGEM",
+        agora,
+        agora,
+        0,
+        0,
         normalizar_texto_campo(usuario_info.get("usuario")),
         normalizar_texto_campo(usuario_info.get("nome")),
     ))
@@ -14104,7 +14330,15 @@ def salvar_operacional_painel(id):
     c = conn.cursor()
 
     c.execute("""
-        SELECT servicos.id, veiculos.placa
+        SELECT
+            servicos.id,
+            servicos.etapa_atual,
+            servicos.etapa_atual_iniciada_em,
+            servicos.lavagem_iniciada_em,
+            servicos.finalizacao_iniciada_em,
+            servicos.lavagem_segundos,
+            servicos.finalizacao_segundos,
+            veiculos.placa
         FROM servicos
         LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
         WHERE servicos.id=?
@@ -14126,6 +14360,7 @@ def salvar_operacional_painel(id):
     placa = servico_db["placa"] or "-"
 
     if acao == "finalizar":
+        servico_db = registrar_transicao_etapa_servico(c, servico_db, "FINALIZACAO")
         conn.commit()
         conn.close()
         registrar_auditoria(
@@ -14176,6 +14411,81 @@ def salvar_operacional_painel(id):
     )
 
     definir_feedback_painel("sucesso", mensagem)
+    return redirect("/painel")
+
+
+@app.route("/painel/servico/<int:id>/etapa", methods=["POST"])
+def trocar_etapa_servico_painel(id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    usuario_info = resumo_usuario_logado()
+    etapa_destino = request.form.get("etapa_destino")
+    conn = conectar()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT
+            servicos.id,
+            servicos.status,
+            servicos.etapa_atual,
+            servicos.etapa_atual_iniciada_em,
+            servicos.lavagem_iniciada_em,
+            servicos.finalizacao_iniciada_em,
+            servicos.lavagem_segundos,
+            servicos.finalizacao_segundos,
+            veiculos.placa
+        FROM servicos
+        LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
+        WHERE servicos.id=?
+        """,
+        (id,),
+    )
+    servico = c.fetchone()
+
+    if not servico:
+        conn.close()
+        definir_feedback_painel("erro", "Atendimento nao encontrado.")
+        return redirect("/painel")
+
+    if normalizar_texto_campo(servico["status"]).upper() == "FINALIZADO":
+        conn.close()
+        definir_feedback_painel("erro", "Nao e possivel trocar a etapa de um atendimento finalizado.")
+        return redirect("/painel")
+
+    servico_atualizado = registrar_transicao_etapa_servico(c, servico, etapa_destino)
+    c.execute(
+        """
+        UPDATE servicos
+        SET operacional_por_usuario=?, operacional_por_nome=?
+        WHERE id=?
+        """,
+        (
+            normalizar_texto_campo(usuario_info.get("usuario")),
+            normalizar_texto_campo(usuario_info.get("nome")),
+            id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    servico_atualizado = enriquecer_etapas_operacionais_servico(dict(servico_atualizado or {}))
+    registrar_auditoria(
+        "alterou_etapa_operacional",
+        "servico",
+        entidade_id=id,
+        placa=servico.get("placa"),
+        detalhes={
+            "etapa_destino": servico_atualizado.get("etapa_atual_normalizada"),
+            "lavagem_segundos": servico_atualizado.get("lavagem_segundos_total"),
+            "finalizacao_segundos": servico_atualizado.get("finalizacao_segundos_total"),
+        },
+        usuario=usuario_info,
+    )
+    definir_feedback_painel(
+        "sucesso",
+        f"Placa {servico.get('placa') or '-'} movida para a etapa de {servico_atualizado.get('etapa_atual_exibicao', 'Lavagem')}.",
+    )
     return redirect("/painel")
 
 @app.route("/painel/servico/<int:id>/cobranca-extra", methods=["POST"])
@@ -14281,6 +14591,7 @@ def checklist_servico(id):
     servico["valor_exibicao"] = formatar_valor_monetario(servico.get("valor"))
     enriquecer_responsaveis_servico(servico)
     enriquecer_entrega_servico(servico)
+    enriquecer_etapas_operacionais_servico(servico)
     servico["cobrancas_extras_info"] = listar_cobrancas_extras_servico(id)
     entrada = interpretar_datahora_sistema(servico.get("entrada"))
     servico["entrada_exibicao"] = (
@@ -14334,6 +14645,7 @@ def checklist_servico(id):
                 """, (id, item["id"], item["nome"]))
 
             fotos_saida_salvas = salvar_fotos_servico(c, id, fotos_saida, "saida")
+            servico = consolidar_tempo_etapa_atual_servico(c, servico, etapa_final="FINALIZACAO")
             c.execute("""
                 UPDATE servicos
                 SET status='FINALIZADO',
@@ -14875,6 +15187,7 @@ def painel():
         s_dict["tem_cobrancas_extras"] = bool(s_dict["cobrancas_extras_info"]["itens"])
         enriquecer_responsaveis_servico(s_dict)
         enriquecer_entrega_servico(s_dict)
+        enriquecer_etapas_operacionais_servico(s_dict)
 
         servicos.append(s_dict)
 
@@ -14956,6 +15269,19 @@ def editar_atendimento_historico(id):
 
             conn = conectar()
             c = conn.cursor()
+            if status == "FINALIZADO":
+                servico = consolidar_tempo_etapa_atual_servico(c, servico, etapa_final="FINALIZACAO")
+            elif normalizar_texto_campo(servico.get("status")).upper() == "FINALIZADO":
+                instante_retomada = agora_iso()
+                atualizar_campos_servico(
+                    c,
+                    id,
+                    {
+                        "etapa_atual": "FINALIZACAO",
+                        "etapa_atual_iniciada_em": instante_retomada,
+                        "finalizacao_iniciada_em": servico.get("finalizacao_iniciada_em") or instante_retomada,
+                    },
+                )
             c.execute(
                 """
                 UPDATE servicos
@@ -15019,6 +15345,7 @@ def editar_atendimento_historico(id):
     servico["galeria_fotos"] = listar_fotos_servicos([id]).get(id, {})
     enriquecer_entrega_servico(servico)
     enriquecer_responsaveis_servico(servico)
+    enriquecer_etapas_operacionais_servico(servico)
 
     return render_template(
         "editar_atendimento.html",
@@ -15091,11 +15418,14 @@ def reabrir_atendimento_historico(id):
         SET status='EM ANDAMENTO',
             entrega=NULL,
             prioridade=?,
+            etapa_atual='FINALIZACAO',
+            etapa_atual_iniciada_em=?,
+            finalizacao_iniciada_em=COALESCE(finalizacao_iniciada_em, ?),
             finalizado_por_usuario=NULL,
             finalizado_por_nome=NULL
         WHERE id=?
         """,
-        (maior_prioridade + 1, id),
+        (maior_prioridade + 1, agora_iso(), agora_iso(), id),
     )
     recalcular_resumo_veiculo_por_servicos(c, servico["veiculo_id"])
     conn.commit()

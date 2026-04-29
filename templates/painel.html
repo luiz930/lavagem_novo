@@ -39,6 +39,10 @@
     data-servico="{{ s.tipo_nome }}"
     data-base-minutos="{{ s.tempo_espera_minutos }}"
     data-entrega-prevista="{{ s.entrega_prevista_iso or '' }}"
+    data-etapa-atual="{{ s.etapa_atual_normalizada }}"
+    data-etapa-iniciada-em="{{ s.etapa_atual_iniciada_em_iso or '' }}"
+    data-lavagem-base-segundos="{{ s.lavagem_segundos_base }}"
+    data-finalizacao-base-segundos="{{ s.finalizacao_segundos_base }}"
 >
 
     <p class="pill-label">Fila {{ loop.index }}</p>
@@ -55,6 +59,16 @@
     {% endif %}
     <p><b>Tempo em espera:</b> <span class="js-tempo-espera">{{ s.tempo_espera }}</span></p>
     <p><b>Prioridade IA:</b> {{ s.prioridade_ia }}</p>
+
+    <div class="page-card page-card--soft top-spacing">
+        <p><b>Etapa atual:</b> <span class="pill-label">{{ s.etapa_atual_exibicao }}</span></p>
+        <p><b>Tempo de lavagem:</b> <span class="js-cronometro-lavagem">{{ s.lavagem_tempo_exibicao }}</span></p>
+        <p><b>Tempo de finalizacao:</b> <span class="js-cronometro-finalizacao">{{ s.finalizacao_tempo_exibicao }}</span></p>
+        <form action="/painel/servico/{{ s.id }}/etapa" method="POST" class="top-spacing">
+            <input type="hidden" name="etapa_destino" value="{{ s.proxima_etapa }}">
+            <button type="submit">{{ s.botao_trocar_etapa }}</button>
+        </form>
+    </div>
 
     {% if s.cliente_telefone %}
     <p class="muted-text">Contato: {{ s.cliente_telefone }}</p>
@@ -194,5 +208,65 @@
     <p class="muted-text">Nenhum atendimento em andamento no momento.</p>
 </div>
 {% endif %}
+
+<script>
+(function () {
+    const cards = Array.from(document.querySelectorAll(".js-servico-card"));
+    if (!cards.length) return;
+
+    function parseSeconds(value) {
+        const parsed = Number.parseInt(value || "0", 10);
+        return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    }
+
+    function formatDuration(totalSeconds) {
+        let total = Math.max(0, Math.floor(totalSeconds));
+        const dias = Math.floor(total / 86400);
+        total -= dias * 86400;
+        const horas = Math.floor(total / 3600);
+        total -= horas * 3600;
+        const minutos = Math.floor(total / 60);
+        const segundos = total - minutos * 60;
+        const partes = [];
+
+        if (dias) partes.push(`${dias}d`);
+        if (horas) partes.push(`${horas}h`);
+        if (minutos) partes.push(`${minutos}min`);
+        if (!partes.length) partes.push(`${segundos}s`);
+
+        return partes.slice(0, 3).join(" ");
+    }
+
+    function updateStageTimers() {
+        const now = Date.now();
+
+        cards.forEach((card) => {
+            const etapaAtual = (card.dataset.etapaAtual || "LAVAGEM").toUpperCase();
+            const etapaIniciadaEm = card.dataset.etapaIniciadaEm || "";
+            const lavagemBase = parseSeconds(card.dataset.lavagemBaseSegundos);
+            const finalizacaoBase = parseSeconds(card.dataset.finalizacaoBaseSegundos);
+            let extraSegundos = 0;
+
+            if (etapaIniciadaEm) {
+                const etapaInicioMs = Date.parse(etapaIniciadaEm);
+                if (Number.isFinite(etapaInicioMs)) {
+                    extraSegundos = Math.max(0, Math.floor((now - etapaInicioMs) / 1000));
+                }
+            }
+
+            const lavagemAtual = lavagemBase + (etapaAtual === "LAVAGEM" ? extraSegundos : 0);
+            const finalizacaoAtual = finalizacaoBase + (etapaAtual === "FINALIZACAO" ? extraSegundos : 0);
+            const lavagemEl = card.querySelector(".js-cronometro-lavagem");
+            const finalizacaoEl = card.querySelector(".js-cronometro-finalizacao");
+
+            if (lavagemEl) lavagemEl.textContent = formatDuration(lavagemAtual);
+            if (finalizacaoEl) finalizacaoEl.textContent = formatDuration(finalizacaoAtual);
+        });
+    }
+
+    updateStageTimers();
+    window.setInterval(updateStageTimers, 1000);
+})();
+</script>
 
 {% endblock %}

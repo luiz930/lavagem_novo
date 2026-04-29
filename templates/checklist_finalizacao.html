@@ -25,6 +25,9 @@
     <p><b>Veiculo:</b> {{ servico.placa }}{% if servico.modelo %} - {{ servico.modelo }}{% endif %}{% if servico.cor %} / {{ servico.cor }}{% endif %}</p>
     <p><b>Entrada:</b> {{ servico.entrada_exibicao }}</p>
     <p><b>Valor:</b> R$ {{ servico.valor_exibicao }}</p>
+    <p><b>Etapa atual:</b> {{ servico.etapa_atual_exibicao }}</p>
+    <p><b>Tempo de lavagem:</b> {{ servico.lavagem_tempo_exibicao }}</p>
+    <p><b>Tempo de finalizacao:</b> {{ servico.finalizacao_tempo_exibicao }}</p>
     {% if servico.tem_valor_adicional %}
     <p><b>Valor adicional:</b> R$ {{ servico.valor_adicional_exibicao }}</p>
     {% endif %}
