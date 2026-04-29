@@ -10822,10 +10822,26 @@ def api_clima():
 
         dados = None
         for url in urls:
-            resposta = sessao_http.get(url, timeout=timeout_segundos, headers=headers)
-            if resposta.status_code == 200:
+            try:
+                resposta = sessao_http.get(url, timeout=timeout_segundos, headers=headers)
+            except Exception:
+                continue
+
+            if resposta.status_code != 200:
+                continue
+
+            corpo = (resposta.text or "").strip()
+            if not corpo:
+                continue
+
+            try:
                 dados = resposta.json()
+            except Exception:
+                continue
+
+            if isinstance(dados, dict) and not dados.get("error"):
                 break
+            dados = None
 
         if not dados:
             if cache:
@@ -10833,6 +10849,17 @@ def api_clima():
             return fallback
 
         cw = dados.get("current") or dados.get("current_weather") or {}
+
+        if not cw and isinstance(dados.get("hourly"), dict):
+            hourly = dados.get("hourly") or {}
+            temperaturas = hourly.get("temperature_2m") or []
+            codigos = hourly.get("weather_code") or hourly.get("weathercode") or []
+            if temperaturas:
+                cw = {
+                    "temperature_2m": temperaturas[0],
+                }
+                if codigos:
+                    cw["weather_code"] = codigos[0]
 
         if not cw:
             if cache:
@@ -10851,7 +10878,11 @@ def api_clima():
         )
 
         # Logica simplificada para recomendacao de lavagem.
-        if codigo >= 61:
+        if codigo is None:
+            icone = "⛅"
+            clima = "Clima carregado"
+            sugestao = "💡 Consulte a previsao completa."
+        elif codigo >= 61:
             icone = "🌧️"
             clima = "Chuva"
             sugestao = "💡 Lavagem interna"
