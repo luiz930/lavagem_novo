@@ -24,7 +24,7 @@
         <button type="button" id="vozToggleButton">Avisos por voz: ativados</button>
         <button type="button" id="vozTesteButton">Testar voz</button>
     </div>
-    <p class="muted-text top-spacing" id="vozStatusTexto">A cada 10 minutos, o sistema avisa em portugues do Brasil quais veiculos continuam em atendimento e ha quantos minutos estao na operacao.</p>
+    <p class="muted-text top-spacing" id="vozStatusTexto">A cada 10 minutos, o sistema avisa em portugues do Brasil quais veiculos continuam em atendimento. Veiculos com entrega agendada avisam somente quando faltarem 30 minutos.</p>
 </div>
 
 {% if servicos %}
@@ -91,6 +91,10 @@
         <a href="/prioridade/{{ s.id }}/down" class="button-link">
             <button type="button">Descer</button>
         </a>
+
+        <a href="/historico/servico/{{ s.id }}/editar?redirect_to=/painel" class="button-link">
+            <button type="button">Gerenciar atendimento</button>
+        </a>
     </div>
 
     <form action="/painel/servico/{{ s.id }}/operacional" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide top-spacing">
@@ -128,6 +132,11 @@
         <textarea name="observacoes" placeholder="Observacoes operacionais">{{ s.observacoes }}</textarea>
 
         <div class="field-grid">
+            <div>
+                <label>Fotos de entrada</label>
+                <input type="file" name="foto_entrada" multiple accept="image/*">
+                <p class="muted-text">Use este campo para reenviar ou complementar as fotos de entrada mesmo depois de o atendimento ja estar aberto.</p>
+            </div>
             <div>
                 <label>Fotos de detalhe</label>
                 <input type="file" name="foto_detalhe" multiple accept="image/*">

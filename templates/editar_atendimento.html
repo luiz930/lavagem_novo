@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block title %}Editar Atendimento{% endblock %}
+{% block titulo %}Editar Atendimento{% endblock %}
+{% block subtitulo %}Ajuste dados, fotos e status do atendimento com autonomia{% endblock %}
+
+{% block actions %}
+<a href="{{ redirect_to or '/historico' }}" class="button-link">
+    <button type="button">Voltar</button>
+</a>
+{% endblock %}
+
+{% block content %}
+
+{% if feedback %}
+<div class="page-card {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
+</div>
+{% endif %}
+
+<div class="page-grid">
+    <div class="page-card">
+        <p class="pill-label">{{ servico.status }}</p>
+        <h2 class="section-title top-spacing">{{ servico.placa or "-" }}</h2>
+        <p><b>Cliente:</b> {{ servico.cliente_nome or "Nao informado" }}</p>
+        <p><b>Veiculo:</b> {{ servico.modelo or "Nao informado" }}{% if servico.cor %} / {{ servico.cor }}{% endif %}</p>
+        <p><b>Entrada por:</b> {{ servico.criado_por_nome_exibicao }}</p>
+        <p><b>Finalizado por:</b> {{ servico.finalizado_por_nome_exibicao }}</p>
+        {% if servico.entrega_prevista_exibicao %}
+        <p><b>Entrega combinada:</b> {{ servico.entrega_prevista_exibicao }}</p>
+        {% endif %}
+
+        <div class="actions-row actions-row--left top-spacing">
+            {% if servico.status == "FINALIZADO" %}
+            <form action="/historico/servico/{{ servico.id }}/reabrir" method="POST" onsubmit="return confirm('Voltar este atendimento para EM ANDAMENTO?');">
+                <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
+                <button type="submit">Reabrir atendimento</button>
+            </form>
+            {% endif %}
+            <form action="/historico/servico/{{ servico.id }}/excluir" method="POST" onsubmit="return confirm('Excluir este atendimento e tudo o que foi salvo nele?');">
+                <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
+                <button type="submit" class="button-danger">Excluir atendimento</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="page-card">
+        <h2 class="section-title">Atualizar atendimento</h2>
+        <form action="/historico/servico/{{ servico.id }}/editar" method="POST" class="stack-form stack-form--wide top-spacing">
+            <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
+
+            <div class="field-grid">
+                <select name="tipo_id" required>
+                    {% for tipo in tipos_servico %}
+                    <option value="{{ tipo.id }}" {% if tipo.id == servico.tipo_id %}selected{% endif %}>{{ tipo.nome }}</option>
+                    {% endfor %}
+                </select>
+                <select name="status" required>
+                    <option value="EM ANDAMENTO" {% if servico.status == "EM ANDAMENTO" %}selected{% endif %}>EM ANDAMENTO</option>
+                    <option value="FINALIZADO" {% if servico.status == "FINALIZADO" %}selected{% endif %}>FINALIZADO</option>
+                </select>
+            </div>
+
+            <div class="field-grid">
+                <input name="valor" type="number" min="0" step="0.01" value="{{ servico.valor }}" placeholder="Valor">
+                <input name="valor_adicional" type="number" min="0" step="0.01" value="{{ servico.valor_adicional_num }}" placeholder="Valor adicional">
+            </div>
+
+            <div class="field-grid">
+                <input name="entrada" type="datetime-local" value="{{ servico.entrada_input }}" required>
+                <input name="entrega_prevista" type="datetime-local" value="{{ servico.entrega_prevista_input }}">
+                <input name="entrega" type="datetime-local" value="{{ servico.entrega_input }}">
+            </div>
+
+            <div class="field-grid">
+                <input name="origem" value="{{ servico.origem }}" placeholder="Origem">
+                <input name="guarita" value="{{ servico.guarita }}" placeholder="Guarita">
+            </div>
+
+            <div class="field-grid">
+                <select name="pneu">
+                    <option value="">Nenhum produto de pneu</option>
+                    {% for produto in produtos_pneu %}
+                    <option value="{{ produto }}" {% if servico.pneu == produto %}selected{% endif %}>{{ produto }}</option>
+                    {% endfor %}
+                </select>
+                <select name="cera">
+                    <option value="Nao" {% if servico.cera != "Sim" %}selected{% endif %}>Cera: Nao</option>
+                    <option value="Sim" {% if servico.cera == "Sim" %}selected{% endif %}>Cera: Sim</option>
+                </select>
+            </div>
+
+            <div class="field-grid">
+                <select name="hidro_lataria">
+                    <option value="Nao" {% if servico.hidro_lataria != "Sim" %}selected{% endif %}>Hidro lataria: Nao</option>
+                    <option value="Sim" {% if servico.hidro_lataria == "Sim" %}selected{% endif %}>Hidro lataria: Sim</option>
+                </select>
+                <select name="hidro_vidros">
+                    <option value="Nao" {% if servico.hidro_vidros != "Sim" %}selected{% endif %}>Hidro vidros: Nao</option>
+                    <option value="Sim" {% if servico.hidro_vidros == "Sim" %}selected{% endif %}>Hidro vidros: Sim</option>
+                </select>
+            </div>
+
+            <textarea name="observacoes" placeholder="Observacoes">{{ servico.observacoes }}</textarea>
+
+            <div class="actions-row actions-row--left">
+                <button type="submit">Salvar atendimento</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="page-grid top-spacing">
+    {% for tipo, titulo in [('entrada', 'Fotos de entrada'), ('detalhe', 'Fotos de detalhe'), ('saida', 'Fotos de finalizacao')] %}
+    {% set fotos = servico.galeria_fotos.get(tipo, []) %}
+    <div class="page-card">
+        <h2 class="section-title">{{ titulo }}</h2>
+        <form action="/historico/servico/{{ servico.id }}/fotos" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide top-spacing">
+            <input type="hidden" name="redirect_to" value="/historico/servico/{{ servico.id }}/editar?redirect_to={{ redirect_to }}">
+            <input type="hidden" name="tipo_foto" value="{{ tipo }}">
+            <input type="file" name="fotos" multiple accept="image/*" required>
+            <div class="actions-row actions-row--left">
+                <button type="submit">Enviar {{ titulo|lower }}</button>
+            </div>
+        </form>
+
+        {% if fotos %}
+        <div class="photo-gallery top-spacing">
+            <div class="photo-gallery-group">
+                <p class="photo-gallery-label">{{ fotos|length }} arquivo(s)</p>
+                <div class="photo-gallery-track">
+                    {% for foto in fotos %}
+                    <a href="{{ foto.url }}" target="_blank" rel="noopener" class="photo-thumb-link" title="{{ foto.usuario_nome_exibicao }}">
+                        <img src="{{ foto.url }}" alt="{{ titulo }} {{ loop.index }}" class="photo-thumb-image">
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <p class="muted-text top-spacing">Nenhuma foto salva neste grupo ainda.</p>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+{% endblock %}

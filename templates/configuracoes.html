@@ -91,6 +91,83 @@
 {% endif %}
 
 {% if desenvolvedor_logado %}
+<div class="page-card top-spacing">
+    <p class="pill-label">Clima do HUD</p>
+    <h2 class="section-title top-spacing">API e localizacao</h2>
+    <p class="muted-text">Configure a consulta do clima sem alterar o codigo. O HUD e a recomendacao de lavagem passam a ler esses dados direto do banco.</p>
+
+    <form action="/configuracoes/clima" method="POST" class="stack-form stack-form--wide top-spacing">
+        <label class="inline-toggle">
+            <input
+                type="checkbox"
+                name="clima_ativo"
+                value="1"
+                {% if configuracao_empresa.clima_ativo %}checked{% endif %}
+            >
+            Ativar clima na tela inicial
+        </label>
+
+        <div class="field-grid top-spacing">
+            <input
+                name="clima_local_label"
+                type="text"
+                value="{{ configuracao_empresa.clima_local_label }}"
+                placeholder="Ex.: Cachoeirinha / RS"
+                autocomplete="off"
+            >
+            <input
+                name="clima_timezone"
+                type="text"
+                value="{{ configuracao_empresa.clima_timezone }}"
+                placeholder="Timezone"
+                autocomplete="off"
+            >
+            <input
+                name="clima_latitude"
+                type="text"
+                value="{{ configuracao_empresa.clima_latitude }}"
+                placeholder="Latitude"
+                autocomplete="off"
+                required
+            >
+            <input
+                name="clima_longitude"
+                type="text"
+                value="{{ configuracao_empresa.clima_longitude }}"
+                placeholder="Longitude"
+                autocomplete="off"
+                required
+            >
+            <input
+                name="clima_timeout_segundos"
+                type="number"
+                min="3"
+                max="20"
+                step="1"
+                value="{{ configuracao_empresa.clima_timeout_segundos }}"
+                placeholder="Timeout"
+                required
+            >
+        </div>
+
+        <input
+            name="clima_api_url"
+            type="text"
+            value="{{ configuracao_empresa.clima_api_url }}"
+            placeholder="URL da API do clima"
+            autocomplete="off"
+        >
+
+        <p class="muted-text">Se mantiver a URL padrao, o sistema usa o Open-Meteo. Se colar uma URL completa, ela sera consultada diretamente. Voce pode usar os placeholders <code>{latitude}</code>, <code>{longitude}</code> e <code>{timezone}</code>.</p>
+
+        <div class="actions-row actions-row--left">
+            <button type="submit">Salvar clima</button>
+        </div>
+    </form>
+</div>
+{% endif %}
+
+{% if desenvolvedor_logado %}
 <div class="page-grid top-spacing">
     <div class="page-card">
         <p class="pill-label">Banco online</p>

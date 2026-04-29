@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Historico{% endblock %}
+{% block titulo %}Historico de Atendimentos{% endblock %}
+{% block subtitulo %}Edite, reabra, exclua e confira o que foi feito em cada veiculo{% endblock %}
+
+{% block actions %}
+<a href="/" class="button-link">
+    <button type="button">Voltar</button>
+</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="page-card">
+    <form method="POST" class="inline-form">
+        <input name="busca" placeholder="Buscar por placa, cliente, modelo ou servico" value="{{ busca }}">
+        <button>Buscar historico</button>
+    </form>
+</div>
+
+{% if feedback %}
+<div class="page-card top-spacing {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
+</div>
+{% endif %}
+
+<div class="list-grid top-spacing">
+    {% for item in historico %}
+    {% set s = item.servico %}
+    <div class="page-card">
+        <div class="actions-row actions-row--left">
+            <span class="pill-label">{{ s.status }}</span>
+            <span class="pill-label">{{ s.placa or "-" }}</span>
+            {% if s.entrega_prevista_exibicao %}
+            <span class="pill-label">{{ s.entrega_prevista_exibicao }}</span>
+            {% endif %}
+        </div>
+
+        <h2 class="section-title top-spacing">{{ s.tipo_nome or "Servico" }}</h2>
+        <p><b>Cliente:</b> {{ s.cliente_nome or "Nao informado" }}</p>
+        <p><b>Veiculo:</b> {{ s.placa or "-" }}{% if s.modelo %} - {{ s.modelo }}{% endif %}{% if s.cor %} / {{ s.cor }}{% endif %}</p>
+        <p><b>Valor:</b> R$ {{ s.valor_exibicao }}{% if s.tem_valor_adicional %} <span class="muted-text">(+ extra manual R$ {{ s.valor_adicional_exibicao }})</span>{% endif %}</p>
+        <p><b>Entrada:</b> {{ s.entrada_exibicao }}</p>
+        {% if s.entrega_exibicao %}
+        <p><b>Entrega:</b> {{ s.entrega_exibicao }}</p>
+        {% endif %}
+        <p><b>Tempo:</b> {{ item.tempo_str }}</p>
+        <p class="muted-text">Entrada por: {{ s.criado_por_nome_exibicao }}{% if s.finalizado_por_nome_exibicao != "Nao finalizado" %} | Finalizado por: {{ s.finalizado_por_nome_exibicao }}{% endif %}</p>
+
+        <div class="actions-row actions-row--left top-spacing">
+            <a href="/historico/servico/{{ s.id }}/editar?redirect_to=/historico" class="button-link">
+                <button type="button">Editar atendimento</button>
+            </a>
+            {% if s.status == "FINALIZADO" %}
+            <form action="/historico/servico/{{ s.id }}/reabrir" method="POST" onsubmit="return confirm('Voltar este atendimento para EM ANDAMENTO?');">
+                <input type="hidden" name="redirect_to" value="/historico">
+                <button type="submit">Reabrir</button>
+            </form>
+            {% endif %}
+            <form action="/historico/servico/{{ s.id }}/excluir" method="POST" onsubmit="return confirm('Excluir este atendimento e tudo o que foi salvo nele?');">
+                <input type="hidden" name="redirect_to" value="/historico">
+                <button type="submit" class="button-danger">Excluir</button>
+            </form>
+        </div>
+
+        <details class="top-spacing">
+            <summary>Ver mais detalhes</summary>
+            <div class="top-spacing">
+                <p><b>Origem:</b> {{ s.origem or "Nao informada" }}</p>
+                <p><b>Guarita:</b> {{ s.guarita or "Nao informada" }}</p>
+                <p><b>Pneu:</b> {{ s.pneu or "Nao aplicado" }}</p>
+                <p><b>Cera:</b> {{ "Sim" if s.cera == "Sim" else "Nao" }}</p>
+                <p><b>Hidro lataria:</b> {{ "Sim" if s.hidro_lataria == "Sim" else "Nao" }}</p>
+                <p><b>Hidro vidros:</b> {{ "Sim" if s.hidro_vidros == "Sim" else "Nao" }}</p>
+                <p><b>Checklist:</b> {{ s.checklist_resumo or "Sem checklist salvo" }}</p>
+                <p><b>Observacoes:</b> {{ s.observacoes or "Sem observacoes registradas" }}</p>
+                {% if s.tem_cobrancas_extras %}
+                <p><b>Total de extras:</b> R$ {{ s.cobrancas_extras_info.total_exibicao }}</p>
+                {% endif %}
+            </div>
+        </details>
+    </div>
+    {% else %}
+    <div class="page-card">
+        <p class="muted-text">Nenhum atendimento encontrado para os filtros atuais.</p>
+    </div>
+    {% endfor %}
+</div>
+
+{% endblock %}

@@ -201,7 +201,14 @@
                 {% if c.cor %} | Cor: {{ c.cor }}{% endif %}
             </p>
 
-            <details class="top-spacing">
+            <div class="actions-row actions-row--left top-spacing">
+                <button type="button" onclick="document.getElementById('editar-cliente-{{ loop.index }}').open = !document.getElementById('editar-cliente-{{ loop.index }}').open;">Editar cliente</button>
+                <a href="/?placa={{ c.placa }}" class="button-link">
+                    <button type="button">Abrir placa</button>
+                </a>
+            </div>
+
+            <details class="top-spacing" id="editar-cliente-{{ loop.index }}">
                 <summary>Editar cliente</summary>
 
                 <form action="/editar_cliente" method="POST" class="stack-form stack-form--wide top-spacing">

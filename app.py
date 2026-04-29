@@ -4127,6 +4127,13 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "veiculos", "ultima_entrada TEXT")
     adicionar_coluna_se_preciso(c, "veiculos", "ultima_entrega TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_empresa", "versao_sistema TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_ativo INTEGER DEFAULT 1")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_api_url TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_local_label TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_latitude REAL")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_longitude REAL")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_timezone TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "clima_timeout_segundos INTEGER DEFAULT 8")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "frequencia TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "tipo_backup TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "retencao_arquivos INTEGER")
@@ -4366,6 +4373,13 @@ def atualizar_banco():
         codigo_servico_padrao TEXT,
         aliquota_padrao REAL DEFAULT 0,
         versao_sistema TEXT,
+        clima_ativo INTEGER DEFAULT 1,
+        clima_api_url TEXT,
+        clima_local_label TEXT,
+        clima_latitude REAL,
+        clima_longitude REAL,
+        clima_timezone TEXT,
+        clima_timeout_segundos INTEGER DEFAULT 8,
         atualizado_em TEXT
     )
     """)
@@ -4796,6 +4810,13 @@ def criar_todas_tabelas():
         codigo_servico_padrao TEXT,
         aliquota_padrao REAL DEFAULT 0,
         versao_sistema TEXT,
+        clima_ativo INTEGER DEFAULT 1,
+        clima_api_url TEXT,
+        clima_local_label TEXT,
+        clima_latitude REAL,
+        clima_longitude REAL,
+        clima_timezone TEXT,
+        clima_timeout_segundos INTEGER DEFAULT 8,
         atualizado_em TEXT
     )
     """)
@@ -4935,28 +4956,56 @@ def criar_todas_tabelas():
         ultimo_resultado_json TEXT
     )
     """)
-    c.execute("CREATE INDEX IF NOT EXISTS idx_servico_status ON servicos(status)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_servico_entrada ON servicos(entrada)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_veiculo_placa ON veiculos(placa)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_servico_checklist_servico ON servico_checklist(servico_id)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_servico_cobrancas_extras_servico ON servico_cobrancas_extras(servico_id)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_fotos_servico_tipo ON fotos(servico_id, tipo)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_auditoria_entidade ON auditoria(entidade, entidade_id)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_auditoria_criado_em ON auditoria(criado_em)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_historico_sync_placa ON historico_lavagens_sync(placa)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_historico_sync_data ON historico_lavagens_sync(data_lavagem)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_retornos_clientes_placa ON retornos_clientes(placa)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_retornos_clientes_status ON retornos_clientes(status, proximo_contato_em)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_orcamentos_numero ON orcamentos(numero)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_orcamentos_criado_em ON orcamentos(criado_em)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_orcamento_itens_orcamento ON orcamento_itens(orcamento_id)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_notas_fiscais_rps ON notas_fiscais(rps_numero)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_notas_fiscais_criado_em ON notas_fiscais(criado_em)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_nota_fiscal_itens_nota ON nota_fiscal_itens(nota_fiscal_id)")
-    c.execute("""
+
+    # Salva as tabelas antes dos indices para que um timeout no Postgres
+    # nao reverta toda a inicializacao do schema.
+    conn.commit()
+
+    def criar_indice_seguro(sql_indice):
+        try:
+            if getattr(conn, "backend", "") == "postgres":
+                try:
+                    c.execute("SET statement_timeout TO 0")
+                except Exception:
+                    pass
+            c.execute(sql_indice)
+            conn.commit()
+            return True
+        except Exception as e:
+            mensagem = str(e or "").lower()
+            if "statement timeout" in mensagem or "querycanceled" in mensagem:
+                print(f"AVISO INDICE: {sql_indice} pulado por timeout do banco online.")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return False
+            raise
+
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_servico_status ON servicos(status)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_servico_entrada ON servicos(entrada)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_veiculo_placa ON veiculos(placa)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_servico_checklist_servico ON servico_checklist(servico_id)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_servico_cobrancas_extras_servico ON servico_cobrancas_extras(servico_id)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_fotos_servico_tipo ON fotos(servico_id, tipo)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_auditoria_entidade ON auditoria(entidade, entidade_id)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_auditoria_criado_em ON auditoria(criado_em)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_historico_sync_placa ON historico_lavagens_sync(placa)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_historico_sync_data ON historico_lavagens_sync(data_lavagem)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_retornos_clientes_placa ON retornos_clientes(placa)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_retornos_clientes_status ON retornos_clientes(status, proximo_contato_em)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_orcamentos_numero ON orcamentos(numero)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_orcamentos_criado_em ON orcamentos(criado_em)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_orcamento_itens_orcamento ON orcamento_itens(orcamento_id)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_notas_fiscais_rps ON notas_fiscais(rps_numero)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_notas_fiscais_criado_em ON notas_fiscais(criado_em)")
+    criar_indice_seguro("CREATE INDEX IF NOT EXISTS idx_nota_fiscal_itens_nota ON nota_fiscal_itens(nota_fiscal_id)")
+    criar_indice_seguro(
+        """
         CREATE INDEX IF NOT EXISTS idx_sync_clientes_proximo
         ON sincronizacoes_clientes(ativo, proximo_sync_em)
-    """)
+        """
+    )
 
     garantir_atualizado_em_sync(c)
 
@@ -4993,8 +5042,24 @@ def definir_feedback_index(tipo, mensagem):
 def definir_feedback_painel(tipo, mensagem):
     session["painel_feedback"] = {"tipo": tipo, "mensagem": mensagem}
 
+def definir_feedback_historico(tipo, mensagem):
+    session["historico_feedback"] = {"tipo": tipo, "mensagem": mensagem}
+
 def definir_feedback_itens(tipo, mensagem):
     session["itens_feedback"] = {"tipo": tipo, "mensagem": mensagem}
+
+def definir_feedback_por_destino(destino, tipo, mensagem):
+    destino = normalizar_texto_campo(destino)
+    if destino.startswith("/painel"):
+        definir_feedback_painel(tipo, mensagem)
+        return
+    if destino.startswith("/clientes"):
+        definir_feedback_clientes(tipo, mensagem)
+        return
+    if destino.startswith("/?") or destino == "/":
+        definir_feedback_index(tipo, mensagem)
+        return
+    definir_feedback_historico(tipo, mensagem)
 
 def definir_feedback_checklist(tipo, mensagem):
     session["checklist_feedback"] = {"tipo": tipo, "mensagem": mensagem}
@@ -5350,6 +5415,27 @@ def interpretar_datahora_sistema(valor):
 
     return None
 
+def normalizar_datahora_formulario(valor, obrigatoria=False):
+    texto = normalizar_texto_campo(valor)
+    if not texto:
+        if obrigatoria:
+            raise ValueError("Informe uma data e hora validas.")
+        return None
+
+    datahora = interpretar_datahora_sistema(texto)
+    if not datahora:
+        raise ValueError("Informe uma data e hora validas.")
+
+    if datahora.tzinfo is None:
+        datahora = datahora.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+    return datahora.isoformat(timespec="seconds")
+
+def formatar_datahora_input(valor):
+    datahora = interpretar_datahora_sistema(valor)
+    if not datahora:
+        return ""
+    return datahora.strftime("%Y-%m-%dT%H:%M")
+
 def formatar_valor_monetario(valor):
     numero = converter_valor_numerico(valor)
 
@@ -5475,6 +5561,13 @@ def empresa_snapshot_padrao():
         "codigo_servico_padrao": "",
         "aliquota_padrao": 0.0,
         "versao_sistema": VERSAO_SISTEMA_PADRAO,
+        "clima_ativo": 1,
+        "clima_api_url": "https://api.open-meteo.com/v1/forecast",
+        "clima_local_label": "Cachoeirinha / RS",
+        "clima_latitude": -29.68,
+        "clima_longitude": -51.13,
+        "clima_timezone": "America/Sao_Paulo",
+        "clima_timeout_segundos": 8,
     }
 
 def obter_configuracao_empresa():
@@ -5494,6 +5587,13 @@ def obter_configuracao_empresa():
     dados["cnpj_formatado"] = formatar_documento_fiscal(dados.get("cnpj"))
     dados["cep_formatado"] = formatar_cep(dados.get("cep"))
     dados["aliquota_padrao"] = converter_valor_numerico(dados.get("aliquota_padrao"))
+    dados["clima_ativo"] = bool(int(dados.get("clima_ativo") or 0))
+    dados["clima_api_url"] = normalizar_texto_campo(dados.get("clima_api_url")) or "https://api.open-meteo.com/v1/forecast"
+    dados["clima_local_label"] = normalizar_texto_campo(dados.get("clima_local_label")) or "Cachoeirinha / RS"
+    dados["clima_latitude"] = converter_valor_numerico(dados.get("clima_latitude"))
+    dados["clima_longitude"] = converter_valor_numerico(dados.get("clima_longitude"))
+    dados["clima_timezone"] = normalizar_texto_campo(dados.get("clima_timezone")) or "America/Sao_Paulo"
+    dados["clima_timeout_segundos"] = max(3, min(20, converter_inteiro(dados.get("clima_timeout_segundos"), 8)))
     return dados
 
 def salvar_configuracao_versao_form(form):
@@ -5519,6 +5619,66 @@ def salvar_configuracao_versao_form(form):
     conn.close()
 
     return versao
+
+def limpar_cache_clima():
+    CLIMA_CACHE["testado_em"] = 0.0
+    CLIMA_CACHE["resultado"] = None
+
+def salvar_configuracao_clima_form(form):
+    clima_ativo = 1 if form.get("clima_ativo") else 0
+    clima_api_url = normalizar_texto_campo(form.get("clima_api_url")) or "https://api.open-meteo.com/v1/forecast"
+    clima_local_label = normalizar_texto_campo(form.get("clima_local_label")) or "Cachoeirinha / RS"
+    clima_timezone = normalizar_texto_campo(form.get("clima_timezone")) or "America/Sao_Paulo"
+    clima_timeout_segundos = max(3, min(20, converter_inteiro(form.get("clima_timeout_segundos"), 8)))
+
+    try:
+        clima_latitude = float(str(form.get("clima_latitude") or "").replace(",", "."))
+        clima_longitude = float(str(form.get("clima_longitude") or "").replace(",", "."))
+    except Exception as e:
+        raise ValueError("Informe latitude e longitude validas para o clima.") from e
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO configuracao_empresa (
+            id, clima_ativo, clima_api_url, clima_local_label, clima_latitude,
+            clima_longitude, clima_timezone, clima_timeout_segundos, atualizado_em
+        )
+        VALUES (
+            1, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+        ON CONFLICT(id) DO UPDATE SET
+            clima_ativo=excluded.clima_ativo,
+            clima_api_url=excluded.clima_api_url,
+            clima_local_label=excluded.clima_local_label,
+            clima_latitude=excluded.clima_latitude,
+            clima_longitude=excluded.clima_longitude,
+            clima_timezone=excluded.clima_timezone,
+            clima_timeout_segundos=excluded.clima_timeout_segundos,
+            atualizado_em=excluded.atualizado_em
+    """, (
+        clima_ativo,
+        clima_api_url,
+        clima_local_label,
+        clima_latitude,
+        clima_longitude,
+        clima_timezone,
+        clima_timeout_segundos,
+        agora_iso(),
+    ))
+    conn.commit()
+    conn.close()
+    limpar_cache_clima()
+
+    return {
+        "clima_ativo": bool(clima_ativo),
+        "clima_api_url": clima_api_url,
+        "clima_local_label": clima_local_label,
+        "clima_latitude": clima_latitude,
+        "clima_longitude": clima_longitude,
+        "clima_timezone": clima_timezone,
+        "clima_timeout_segundos": clima_timeout_segundos,
+    }
 
 def salvar_configuracao_empresa_form(form):
     conn = conectar()
@@ -7193,6 +7353,218 @@ def buscar_servico_operacional(servico_id):
     servico = c.fetchone()
     conn.close()
     return dict(servico) if servico else None
+
+def recalcular_resumo_veiculo_por_servicos(c, veiculo_id):
+    if not veiculo_id:
+        return
+
+    c.execute(
+        """
+        SELECT id, placa, cliente_id
+        FROM veiculos
+        WHERE id=?
+        """,
+        (veiculo_id,),
+    )
+    veiculo = c.fetchone()
+
+    if not veiculo:
+        return
+
+    c.execute(
+        """
+        SELECT status, entrada, entrega
+        FROM servicos
+        WHERE veiculo_id=?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (veiculo_id,),
+    )
+    ultimo_servico = c.fetchone()
+
+    if ultimo_servico:
+        sincronizar_resumo_veiculo_cliente(
+            c,
+            veiculo_id,
+            placa=veiculo["placa"],
+            cliente_id=veiculo["cliente_id"],
+            status_atendimento=ultimo_servico["status"],
+            entrada=ultimo_servico["entrada"],
+            entrega=ultimo_servico["entrega"],
+        )
+        return
+
+    sincronizar_resumo_veiculo_cliente(
+        c,
+        veiculo_id,
+        placa=veiculo["placa"],
+        cliente_id=veiculo["cliente_id"],
+        status_atendimento="SEM_ATENDIMENTO",
+        entrada=None,
+        entrega=None,
+    )
+    c.execute(
+        """
+        UPDATE veiculos
+        SET atendimento_ativo=0, ultima_entrada=NULL, ultima_entrega=NULL
+        WHERE id=?
+        """,
+        (veiculo_id,),
+    )
+
+def formatar_item_historico_servico(servico, checklist_itens=None, fotos_por_servico=None, extras_por_servico=None):
+    s_dict = dict(servico)
+    entrada = interpretar_datahora_sistema(s_dict.get("entrada"))
+    entrega = interpretar_datahora_sistema(s_dict.get("entrega"))
+
+    try:
+        if entrada and entrega:
+            tempo_str = str(entrega - entrada)
+        elif normalizar_texto_campo(s_dict.get("status")).upper() == "EM ANDAMENTO":
+            tempo_str = "Em andamento"
+        else:
+            tempo_str = "Sem registro de entrega"
+    except Exception:
+        tempo_str = "N/A"
+
+    s_dict["entrada_exibicao"] = (
+        entrada.strftime("%d/%m/%Y %H:%M")
+        if entrada else (s_dict.get("entrada") or "-")
+    )
+    s_dict["entrega_exibicao"] = (
+        entrega.strftime("%d/%m/%Y %H:%M")
+        if entrega else ""
+    )
+    s_dict["valor_exibicao"] = formatar_valor_monetario(s_dict.get("valor"))
+    enriquecer_entrega_servico(s_dict)
+    s_dict["checklist_itens"] = list(checklist_itens or [])
+    s_dict["checklist_resumo"] = ", ".join(s_dict["checklist_itens"])
+    s_dict["galeria_fotos"] = (fotos_por_servico or {}).get(s_dict["id"], {})
+    s_dict["fotos_entrada"] = len(s_dict["galeria_fotos"].get("entrada", []))
+    s_dict["fotos_detalhe"] = len(s_dict["galeria_fotos"].get("detalhe", []))
+    s_dict["fotos_saida"] = len(s_dict["galeria_fotos"].get("saida", []))
+    s_dict["cobrancas_extras_info"] = (extras_por_servico or {}).get(
+        s_dict["id"],
+        {
+            "itens": [],
+            "total": 0.0,
+            "total_exibicao": "0.00",
+        },
+    )
+    s_dict["tem_cobrancas_extras"] = bool(s_dict["cobrancas_extras_info"]["itens"])
+    enriquecer_responsaveis_servico(s_dict)
+    return {
+        "servico": s_dict,
+        "tempo_str": tempo_str,
+    }
+
+def listar_historico_servicos(placa=None, busca="", limite=None):
+    conn = conectar()
+    c = conn.cursor()
+    filtros = []
+    params = []
+
+    placa = normalizar_texto_campo(placa).upper()
+    busca = normalizar_texto_campo(busca)
+
+    if placa:
+        filtros.append("UPPER(COALESCE(veiculos.placa, ''))=?")
+        params.append(placa)
+
+    if busca:
+        termo = f"%{busca}%"
+        filtros.append(
+            """
+            (
+                veiculos.placa LIKE ?
+                OR veiculos.modelo LIKE ?
+                OR veiculos.cor LIKE ?
+                OR clientes.nome LIKE ?
+                OR tipos_servico.nome LIKE ?
+            )
+            """
+        )
+        params.extend([termo, termo, termo, termo, termo])
+
+    where_sql = f"WHERE {' AND '.join(filtros)}" if filtros else ""
+    limit_sql = ""
+    if limite:
+        limit_sql = " LIMIT ?"
+        params.append(int(limite))
+
+    c.execute(
+        f"""
+            SELECT
+                servicos.id,
+                servicos.veiculo_id,
+                servicos.tipo_id,
+                servicos.valor,
+                servicos.valor_adicional,
+                servicos.entrada,
+                servicos.entrega_prevista,
+                servicos.entrega,
+                servicos.status,
+                servicos.observacoes,
+                servicos.origem,
+                servicos.guarita,
+                servicos.pneu,
+                servicos.cera,
+                servicos.hidro_lataria,
+                servicos.hidro_vidros,
+                servicos.criado_por_usuario,
+                servicos.criado_por_nome,
+                servicos.operacional_por_usuario,
+                servicos.operacional_por_nome,
+                servicos.finalizado_por_usuario,
+                servicos.finalizado_por_nome,
+                tipos_servico.nome AS tipo_nome,
+                veiculos.placa,
+                veiculos.modelo,
+                veiculos.cor,
+                clientes.nome AS cliente_nome,
+                clientes.telefone AS cliente_telefone
+            FROM servicos
+            LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
+            LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
+            LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
+            {where_sql}
+            ORDER BY servicos.id DESC
+            {limit_sql}
+        """,
+        params,
+    )
+    servicos_db = c.fetchall()
+
+    ids_servicos = [row["id"] for row in servicos_db]
+    checklist_por_servico = {}
+    if ids_servicos:
+        placeholders = ",".join(["?"] * len(ids_servicos))
+        c.execute(
+            f"""
+                SELECT servico_id, item_nome
+                FROM servico_checklist
+                WHERE servico_id IN ({placeholders})
+                ORDER BY id ASC
+            """,
+            ids_servicos,
+        )
+        for row in c.fetchall():
+            checklist_por_servico.setdefault(row["servico_id"], []).append(row["item_nome"])
+
+    conn.close()
+
+    fotos_por_servico = listar_fotos_servicos(ids_servicos)
+    extras_por_servico = listar_cobrancas_extras_servicos(ids_servicos)
+    return [
+        formatar_item_historico_servico(
+            row,
+            checklist_itens=checklist_por_servico.get(row["id"], []),
+            fotos_por_servico=fotos_por_servico,
+            extras_por_servico=extras_por_servico,
+        )
+        for row in servicos_db
+    ]
 
 def detectar_novas_colunas(colunas_atuais, colunas_antigas_str):
     if not colunas_antigas_str:
@@ -9752,12 +10124,21 @@ def registrar_emissao_nota_fiscal(id):
 
 @app.route("/api/clima")
 def api_clima():
+    configuracao = obter_configuracao_empresa()
     fallback = {
         "clima": "Clima indisponivel",
         "temp": "--",
         "icone": "⚠️",
         "sugestao": "💡 Consulte o radar do clima.",
     }
+    if not configuracao.get("clima_ativo"):
+        return {
+            "clima": "Clima desativado",
+            "temp": "--",
+            "icone": "⏸️",
+            "sugestao": "💡 Ative o clima nas configuracoes.",
+        }
+
     agora_ts = time.time()
     cache = CLIMA_CACHE.get("resultado")
     ultimo_teste = float(CLIMA_CACHE.get("testado_em") or 0.0)
@@ -9772,23 +10153,43 @@ def api_clima():
             "User-Agent": "WagenEstetica/1.0",
             "Accept": "application/json",
         }
-        urls = [
-            (
-                "https://api.open-meteo.com/v1/forecast"
-                "?latitude=-29.68&longitude=-51.13"
-                "&current=temperature_2m,weather_code"
-                "&timezone=America%2FSao_Paulo"
-            ),
-            (
-                "https://api.open-meteo.com/v1/forecast"
-                "?latitude=-29.68&longitude=-51.13"
-                "&current_weather=true"
-            ),
-        ]
+        clima_api_url = normalizar_texto_campo(configuracao.get("clima_api_url")) or "https://api.open-meteo.com/v1/forecast"
+        clima_latitude = configuracao.get("clima_latitude")
+        clima_longitude = configuracao.get("clima_longitude")
+        clima_timezone = quote(
+            normalizar_texto_campo(configuracao.get("clima_timezone")) or "America/Sao_Paulo",
+            safe="",
+        )
+        timeout_segundos = max(
+            3,
+            min(20, converter_inteiro(configuracao.get("clima_timeout_segundos"), 8)),
+        )
+        url_configurada = (
+            clima_api_url
+            .replace("{latitude}", str(clima_latitude))
+            .replace("{longitude}", str(clima_longitude))
+            .replace("{timezone}", clima_timezone)
+        )
+        if "?" in url_configurada:
+            urls = [url_configurada]
+        else:
+            urls = [
+                (
+                    f"{url_configurada}"
+                    f"?latitude={clima_latitude}&longitude={clima_longitude}"
+                    "&current=temperature_2m,weather_code"
+                    f"&timezone={clima_timezone}"
+                ),
+                (
+                    f"{url_configurada}"
+                    f"?latitude={clima_latitude}&longitude={clima_longitude}"
+                    "&current_weather=true"
+                ),
+            ]
 
         dados = None
         for url in urls:
-            resposta = sessao_http.get(url, timeout=8, headers=headers)
+            resposta = sessao_http.get(url, timeout=timeout_segundos, headers=headers)
             if resposta.status_code == 200:
                 dados = resposta.json()
                 break
@@ -10558,6 +10959,47 @@ def salvar_configuracao_versao():
     definir_feedback_configuracoes(
         "sucesso",
         f"Versao do sistema atualizada para {formatar_versao_sistema(versao)}.",
+    )
+    return redirect("/configuracoes")
+
+@app.route("/configuracoes/clima", methods=["POST"])
+def salvar_configuracao_clima():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem alterar o clima do sistema.")
+        return redirect("/configuracoes")
+
+    try:
+        clima = salvar_configuracao_clima_form(request.form)
+    except ValueError as e:
+        definir_feedback_configuracoes("erro", str(e))
+        return redirect("/configuracoes")
+    except Exception as e:
+        definir_feedback_configuracoes("erro", f"Nao foi possivel salvar a configuracao do clima: {e}")
+        return redirect("/configuracoes")
+
+    registrar_auditoria(
+        "atualizou_configuracao_clima",
+        "configuracao_empresa",
+        detalhes={
+            "clima_ativo": clima.get("clima_ativo"),
+            "clima_api_url": clima.get("clima_api_url"),
+            "clima_local_label": clima.get("clima_local_label"),
+            "clima_latitude": clima.get("clima_latitude"),
+            "clima_longitude": clima.get("clima_longitude"),
+            "clima_timezone": clima.get("clima_timezone"),
+            "clima_timeout_segundos": clima.get("clima_timeout_segundos"),
+        },
+    )
+    definir_feedback_configuracoes(
+        "sucesso",
+        (
+            f"Configuracao do clima salva para {clima.get('clima_local_label')}. "
+            "O HUD atualiza automaticamente em ate 60 segundos."
+        ),
     )
     return redirect("/configuracoes")
 
@@ -11685,105 +12127,7 @@ def index():
         dados = c.fetchone()
 
         if dados:
-            # 🔥 HISTÓRICO
-            c.execute("SELECT id FROM veiculos WHERE placa=?", (placa,))
-            veiculo = c.fetchone()
-
-            if veiculo:
-                veiculo_id = veiculo[0]
-
-                c.execute("""
-                    SELECT
-                        servicos.id,
-                        servicos.valor,
-                        servicos.valor_adicional,
-                        servicos.entrada,
-                        servicos.entrega_prevista,
-                        servicos.entrega,
-                        servicos.status,
-                        servicos.observacoes,
-                        servicos.origem,
-                        servicos.guarita,
-                        servicos.pneu,
-                        servicos.cera,
-                        servicos.hidro_lataria,
-                        servicos.hidro_vidros,
-                        servicos.criado_por_usuario,
-                        servicos.criado_por_nome,
-                        servicos.operacional_por_usuario,
-                        servicos.operacional_por_nome,
-                        servicos.finalizado_por_usuario,
-                        servicos.finalizado_por_nome,
-                        tipos_servico.nome AS tipo_nome
-                    FROM servicos
-                    LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
-                    WHERE servicos.veiculo_id=?
-                    ORDER BY servicos.id DESC
-                """, (veiculo_id,))
-
-                historico_db = c.fetchall()
-                fotos_por_servico = listar_fotos_servicos([row["id"] for row in historico_db])
-                extras_por_servico = listar_cobrancas_extras_servicos([row["id"] for row in historico_db])
-
-                # 🔥 FORMATAR HISTÓRICO
-                historico_formatado = []
-
-                for s in historico_db:
-                    s_dict = dict(s)
-                    entrada = interpretar_datahora_sistema(s_dict.get("entrada"))
-                    entrega = interpretar_datahora_sistema(s_dict.get("entrega"))
-
-                    try:
-                        if entrada and entrega:
-                            tempo = entrega - entrada
-                            tempo_str = str(tempo)
-                        elif s_dict.get("status") == "EM ANDAMENTO":
-                            tempo_str = "Em andamento"
-                        else:
-                            tempo_str = "Sem registro de entrega"
-
-                    except Exception:
-                        tempo_str = "N/A"
-
-                    s_dict["entrada_exibicao"] = (
-                        entrada.strftime("%d/%m/%Y %H:%M")
-                        if entrada else (s_dict.get("entrada") or "-")
-                    )
-                    s_dict["entrega_exibicao"] = (
-                        entrega.strftime("%d/%m/%Y %H:%M")
-                        if entrega else ""
-                    )
-                    s_dict["valor_exibicao"] = formatar_valor_monetario(
-                        s_dict.get("valor")
-                    )
-                    enriquecer_entrega_servico(s_dict)
-                    c.execute("""
-                        SELECT item_nome
-                        FROM servico_checklist
-                        WHERE servico_id=?
-                        ORDER BY id ASC
-                    """, (s_dict["id"],))
-                    checklist_itens = [row["item_nome"] for row in c.fetchall()]
-                    s_dict["checklist_itens"] = checklist_itens
-                    s_dict["checklist_resumo"] = ", ".join(checklist_itens)
-                    s_dict["galeria_fotos"] = fotos_por_servico.get(s_dict["id"], {})
-                    s_dict["fotos_entrada"] = len(s_dict["galeria_fotos"].get("entrada", []))
-                    s_dict["fotos_detalhe"] = len(s_dict["galeria_fotos"].get("detalhe", []))
-                    s_dict["fotos_saida"] = len(s_dict["galeria_fotos"].get("saida", []))
-                    s_dict["cobrancas_extras_info"] = extras_por_servico.get(s_dict["id"], {
-                        "itens": [],
-                        "total": 0.0,
-                        "total_exibicao": "0.00",
-                    })
-                    s_dict["tem_cobrancas_extras"] = bool(s_dict["cobrancas_extras_info"]["itens"])
-                    enriquecer_responsaveis_servico(s_dict)
-
-                    historico_formatado.append({
-                        "servico": s_dict,
-                        "tempo_str": tempo_str,
-                    })
-
-                historico = historico_formatado
+            historico = listar_historico_servicos(placa=placa)
 
     conn.close()
 
@@ -12159,13 +12503,25 @@ def excluir_sync_clientes(sync_id):
     if not session.get("usuario"):
         return redirect("/login")
 
-    conn = conectar()
-    c = conn.cursor()
-    c.execute("DELETE FROM sincronizacoes_clientes WHERE id=?", (sync_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn = conectar()
+        c = conn.cursor()
+        c.execute("DELETE FROM historico_lavagens_sync WHERE sync_id=?", (sync_id,))
+        c.execute("DELETE FROM sincronizacoes_clientes WHERE id=?", (sync_id,))
+        removidos = c.rowcount
+        conn.commit()
+        conn.close()
 
-    definir_feedback_clientes("sucesso", "Sincronização removida.")
+        if removidos:
+            definir_feedback_clientes("sucesso", "Sincronização removida.")
+        else:
+            definir_feedback_clientes("erro", "Sincronização não encontrada.")
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        definir_feedback_clientes("erro", f"Não foi possível excluir a sincronização: {e}")
     return redirect("/clientes")
 
 @app.route("/cadastrar", methods=["POST"])
@@ -12392,7 +12748,9 @@ def salvar_operacional_painel(id):
         return redirect("/painel")
 
     atualizar_campos_operacionais_servico(c, id, request.form, usuario_info=usuario_info)
+    fotos_entrada = request.files.getlist("foto_entrada")
     fotos_detalhe = request.files.getlist("foto_detalhe")
+    entradas_salvas = salvar_fotos_servico(c, id, fotos_entrada, "entrada")
     detalhes_salvos = salvar_fotos_servico(c, id, fotos_detalhe, "detalhe")
 
     acao = (request.form.get("acao") or "salvar").strip().lower()
@@ -12407,11 +12765,14 @@ def salvar_operacional_painel(id):
             entidade_id=id,
             placa=placa,
             detalhes={
+                "fotos_entrada_adicionadas": entradas_salvas,
                 "fotos_detalhe_adicionadas": detalhes_salvos,
             },
             usuario=usuario_info,
         )
         mensagem = f"Checklist aberto para a placa {placa}."
+        if entradas_salvas:
+            mensagem += f" {entradas_salvas} foto(s) de entrada salva(s)."
         if detalhes_salvos:
             mensagem += f" {detalhes_salvos} foto(s) de detalhe salva(s)."
         definir_feedback_checklist("sucesso", mensagem)
@@ -12419,6 +12780,8 @@ def salvar_operacional_painel(id):
 
     mensagem = f"Dados operacionais da placa {placa} salvos."
 
+    if entradas_salvas:
+        mensagem += f" {entradas_salvas} foto(s) de entrada adicionada(s)."
     if detalhes_salvos:
         mensagem += f" {detalhes_salvos} foto(s) de detalhe adicionada(s)."
 
@@ -12437,6 +12800,7 @@ def salvar_operacional_painel(id):
             "cera": normalizar_flag_sim_nao(request.form.get("cera")),
             "hidro_lataria": normalizar_flag_sim_nao(request.form.get("hidro_lataria")),
             "hidro_vidros": normalizar_flag_sim_nao(request.form.get("hidro_vidros")),
+            "fotos_entrada_adicionadas": entradas_salvas,
             "fotos_detalhe_adicionadas": detalhes_salvos,
         },
         usuario=usuario_info,
@@ -13126,6 +13490,267 @@ def painel():
         produtos_pneu=produtos_pneu,
         feedback=session.pop("painel_feedback", None),
     )
+
+@app.route("/historico", methods=["GET", "POST"])
+def pagina_historico():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    busca = (request.form.get("busca") or request.args.get("busca") or "").strip()
+    historico = listar_historico_servicos(busca=busca)
+    return render_template(
+        "historico.html",
+        historico=historico,
+        busca=busca,
+        feedback=session.pop("historico_feedback", None),
+    )
+
+@app.route("/historico/servico/<int:id>/editar", methods=["GET", "POST"])
+def editar_atendimento_historico(id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    servico = buscar_servico_operacional(id)
+    if not servico:
+        definir_feedback_historico("erro", "Atendimento nao encontrado.")
+        return redirect("/historico")
+
+    redirect_to = (
+        request.form.get("redirect_to")
+        if request.method == "POST"
+        else request.args.get("redirect_to")
+    )
+    redirect_to = normalizar_texto_campo(redirect_to) or "/historico"
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT id, nome, valor FROM tipos_servico ORDER BY nome")
+    tipos_servico = [dict(item) for item in c.fetchall()]
+    c.execute("SELECT nome FROM produtos_pneu ORDER BY nome")
+    produtos_pneu = [row[0] for row in c.fetchall()]
+    conn.close()
+
+    if request.method == "POST":
+        usuario_info = resumo_usuario_logado()
+        try:
+            tipo_id = converter_inteiro(request.form.get("tipo_id"), 0)
+            if not tipo_id:
+                raise ValueError("Selecione um tipo de servico valido.")
+
+            valor = converter_valor_numerico(request.form.get("valor"))
+            valor_adicional = converter_valor_numerico(request.form.get("valor_adicional"))
+            entrada_iso = normalizar_datahora_formulario(request.form.get("entrada"), obrigatoria=True)
+            entrega_prevista_iso = normalizar_datahora_formulario(request.form.get("entrega_prevista"))
+            status = normalizar_texto_campo(request.form.get("status")).upper() or "EM ANDAMENTO"
+            entrega_iso = normalizar_datahora_formulario(request.form.get("entrega"))
+
+            finalizado_por_usuario = servico.get("finalizado_por_usuario")
+            finalizado_por_nome = servico.get("finalizado_por_nome")
+            if status == "FINALIZADO":
+                if not entrega_iso:
+                    entrega_iso = servico.get("entrega") or agora_iso()
+                if not normalizar_texto_campo(finalizado_por_usuario):
+                    finalizado_por_usuario = normalizar_texto_campo(usuario_info.get("usuario"))
+                    finalizado_por_nome = normalizar_texto_campo(usuario_info.get("nome"))
+            else:
+                entrega_iso = None
+                finalizado_por_usuario = None
+                finalizado_por_nome = None
+
+            conn = conectar()
+            c = conn.cursor()
+            c.execute(
+                """
+                UPDATE servicos
+                SET tipo_id=?, valor=?, valor_adicional=?, entrada=?, entrega_prevista=?,
+                    entrega=?, status=?, observacoes=?, origem=?, guarita=?, pneu=?,
+                    cera=?, hidro_lataria=?, hidro_vidros=?, finalizado_por_usuario=?,
+                    finalizado_por_nome=?
+                WHERE id=?
+                """,
+                (
+                    tipo_id,
+                    valor,
+                    valor_adicional,
+                    entrada_iso,
+                    entrega_prevista_iso,
+                    entrega_iso,
+                    status,
+                    normalizar_texto_campo(request.form.get("observacoes")),
+                    normalizar_texto_campo(request.form.get("origem")),
+                    normalizar_texto_campo(request.form.get("guarita")),
+                    normalizar_texto_campo(request.form.get("pneu")),
+                    normalizar_texto_campo(request.form.get("cera")) or "Nao",
+                    normalizar_texto_campo(request.form.get("hidro_lataria")) or "Nao",
+                    normalizar_texto_campo(request.form.get("hidro_vidros")) or "Nao",
+                    finalizado_por_usuario,
+                    finalizado_por_nome,
+                    id,
+                ),
+            )
+            recalcular_resumo_veiculo_por_servicos(c, servico["veiculo_id"])
+            conn.commit()
+            conn.close()
+            registrar_auditoria(
+                "editou_atendimento_historico",
+                "servico",
+                entidade_id=id,
+                placa=servico.get("placa"),
+                detalhes={
+                    "status": status,
+                    "tipo_id": tipo_id,
+                    "valor": valor,
+                    "valor_adicional": valor_adicional,
+                },
+                usuario=usuario_info,
+            )
+            definir_feedback_por_destino(
+                redirect_to,
+                "sucesso",
+                f"Atendimento da placa {servico.get('placa') or '-'} atualizado com sucesso.",
+            )
+            return redirect(redirect_to)
+        except Exception as e:
+            definir_feedback_historico("erro", f"Nao foi possivel atualizar o atendimento: {e}")
+            return redirect(f"/historico/servico/{id}/editar?redirect_to={quote(redirect_to, safe='/?=&')}")
+
+    servico["entrada_input"] = formatar_datahora_input(servico.get("entrada"))
+    servico["entrega_prevista_input"] = formatar_datahora_input(servico.get("entrega_prevista"))
+    servico["entrega_input"] = formatar_datahora_input(servico.get("entrega"))
+    servico["valor_exibicao"] = formatar_valor_monetario(servico.get("valor"))
+    servico["valor_adicional_exibicao"] = formatar_valor_monetario(servico.get("valor_adicional"))
+    servico["galeria_fotos"] = listar_fotos_servicos([id]).get(id, {})
+    enriquecer_entrega_servico(servico)
+    enriquecer_responsaveis_servico(servico)
+
+    return render_template(
+        "editar_atendimento.html",
+        servico=servico,
+        tipos_servico=tipos_servico,
+        produtos_pneu=produtos_pneu,
+        redirect_to=redirect_to,
+        feedback=session.pop("historico_feedback", None),
+    )
+
+@app.route("/historico/servico/<int:id>/fotos", methods=["POST"])
+def enviar_fotos_historico(id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    redirect_to = normalizar_texto_campo(request.form.get("redirect_to")) or "/historico"
+    tipo_foto = normalizar_texto_campo(request.form.get("tipo_foto")).lower()
+    if tipo_foto not in {"entrada", "detalhe", "saida"}:
+        definir_feedback_por_destino(redirect_to, "erro", "Tipo de foto invalido.")
+        return redirect(redirect_to)
+
+    servico = buscar_servico_operacional(id)
+    if not servico:
+        definir_feedback_por_destino(redirect_to, "erro", "Atendimento nao encontrado.")
+        return redirect(redirect_to)
+
+    conn = conectar()
+    c = conn.cursor()
+    total = salvar_fotos_servico(c, id, request.files.getlist("fotos"), tipo_foto)
+    conn.commit()
+    conn.close()
+
+    if total <= 0:
+        definir_feedback_por_destino(redirect_to, "erro", "Nenhuma foto valida foi enviada.")
+        return redirect(redirect_to)
+
+    registrar_auditoria(
+        "adicionou_fotos_atendimento",
+        "servico",
+        entidade_id=id,
+        placa=servico.get("placa"),
+        detalhes={"tipo_foto": tipo_foto, "quantidade": total},
+    )
+    definir_feedback_por_destino(
+        redirect_to,
+        "sucesso",
+        f"{total} foto(s) de {tipo_foto} enviada(s) para a placa {servico.get('placa') or '-'}."
+    )
+    return redirect(redirect_to)
+
+@app.route("/historico/servico/<int:id>/reabrir", methods=["POST"])
+def reabrir_atendimento_historico(id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    servico = buscar_servico_operacional(id)
+    redirect_to = normalizar_texto_campo(request.form.get("redirect_to")) or "/historico"
+
+    if not servico:
+        definir_feedback_por_destino(redirect_to, "erro", "Atendimento nao encontrado.")
+        return redirect(redirect_to)
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT COALESCE(MAX(prioridade), 0) FROM servicos WHERE COALESCE(TRIM(UPPER(status)), '')='EM ANDAMENTO'")
+    maior_prioridade = converter_inteiro((c.fetchone() or [0])[0], 0)
+    c.execute(
+        """
+        UPDATE servicos
+        SET status='EM ANDAMENTO',
+            entrega=NULL,
+            prioridade=?,
+            finalizado_por_usuario=NULL,
+            finalizado_por_nome=NULL
+        WHERE id=?
+        """,
+        (maior_prioridade + 1, id),
+    )
+    recalcular_resumo_veiculo_por_servicos(c, servico["veiculo_id"])
+    conn.commit()
+    conn.close()
+
+    registrar_auditoria(
+        "reabriu_atendimento",
+        "servico",
+        entidade_id=id,
+        placa=servico.get("placa"),
+    )
+    definir_feedback_por_destino(
+        redirect_to,
+        "sucesso",
+        f"Atendimento da placa {servico.get('placa') or '-'} voltou para EM ANDAMENTO.",
+    )
+    return redirect(redirect_to)
+
+@app.route("/historico/servico/<int:id>/excluir", methods=["POST"])
+def excluir_atendimento_historico(id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    redirect_to = normalizar_texto_campo(request.form.get("redirect_to")) or "/historico"
+    servico = buscar_servico_operacional(id)
+    if not servico:
+        definir_feedback_por_destino(redirect_to, "erro", "Atendimento nao encontrado.")
+        return redirect(redirect_to)
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("DELETE FROM fotos WHERE servico_id=?", (id,))
+    c.execute("DELETE FROM servico_checklist WHERE servico_id=?", (id,))
+    c.execute("DELETE FROM servico_cobrancas_extras WHERE servico_id=?", (id,))
+    c.execute("DELETE FROM servicos WHERE id=?", (id,))
+    recalcular_resumo_veiculo_por_servicos(c, servico["veiculo_id"])
+    conn.commit()
+    conn.close()
+
+    registrar_auditoria(
+        "excluiu_atendimento",
+        "servico",
+        entidade_id=id,
+        placa=servico.get("placa"),
+        detalhes={"status_anterior": servico.get("status")},
+    )
+    definir_feedback_por_destino(
+        redirect_to,
+        "sucesso",
+        f"Atendimento da placa {servico.get('placa') or '-'} excluido com sucesso.",
+    )
+    return redirect(redirect_to)
 
 
 @app.route("/clientes", methods=["GET", "POST"])

@@ -7,7 +7,7 @@
     const POLLING_MS = 30000;
     const LIDER_TTL_MS = 45000;
     const STATUS_PADRAO =
-        "A cada 10 minutos, o sistema avisa em portugues do Brasil quais veiculos continuam em atendimento e ha quantos minutos estao na operacao.";
+        "A cada 10 minutos, o sistema avisa em portugues do Brasil quais veiculos continuam em atendimento. Veiculos com entrega agendada avisam somente quando faltarem 30 minutos.";
 
     let servicosCache = [];
     let snapshotEm = Date.now();
@@ -338,14 +338,14 @@
             }
 
             const diferencaMinutos = Math.ceil((alvo.getTime() - Date.now()) / 60000);
-            return diferencaMinutos > 0 && diferencaMinutos <= 15;
+            return diferencaMinutos > 0 && diferencaMinutos <= 30;
         }).length;
 
         if (ativa && totalAtivos > 0 && entregasAgendadas > 0) {
             if (entregasVencidas > 0) {
                 texto += ` ${entregasVencidas} entrega(s) estao no prazo final ou vencidas.`;
             } else if (entregasProximas > 0) {
-                texto += ` ${entregasProximas} entrega(s) estao proximas do horario combinado.`;
+                texto += ` ${entregasProximas} entrega(s) estao a 30 minutos ou menos do horario combinado.`;
             } else {
                 texto += ` ${entregasAgendadas} entrega(s) possuem horario combinado.`;
             }
@@ -376,16 +376,45 @@
 
         servicos.forEach((item) => {
             const servicoId = String(item.id);
+            const registroAtual =
+                historico[servicoId] && typeof historico[servicoId] === "object"
+                    ? historico[servicoId]
+                    : { bloco: Number(historico[servicoId] || 0), entrega_30: false };
             const minutos = Math.max(0, Number(item.minutos_em_andamento || 0));
-            const bloco = Math.floor(minutos / 10);
-            const ultimoBloco = Number(historico[servicoId] || 0);
+            const entregaPrevista = item.entrega_prevista
+                ? new Date(item.entrega_prevista)
+                : null;
+            const entregaValida =
+                entregaPrevista && !Number.isNaN(entregaPrevista.getTime());
 
-            if (bloco >= 1 && bloco > ultimoBloco) {
-                mensagens.push(
-                    `${montarNomeVeiculo(item)} esta em atendimento ha ${minutos} minutos.`
+            if (entregaValida) {
+                const diferencaMinutos = Math.ceil(
+                    (entregaPrevista.getTime() - Date.now()) / 60000
                 );
-                historico[servicoId] = bloco;
+
+                if (
+                    diferencaMinutos > 0 &&
+                    diferencaMinutos <= 30 &&
+                    !registroAtual.entrega_30
+                ) {
+                    mensagens.push(
+                        `${montarNomeVeiculo(item)} esta a ${diferencaMinutos} minutos do horario combinado de entrega.`
+                    );
+                    registroAtual.entrega_30 = true;
+                }
+            } else {
+                const bloco = Math.floor(minutos / 10);
+                const ultimoBloco = Number(registroAtual.bloco || 0);
+
+                if (bloco >= 1 && bloco > ultimoBloco) {
+                    mensagens.push(
+                        `${montarNomeVeiculo(item)} esta em atendimento ha ${minutos} minutos.`
+                    );
+                    registroAtual.bloco = bloco;
+                }
             }
+
+            historico[servicoId] = registroAtual;
         });
 
         salvarHistoricoAlertas(historico);
