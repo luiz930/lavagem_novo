@@ -2782,6 +2782,12 @@ def formatar_versao_sistema(valor):
 
 
 def obter_versao_sistema():
+    if not INIT_DB_EXECUTADO:
+        return APP_VERSION
+
+    if has_request_context() and not session.get("usuario"):
+        return APP_VERSION
+
     try:
         conn = conectar()
         c = conn.cursor()
@@ -13830,5 +13836,4 @@ def clientes():
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 5000))
-    garantir_init_db()
     app.run(host="0.0.0.0", port=port, debug=False)

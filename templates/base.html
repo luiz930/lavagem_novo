@@ -519,6 +519,7 @@ async function verificarSincroniaBancoBase() {
 
 window.reiniciarSincroniaBancoBase = baseReiniciarAgendamentoSincronia;
 
+{% if session.get("usuario") %}
 baseReiniciarAgendamentoSincronia();
 verificarSincroniaBancoBase();
 
@@ -533,6 +534,7 @@ document.addEventListener("storage", (evento) => {
         baseReiniciarAgendamentoSincronia();
     }
 });
+{% endif %}
 </script>
 
 <script src="/static/photo_upload.js"></script>
