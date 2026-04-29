@@ -10924,25 +10924,40 @@ def api_clima():
             .replace("{longitude}", str(clima_longitude))
             .replace("{timezone}", clima_timezone)
         )
-        if "?" in url_configurada:
-            urls = [url_configurada]
-        else:
-            urls = [
+        urls = []
+        if url_configurada:
+            urls.append(url_configurada)
+
+        urls.extend(
+            [
                 (
-                    f"{url_configurada}"
+                    "https://api.open-meteo.com/v1/forecast"
                     f"?latitude={clima_latitude}&longitude={clima_longitude}"
                     "&current=temperature_2m,weather_code"
+                    "&hourly=temperature_2m"
                     f"&timezone={clima_timezone}"
+                    "&forecast_days=1"
                 ),
                 (
-                    f"{url_configurada}"
+                    "https://api.open-meteo.com/v1/forecast"
                     f"?latitude={clima_latitude}&longitude={clima_longitude}"
                     "&current_weather=true"
+                    f"&timezone={clima_timezone}"
+                    "&forecast_days=1"
                 ),
             ]
+        )
+        urls_unicas = []
+        vistos = set()
+        for item_url in urls:
+            texto_url = str(item_url or "").strip()
+            if not texto_url or texto_url in vistos:
+                continue
+            vistos.add(texto_url)
+            urls_unicas.append(texto_url)
 
         dados = None
-        for url in urls:
+        for url in urls_unicas:
             try:
                 resposta = sessao_http.get(url, timeout=timeout_segundos, headers=headers)
             except Exception:
