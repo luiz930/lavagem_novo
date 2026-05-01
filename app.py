@@ -2917,12 +2917,36 @@ HUD_CACHE = {
     "resultado": None,
 }
 HUD_CACHE_TTL = 20
+HOME_SNAPSHOT_CACHE = {
+    "testado_em": 0.0,
+    "usuario": "",
+    "resultado": None,
+}
+HOME_SNAPSHOT_CACHE_TTL = 12
 NOTIFICACOES_CACHE = {
     "testado_em": 0.0,
     "usuario": "",
     "resultado": None,
 }
 NOTIFICACOES_CACHE_TTL = 15
+STATUS_SYNC_CACHE = {
+    "testado_em": 0.0,
+    "usuario": "",
+    "resultado": None,
+}
+STATUS_SYNC_CACHE_TTL = 20
+SYNC_TOKEN_CACHE = {
+    "testado_em": 0.0,
+    "usuario": "",
+    "resultado": None,
+}
+SYNC_TOKEN_CACHE_TTL = 15
+RETORNOS_HUD_CACHE = {
+    "testado_em": 0.0,
+    "usuario": "",
+    "resultado": None,
+}
+RETORNOS_HUD_CACHE_TTL = 45
 AGENDA_RETORNO_CACHE = {
     "testado_em": 0.0,
     "usuario": "",
@@ -10807,34 +10831,15 @@ def loop_importacao():
 def carregar_contexto_clientes(busca="", limpar=False):
     busca_aplicada = "" if limpar else busca
     clientes = listar_registros_clientes(busca_aplicada)
-
-    conn = None
-    try:
-        conn = conectar_somente_leitura()
-        c = conn.cursor()
-        c.execute("""
+    sincronizacoes_raw = executar_leitura_resiliente(
+        lambda conn: conn.cursor().execute("""
             SELECT *
             FROM sincronizacoes_clientes
             ORDER BY id DESC
-        """)
-        sincronizacoes_raw = c.fetchall()
-    except Exception as e:
-        print("AVISO CONTEXTO CLIENTES:", e)
-        garantir_schema_sqlite_local_minima(force=True)
-        conn = conectar_banco_local_forcado()
-        c = conn.cursor()
-        c.execute("""
-            SELECT *
-            FROM sincronizacoes_clientes
-            ORDER BY id DESC
-        """)
-        sincronizacoes_raw = c.fetchall()
-    finally:
-        try:
-            if conn:
-                conn.close()
-        except Exception:
-            pass
+        """).fetchall(),
+        descricao="CONTEXTO CLIENTES",
+        padrao=[],
+    ) or []
 
     sincronizacoes = []
 
@@ -11576,25 +11581,15 @@ def api_notificacoes():
     ):
         return jsonify(NOTIFICACOES_CACHE["resultado"])
 
-    conn = None
-    try:
-        conn = conectar_somente_leitura()
-        c = conn.cursor()
-        c.execute("""
+    dados = executar_leitura_resiliente(
+        lambda conn: conn.cursor().execute("""
             SELECT * FROM notificacoes
             ORDER BY id DESC
             LIMIT 20
-        """)
-        dados = c.fetchall()
-    except Exception as e:
-        print("ERRO API NOTIFICACOES:", e)
-        dados = []
-    finally:
-        try:
-            if conn:
-                conn.close()
-        except Exception:
-            pass
+        """).fetchall(),
+        descricao="API NOTIFICACOES",
+        padrao=[],
+    ) or []
     resultado = [dict(row) for row in dados]
     NOTIFICACOES_CACHE["testado_em"] = agora_cache_ts
     NOTIFICACOES_CACHE["usuario"] = usuario_cache
@@ -11712,6 +11707,46 @@ def montar_resultado_hud_basico(sync_token="init-pendente"):
         "usuario_foto_url": session.get("usuario_foto_url") or "",
         "sync_token": sync_token,
     }
+
+
+def obter_resumo_retornos_hud(usuario_cache, agora_cache_ts, referencia=None):
+    if (
+        RETORNOS_HUD_CACHE.get("resultado") is not None
+        and RETORNOS_HUD_CACHE.get("usuario") == usuario_cache
+        and agora_cache_ts - float(RETORNOS_HUD_CACHE.get("testado_em") or 0.0) < RETORNOS_HUD_CACHE_TTL
+    ):
+        return dict(RETORNOS_HUD_CACHE["resultado"])
+
+    referencia = referencia or agora()
+    resultado = {
+        "acao_agora": 0,
+        "reagendados_vencidos": 0,
+        "contatados_hoje": 0,
+    }
+
+    try:
+        itens_retornos = montar_itens_retornos_comerciais()
+        hoje_data = referencia.date()
+        resultado = {
+            "acao_agora": sum(1 for item in itens_retornos if item.get("mostrar_na_agenda")),
+            "reagendados_vencidos": sum(1 for item in itens_retornos if item.get("reagendamento_vencido")),
+            "contatados_hoje": sum(
+                1
+                for item in itens_retornos
+                if (
+                    item.get("status_retorno") == "contatado"
+                    and interpretar_datahora_sistema(item.get("ultimo_contato_em"))
+                    and interpretar_datahora_sistema(item.get("ultimo_contato_em")).date() == hoje_data
+                )
+            ),
+        }
+    except Exception as erro:
+        print("ERRO HUD RETORNOS:", erro)
+
+    RETORNOS_HUD_CACHE["testado_em"] = agora_cache_ts
+    RETORNOS_HUD_CACHE["usuario"] = usuario_cache
+    RETORNOS_HUD_CACHE["resultado"] = dict(resultado)
+    return resultado
 
 
 def montar_resultado_hud_dinamico(usuario_cache, agora_cache_ts):
@@ -11836,31 +11871,10 @@ def montar_resultado_hud_dinamico(usuario_cache, agora_cache_ts):
     usuarios_total = leitura_hud["usuarios_total"]
     usuarios_ultimo_id = leitura_hud["usuarios_ultimo_id"]
 
-    itens_retornos = []
-    retornos_acao_agora = 0
-    retornos_reagendados_vencidos = 0
-    retornos_contatados_hoje = 0
-
-    try:
-        itens_retornos = montar_itens_retornos_comerciais()
-        hoje_data = agora.date()
-        retornos_acao_agora = sum(
-            1 for item in itens_retornos if item.get("mostrar_na_agenda")
-        )
-        retornos_reagendados_vencidos = sum(
-            1 for item in itens_retornos if item.get("reagendamento_vencido")
-        )
-        retornos_contatados_hoje = sum(
-            1
-            for item in itens_retornos
-            if (
-                item.get("status_retorno") == "contatado"
-                and interpretar_datahora_sistema(item.get("ultimo_contato_em"))
-                and interpretar_datahora_sistema(item.get("ultimo_contato_em")).date() == hoje_data
-            )
-        )
-    except Exception as erro:
-        print("ERRO HUD RETORNOS:", erro)
+    resumo_retornos = obter_resumo_retornos_hud(usuario_cache, agora_cache_ts, agora)
+    retornos_acao_agora = resumo_retornos["acao_agora"]
+    retornos_reagendados_vencidos = resumo_retornos["reagendados_vencidos"]
+    retornos_contatados_hoje = resumo_retornos["contatados_hoje"]
 
     if retornos_acao_agora > 0:
         mensagem_retornos_hud = (
@@ -11973,6 +11987,23 @@ def montar_resultado_hud_dinamico(usuario_cache, agora_cache_ts):
     return resultado
 
 
+def _carregar_partes_sync_token(conn):
+    c = conn.cursor()
+    partes = []
+    for tabela in ("servicos", "veiculos", "clientes", "notificacoes", "auditoria", "usuarios"):
+        c.execute(
+            f"""
+            SELECT
+                COALESCE(COUNT(*), 0) AS total,
+                COALESCE(MAX(id), 0) AS ultimo_id
+            FROM {tabela}
+            """
+        )
+        total, ultimo_id = c.fetchone() or (0, 0)
+        partes.extend([total, ultimo_id])
+    return partes
+
+
 def gerar_sync_token_leve():
     usuario_cache = str(session.get("usuario") or "")
     cache = HUD_CACHE.get("resultado") or {}
@@ -11980,38 +12011,32 @@ def gerar_sync_token_leve():
     if cache and cache_usuario == usuario_cache and cache.get("sync_token"):
         return str(cache.get("sync_token"))
 
+    cache_sync = SYNC_TOKEN_CACHE.get("resultado")
+    if (
+        cache_sync is not None
+        and SYNC_TOKEN_CACHE.get("usuario") == usuario_cache
+        and time.time() - float(SYNC_TOKEN_CACHE.get("testado_em") or 0.0) < SYNC_TOKEN_CACHE_TTL
+    ):
+        return str(cache_sync)
+
     if not INIT_DB_EXECUTADO or (
         modo_banco_preferido() == "postgres" and not SCHEMA_BANCO_ONLINE_GARANTIDO
     ):
         return "init-pendente"
 
-    conn = None
-    try:
-        conn = conectar_somente_leitura()
-        c = conn.cursor()
-        partes = []
-        for tabela in ("servicos", "veiculos", "clientes", "notificacoes", "auditoria", "usuarios"):
-            c.execute(
-                f"""
-                SELECT
-                    COALESCE(COUNT(*), 0) AS total,
-                    COALESCE(MAX(id), 0) AS ultimo_id
-                FROM {tabela}
-                """
-            )
-            total, ultimo_id = c.fetchone() or (0, 0)
-            partes.extend([total, ultimo_id])
-        token_bruto = "|".join(str(valor) for valor in partes)
-        return hashlib.sha1(token_bruto.encode("utf-8")).hexdigest()
-    except Exception as e:
-        print("ERRO SYNC TOKEN:", e)
+    partes = executar_leitura_resiliente(
+        lambda conn: _carregar_partes_sync_token(conn),
+        descricao="SYNC TOKEN",
+        padrao=None,
+    )
+    if not partes:
         return str(cache.get("sync_token") or "sync-indisponivel")
-    finally:
-        try:
-            if conn:
-                conn.close()
-        except Exception:
-            pass
+
+    token = hashlib.sha1("|".join(str(valor) for valor in partes).encode("utf-8")).hexdigest()
+    SYNC_TOKEN_CACHE["testado_em"] = time.time()
+    SYNC_TOKEN_CACHE["usuario"] = usuario_cache
+    SYNC_TOKEN_CACHE["resultado"] = token
+    return token
 
 
 @app.route("/api/sync-token")
@@ -12302,6 +12327,15 @@ def obter_payload_status_sync():
     if not session.get("usuario"):
         return {"status": "erro", "mensagem": "", "id": 0}
 
+    usuario_cache = str(session.get("usuario") or "")
+    agora_cache_ts = time.time()
+    if (
+        STATUS_SYNC_CACHE.get("resultado") is not None
+        and STATUS_SYNC_CACHE.get("usuario") == usuario_cache
+        and agora_cache_ts - float(STATUS_SYNC_CACHE.get("testado_em") or 0.0) < STATUS_SYNC_CACHE_TTL
+    ):
+        return dict(STATUS_SYNC_CACHE["resultado"])
+
     def carregar(conn):
         c = conn.cursor()
         c.execute("""
@@ -12329,13 +12363,21 @@ def obter_payload_status_sync():
         },
     )
     if not row:
-        return {"status": "vazio", "mensagem": "", "id": 0}
+        resultado = {"status": "vazio", "mensagem": "", "id": 0}
+        STATUS_SYNC_CACHE["testado_em"] = agora_cache_ts
+        STATUS_SYNC_CACHE["usuario"] = usuario_cache
+        STATUS_SYNC_CACHE["resultado"] = dict(resultado)
+        return resultado
 
-    return {
+    resultado = {
         "status": row.get("ultimo_status") or "vazio",
         "mensagem": row.get("ultima_mensagem") or "",
         "id": row["id"],
     }
+    STATUS_SYNC_CACHE["testado_em"] = agora_cache_ts
+    STATUS_SYNC_CACHE["usuario"] = usuario_cache
+    STATUS_SYNC_CACHE["resultado"] = dict(resultado)
+    return resultado
 
 @app.route("/status_sync")
 def status_sync():
@@ -12345,12 +12387,24 @@ def status_sync():
 def api_home_snapshot():
     if not session.get("usuario"):
         return jsonify({"erro": "nao autorizado"}), 401
+    usuario_cache = str(session.get("usuario") or "")
+    agora_cache_ts = time.time()
+    if (
+        HOME_SNAPSHOT_CACHE.get("resultado") is not None
+        and HOME_SNAPSHOT_CACHE.get("usuario") == usuario_cache
+        and agora_cache_ts - float(HOME_SNAPSHOT_CACHE.get("testado_em") or 0.0) < HOME_SNAPSHOT_CACHE_TTL
+    ):
+        return jsonify(HOME_SNAPSHOT_CACHE["resultado"])
 
-    return jsonify({
+    resultado = {
         "hud": obter_payload_hud(),
         "clima": obter_resultado_clima_api(),
         "sync": obter_payload_status_sync(),
-    })
+    }
+    HOME_SNAPSHOT_CACHE["testado_em"] = agora_cache_ts
+    HOME_SNAPSHOT_CACHE["usuario"] = usuario_cache
+    HOME_SNAPSHOT_CACHE["resultado"] = dict(resultado)
+    return jsonify(resultado)
 
     conn = conectar_somente_leitura()
     c = conn.cursor()
@@ -15392,15 +15446,8 @@ def api_operacional_voz():
         return jsonify(resultado)
 
 
-
-@app.route("/painel")
-def painel():
-    if not session.get("usuario"):
-        return redirect("/login")
-
-    conn = conectar()
+def _carregar_dados_painel(conn):
     c = conn.cursor()
-
     c.execute("""
         SELECT
             servicos.*,
@@ -15417,13 +15464,29 @@ def painel():
         WHERE COALESCE(TRIM(UPPER(status)), '')='EM ANDAMENTO'
         ORDER BY servicos.id DESC
     """)
-
     servicos_db = c.fetchall()
     c.execute("SELECT nome FROM produtos_pneu ORDER BY nome")
     produtos_pneu = [row[0] for row in c.fetchall()]
+    return {
+        "servicos_db": servicos_db,
+        "produtos_pneu": produtos_pneu,
+    }
 
+
+@app.route("/painel")
+def painel():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    leitura_painel = executar_leitura_resiliente(
+        lambda conn: _carregar_dados_painel(conn),
+        descricao="PAINEL",
+        padrao={"servicos_db": [], "produtos_pneu": []},
+    ) or {"servicos_db": [], "produtos_pneu": []}
+
+    servicos_db = leitura_painel["servicos_db"]
+    produtos_pneu = leitura_painel["produtos_pneu"]
     ids_servicos = [row["id"] for row in servicos_db]
-    conn.close()
     fotos_por_servico = listar_fotos_servicos(ids_servicos)
     extras_por_servico = listar_cobrancas_extras_servicos(ids_servicos)
 
