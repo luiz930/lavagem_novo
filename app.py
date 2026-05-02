@@ -1725,6 +1725,52 @@ def obter_status_backup_banco():
         ),
     }
 
+def status_backup_banco_padrao():
+    configuracao = configuracao_backup_padrao()
+    frequencia = str(configuracao.get("frequencia") or "diario").strip().lower()
+    configuracao["frequencia"] = frequencia if frequencia in {"diario", "semanal", "mensal"} else "diario"
+    configuracao["tipo_backup"] = normalizar_tipo_backup(configuracao.get("tipo_backup"))
+    configuracao["frequencia_label"] = next(
+        (item["label"] for item in FREQUENCIAS_BACKUP if item["value"] == configuracao["frequencia"]),
+        "Diario",
+    )
+    configuracao["tipo_backup_label"] = label_tipo_backup(configuracao["tipo_backup"])
+    destino_externo_tipo = normalizar_tipo_destino_backup(configuracao.get("destino_externo_tipo"))
+    return {
+        "ativo": True,
+        "backend": "postgres" if banco_online_ativo() else "sqlite",
+        "backend_label": "Supabase / PostgreSQL" if banco_online_ativo() else "SQLite local",
+        "pasta": caminho_diretorio_backup(),
+        "retencao": configuracao["retencao_arquivos"],
+        "frequencia": configuracao["frequencia"],
+        "frequencia_label": configuracao["frequencia_label"],
+        "tipo_backup": configuracao["tipo_backup"],
+        "tipo_backup_label": configuracao["tipo_backup_label"],
+        "quantidade": 0,
+        "ultimo_backup": "",
+        "ultimo_backup_nome": "",
+        "ultimo_backup_em": "",
+        "ultimo_backup_em_fmt": "Nenhum backup ainda",
+        "ultimo_backup_tamanho": 0,
+        "ultimo_backup_tamanho_fmt": "0 B",
+        "proximo_backup_em": "",
+        "proximo_backup_em_fmt": "Assim que a rotina rodar",
+        "destino_externo_ativo": bool(int(configuracao.get("destino_externo_ativo") or 0)),
+        "destino_externo_tipo": destino_externo_tipo,
+        "destino_externo_tipo_label": (
+            "Google Drive online" if destino_externo_tipo == "google_drive" else "Pasta sincronizada"
+        ),
+        "destino_externo_pasta": configuracao.get("destino_externo_pasta") or "",
+        "destino_externo_drive_folder_id": normalizar_texto_campo(
+            configuracao.get("destino_externo_drive_folder_id")
+        ),
+        "destino_externo_disponivel": False,
+        "destino_externo_escrevivel": False,
+        "destino_externo_quantidade": 0,
+        "ultimo_destino_externo_nome": "",
+        "ultimo_destino_externo_em_fmt": "Nenhum envio externo ainda",
+    }
+
 def criar_backup_banco(force=False, tipo_backup=None):
     if not backup_lock.acquire(blocking=False):
         return False, "Backup ja esta em execucao.", None
@@ -2384,6 +2430,37 @@ def obter_status_arquivos():
         "thumbs_pasta": caminho_uploads_thumbs_absoluto(),
     }
 
+def status_arquivos_padrao():
+    try:
+        armazenamento = obter_estatisticas_armazenamento()
+    except Exception:
+        armazenamento = {
+            "uploads": {"bytes": 0, "arquivos": 0, "tamanho_fmt": "0 B"},
+            "orfaos": {"bytes": 0, "arquivos": 0, "tamanho_fmt": "0 B"},
+            "thumbs": {"bytes": 0, "arquivos": 0, "tamanho_fmt": "0 B"},
+            "backups": {"bytes": 0, "arquivos": 0, "tamanho_fmt": "0 B"},
+            "banco": {"bytes": 0, "tamanho_fmt": "0 B"},
+            "sistema": {"bytes": 0, "tamanho_fmt": "0 B"},
+            "disco": {
+                "total_bytes": 0,
+                "livre_bytes": 0,
+                "usado_bytes": 0,
+                "total_fmt": "0 B",
+                "livre_fmt": "0 B",
+                "usado_fmt": "0 B",
+            },
+        }
+    return {
+        "ultimo_executado_em": "",
+        "ultimo_executado_em_fmt": "Ainda nao executada",
+        "ultima_mensagem": "Nenhuma manutencao registrada ainda.",
+        "ultimo_resultado": {},
+        "armazenamento": armazenamento,
+        "uploads_pasta": caminho_uploads_absoluto(),
+        "orfaos_pasta": caminho_uploads_orfaos_absoluto(),
+        "thumbs_pasta": caminho_uploads_thumbs_absoluto(),
+    }
+
 def executar_manutencao_arquivos(force=False, registrar_log=True, usuario=None):
     if not maintenance_lock.acquire(blocking=False):
         return False, "Manutencao de arquivos ja esta em execucao.", {}
@@ -2800,7 +2877,7 @@ app.config["SESSION_TYPE"] = "filesystem"
 app.secret_key = app.config["SECRET_KEY"]
 
 VERSAO_SISTEMA_PADRAO = "0.7.5-alpha (Em Desenvolvimento)"
-APP_VERSION = f"VersÃ£o: {VERSAO_SISTEMA_PADRAO}"
+APP_VERSION = f"Versao: {VERSAO_SISTEMA_PADRAO}"
 MESES_CURTOS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 PERIODOS_FINANCEIRO = [
     {"value": "hoje", "label": "Hoje"},
@@ -2920,12 +2997,12 @@ def normalizar_versao_sistema(valor):
     texto = normalizar_texto_campo(valor)
     if not texto:
         return VERSAO_SISTEMA_PADRAO
-    texto = re.sub(r"(?i)^\s*vers[aÃ£]o\s*:\s*", "", texto).strip()
+    texto = re.sub(r"(?i)^\s*vers(?:ao|ão)\s*:\s*", "", texto).strip()
     return texto or VERSAO_SISTEMA_PADRAO
 
 
 def formatar_versao_sistema(valor):
-    return f"VersÃ£o: {normalizar_versao_sistema(valor)}"
+    return f"Versao: {normalizar_versao_sistema(valor)}"
 
 
 def row_para_dict(row):
@@ -3154,6 +3231,38 @@ BANCO_ONLINE_STATUS_CACHE_TTL = 30
 SCHEMA_BANCO_ONLINE_GARANTIDO = False
 SCHEMA_SQLITE_LOCAL_GARANTIDO = False
 BANCO_ONLINE_BLOQUEADO_ATE_TS = 0.0
+
+
+def limpar_caches_interface():
+    HUD_CACHE["testado_em"] = 0.0
+    HUD_CACHE["usuario"] = ""
+    HUD_CACHE["resultado"] = None
+    HOME_SNAPSHOT_CACHE["testado_em"] = 0.0
+    HOME_SNAPSHOT_CACHE["usuario"] = ""
+    HOME_SNAPSHOT_CACHE["resultado"] = None
+    NOTIFICACOES_CACHE["testado_em"] = 0.0
+    NOTIFICACOES_CACHE["usuario"] = ""
+    NOTIFICACOES_CACHE["resultado"] = None
+    STATUS_SYNC_CACHE["testado_em"] = 0.0
+    STATUS_SYNC_CACHE["usuario"] = ""
+    STATUS_SYNC_CACHE["resultado"] = None
+    SYNC_TOKEN_CACHE["testado_em"] = 0.0
+    SYNC_TOKEN_CACHE["usuario"] = ""
+    SYNC_TOKEN_CACHE["resultado"] = None
+    RETORNOS_HUD_CACHE["testado_em"] = 0.0
+    RETORNOS_HUD_CACHE["usuario"] = ""
+    RETORNOS_HUD_CACHE["resultado"] = None
+    AGENDA_RETORNO_CACHE["testado_em"] = 0.0
+    AGENDA_RETORNO_CACHE["usuario"] = ""
+    AGENDA_RETORNO_CACHE["resultado"] = None
+    VOZ_CACHE["testado_em"] = 0.0
+    VOZ_CACHE["usuario"] = ""
+    VOZ_CACHE["resultado"] = None
+
+
+def limpar_cache_banco_online():
+    BANCO_ONLINE_STATUS_CACHE["testado_em"] = 0.0
+    BANCO_ONLINE_STATUS_CACHE["resultado"] = {}
 BANCO_ONLINE_ULTIMO_LOG = {"mensagem": "", "testado_em": 0.0}
 schema_sqlite_local_lock = Lock()
 
@@ -3760,6 +3869,8 @@ def salvar_configuracao_banco_form(form):
     status_final = obter_status_banco_online()
     status_final["migracao_automatica"] = migracao_automatica
     status_final["mensagem_migracao"] = mensagem_migracao
+    limpar_cache_banco_online()
+    limpar_caches_interface()
     return status_final
 
 
@@ -6128,6 +6239,9 @@ def usuario_gerencia_acessos():
 def usuario_gerencia_banco_online():
     return usuario_admin() or usuario_desenvolvedor()
 
+def usuario_gerencia_configuracao_sistema():
+    return usuario_admin() or usuario_desenvolvedor()
+
 def normalizar_periodo_financeiro(valor):
     periodo = str(valor or "mes").strip().lower()
     return periodo if periodo in MAPA_PERIODOS_FINANCEIRO else "mes"
@@ -6693,6 +6807,7 @@ def salvar_configuracao_versao_form(form):
     ))
     conn.commit()
     conn.close()
+    limpar_caches_interface()
 
     return versao
 
@@ -6879,25 +6994,25 @@ def montar_resultado_clima_normalizado(payload):
         return None
 
     if any(termo in texto_cmp for termo in ("chuva", "rain", "storm", "drizzle", "shower", "trovo")) or (codigo is not None and codigo >= 61):
-        icone = "ðŸŒ§ï¸"
+        icone = "\U0001F327\uFE0F"
         clima = texto or "Chuva"
-        sugestao = "ðŸ’¡ Lavagem interna"
+        sugestao = "\U0001F4A1 Lavagem interna"
     elif any(termo in texto_cmp for termo in ("nublado", "cloud", "overcast", "encoberto")) or (codigo is not None and 4 <= codigo < 61):
-        icone = "â˜ï¸"
+        icone = "\u2601\uFE0F"
         clima = texto or "Nublado"
-        sugestao = "ðŸ’¡ Lavagem simples"
+        sugestao = "\U0001F4A1 Lavagem simples"
     elif any(termo in texto_cmp for termo in ("sol", "sun", "clear", "limpo", "ensolar")) or (codigo is not None and codigo <= 3):
-        icone = "â˜€ï¸"
+        icone = "\u2600\uFE0F"
         clima = texto or "Tempo limpo"
-        sugestao = "ðŸ’¡ Lavagem completa"
+        sugestao = "\U0001F4A1 Lavagem completa"
     elif any(termo in texto_cmp for termo in ("fog", "mist", "nebl", "haze")):
-        icone = "ðŸŒ«ï¸"
+        icone = "\U0001F32B\uFE0F"
         clima = texto or "Neblina"
-        sugestao = "ðŸ’¡ Consulte a previsao completa."
+        sugestao = "\U0001F4A1 Consulte a previsao completa."
     else:
-        icone = "â›…"
+        icone = "\u26C5"
         clima = texto or "Clima carregado"
-        sugestao = "ðŸ’¡ Consulte a previsao completa."
+        sugestao = "\U0001F4A1 Consulte a previsao completa."
 
     return {
         "clima": clima,
@@ -6912,16 +7027,16 @@ def obter_resultado_clima_api():
     fallback = {
         "clima": "Clima indisponivel",
         "temp": "--",
-        "icone": "âš ï¸",
-        "sugestao": "ðŸ’¡ Consulte o radar do clima.",
+        "icone": "\u26A0\uFE0F",
+        "sugestao": "\U0001F4A1 Consulte o radar do clima.",
     }
 
     if not configuracao.get("clima_ativo"):
         return {
             "clima": "Clima desativado",
             "temp": "--",
-            "icone": "â¸ï¸",
-            "sugestao": "ðŸ’¡ Ative o clima nas configuracoes.",
+            "icone": "\u23F8\uFE0F",
+            "sugestao": "\U0001F4A1 Ative o clima nas configuracoes.",
         }
 
     agora_ts = time.time()
@@ -7074,6 +7189,7 @@ def salvar_configuracao_clima_form(form):
     conn.commit()
     conn.close()
     limpar_cache_clima()
+    limpar_caches_interface()
 
     return {
         "clima_ativo": bool(clima_ativo),
@@ -10972,101 +11088,6 @@ def gerar_orcamento():
         mimetype="application/pdf",
     )
 
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
-    from reportlab.lib import colors
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.lib.enums import TA_CENTER  # ðŸ”¥ ADICIONA ISSO
-
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        leftMargin=0,
-        rightMargin=0
-    )
-
-    styles = getSampleStyleSheet()
-    style_centro = styles["Normal"]
-    style_centro.alignment = TA_CENTER
-    elementos = []
-
-    # ðŸ”¥ LOGO
-    try:
-        logo = ImagemRedonda("static/logo.jpg", size=80)
-
-        tabela_logo = Table(
-            [[logo]],
-            colWidths=[500]  # ðŸ”¥ ESSENCIAL
-        )
-
-        tabela_logo.setStyle([
-            ("ALIGN", (0,0), (-1,-1), "LEFT")
-        ])
-
-        elementos.append(tabela_logo)
-
-    except:
-        pass
-
-    elementos.append(Spacer(1, 20))
-
-    # ðŸ”¥ DADOS
-    nome = request.form.get("nome")
-    telefone = request.form.get("telefone")
-    placa = request.form.get("placa")
-    modelo = request.form.get("modelo")
-    observacoes = request.form.get("observacoes")
-
-    elementos.append(Paragraph(f"<b>Cliente:</b> {nome}", style_centro))
-    elementos.append(Paragraph(f"<b>Telefone:</b> {telefone}", style_centro))
-    elementos.append(Paragraph(f"<b>VeÃ­culo:</b> {modelo} - {placa}", style_centro))
-
-    elementos.append(Spacer(1, 20))
-
-    # ðŸ”¥ TABELA
-    servicos = request.form.getlist("servico[]")
-    valores = request.form.getlist("valor[]")
-
-    dados_tabela = [["ServiÃ§o", "Valor (R$)"]]
-
-    total = 0
-
-    for s, v in zip(servicos, valores):
-        try:
-            valor = float(v)
-        except:
-            valor = 0
-
-        dados_tabela.append([s, f"{valor:.2f}"])
-        total += valor
-
-    dados_tabela.append(["TOTAL", f"{total:.2f}"])
-
-    tabela = Table(dados_tabela)
-    tabela.hAlign = "CENTER"
-
-    tabela.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,0), colors.black),
-        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-
-        ("BACKGROUND", (0,-1), (-1,-1), colors.lightgrey),
-
-        ("GRID", (0,0), (-1,-1), 1, colors.black),
-        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-    ]))
-
-    elementos.append(tabela)
-
-    # ðŸ”¥ OBSERVAÃ‡Ã•ES
-    if observacoes:
-        elementos.append(Spacer(1, 20))
-        elementos.append(Paragraph("<b>ObservaÃ§Ãµes:</b>", styles["Normal"]))
-        elementos.append(Paragraph(observacoes, styles["Normal"]))
-
-    doc.build(elementos)
-    buffer.seek(0)
-
-    return send_file(buffer, as_attachment=True, download_name="orcamento.pdf", mimetype="application/pdf")
-
 @app.route("/orcamento/<int:id>/pdf")
 def baixar_orcamento_pdf(id):
     if not session.get("usuario"):
@@ -11337,182 +11358,6 @@ def registrar_emissao_nota_fiscal(id):
 @app.route("/api/clima")
 def api_clima():
     return obter_resultado_clima_api()
-
-    configuracao = obter_configuracao_empresa()
-    fallback = {
-        "clima": "Clima indisponivel",
-        "temp": "--",
-        "icone": "âš ï¸",
-        "sugestao": "ðŸ’¡ Consulte o radar do clima.",
-    }
-    if not configuracao.get("clima_ativo"):
-        return {
-            "clima": "Clima desativado",
-            "temp": "--",
-            "icone": "â¸ï¸",
-            "sugestao": "ðŸ’¡ Ative o clima nas configuracoes.",
-        }
-
-    agora_ts = time.time()
-    cache = CLIMA_CACHE.get("resultado")
-    ultimo_teste = float(CLIMA_CACHE.get("testado_em") or 0.0)
-
-    if cache and agora_ts - ultimo_teste < CLIMA_CACHE_TTL:
-        return dict(cache)
-
-    try:
-        sessao_http = requests.Session()
-        sessao_http.trust_env = False
-        headers = {
-            "User-Agent": "WagenEstetica/1.0",
-            "Accept": "application/json",
-        }
-        clima_api_url = normalizar_url_clima_api(configuracao.get("clima_api_url"))
-        clima_latitude = configuracao.get("clima_latitude")
-        clima_longitude = configuracao.get("clima_longitude")
-        clima_timezone = quote(
-            normalizar_texto_campo(configuracao.get("clima_timezone")) or "America/Sao_Paulo",
-            safe="",
-        )
-        timeout_segundos = max(
-            3,
-            min(20, converter_inteiro(configuracao.get("clima_timeout_segundos"), 8)),
-        )
-        url_configurada = (
-            clima_api_url
-            .replace("{latitude}", str(clima_latitude))
-            .replace("{longitude}", str(clima_longitude))
-            .replace("{timezone}", clima_timezone)
-        )
-        urls = []
-        if url_configurada:
-            urls.append(url_configurada)
-
-        urls.extend(
-            [
-                (
-                    "https://api.open-meteo.com/v1/forecast"
-                    f"?latitude={clima_latitude}&longitude={clima_longitude}"
-                    "&current=temperature_2m,weather_code"
-                    "&hourly=temperature_2m"
-                    f"&timezone={clima_timezone}"
-                    "&forecast_days=1"
-                ),
-                (
-                    "https://api.open-meteo.com/v1/forecast"
-                    f"?latitude={clima_latitude}&longitude={clima_longitude}"
-                    "&current_weather=true"
-                    f"&timezone={clima_timezone}"
-                    "&forecast_days=1"
-                ),
-            ]
-        )
-        urls_unicas = []
-        vistos = set()
-        for item_url in urls:
-            texto_url = str(item_url or "").strip()
-            if not texto_url or texto_url in vistos:
-                continue
-            vistos.add(texto_url)
-            urls_unicas.append(texto_url)
-
-        dados = None
-        for url in urls_unicas:
-            try:
-                resposta = sessao_http.get(url, timeout=timeout_segundos, headers=headers)
-            except Exception:
-                continue
-
-            if resposta.status_code != 200:
-                continue
-
-            corpo = (resposta.text or "").strip()
-            if not corpo:
-                continue
-
-            try:
-                payload = resposta.json()
-            except Exception:
-                continue
-
-            if not isinstance(payload, dict) or payload.get("error"):
-                continue
-
-            tem_current = bool(payload.get("current") or payload.get("current_weather"))
-            hourly = payload.get("hourly") if isinstance(payload.get("hourly"), dict) else {}
-            tem_hourly = bool(hourly.get("temperature_2m"))
-
-            if tem_current or tem_hourly:
-                dados = payload
-                break
-
-        if not dados:
-            if cache:
-                return dict(cache)
-            return fallback
-
-        cw = dados.get("current") or dados.get("current_weather") or {}
-
-        if not cw and isinstance(dados.get("hourly"), dict):
-            hourly = dados.get("hourly") or {}
-            temperaturas = hourly.get("temperature_2m") or []
-            codigos = hourly.get("weather_code") or hourly.get("weathercode") or []
-            if temperaturas:
-                cw = {
-                    "temperature_2m": temperaturas[0],
-                }
-                if codigos:
-                    cw["weather_code"] = codigos[0]
-
-        if not cw:
-            if cache:
-                return dict(cache)
-            return fallback
-
-        temp = (
-            cw.get("temperature_2m")
-            if cw.get("temperature_2m") is not None
-            else cw.get("temperature", "--")
-        )
-        codigo = (
-            cw.get("weather_code")
-            if cw.get("weather_code") is not None
-            else cw.get("weathercode", 0)
-        )
-
-        # Logica simplificada para recomendacao de lavagem.
-        if codigo is None:
-            icone = "â›…"
-            clima = "Clima carregado"
-            sugestao = "ðŸ’¡ Consulte a previsao completa."
-        elif codigo >= 61:
-            icone = "ðŸŒ§ï¸"
-            clima = "Chuva"
-            sugestao = "ðŸ’¡ Lavagem interna"
-        elif codigo <= 3:
-            icone = "â˜€ï¸"
-            clima = "Tempo limpo"
-            sugestao = "ðŸ’¡ Lavagem completa"
-        else:
-            icone = "â›…"
-            clima = "Nublado"
-            sugestao = "ðŸ’¡ Lavagem simples"
-
-        resultado = {
-            "clima": clima,
-            "temp": temp,
-            "icone": icone,
-            "sugestao": sugestao
-        }
-        CLIMA_CACHE["testado_em"] = agora_ts
-        CLIMA_CACHE["resultado"] = dict(resultado)
-        return resultado
-
-    except Exception as e:
-        print("ERRO CLIMA:", e)
-        if cache:
-            return dict(cache)
-        return fallback
 
 @app.route("/clientes/importar-local")
 def importar_local():
@@ -11990,256 +11835,6 @@ def obter_payload_hud():
 def api_hud():
     return obter_payload_hud()
 
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
-    conn = conectar_somente_leitura()
-    c = conn.cursor()
-
-    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y")
-
-    # ðŸ’° faturamento
-    c.execute("""
-        SELECT SUM(valor) FROM servicos 
-        WHERE status='FINALIZADO' AND entrega LIKE ?
-    """, (hoje + "%",))
-
-    total = c.fetchone()[0] or 0
-
-    # âš™ï¸ em andamento
-    c.execute("SELECT COUNT(*) FROM servicos WHERE COALESCE(TRIM(UPPER(status)), '')='EM ANDAMENTO'")
-    andamento = c.fetchone()[0]
-
-    # ðŸ“¦ finalizados hoje
-    c.execute("""
-        SELECT COUNT(*) FROM servicos 
-        WHERE status='FINALIZADO' AND entrega LIKE ?
-    """, (hoje + "%",))
-
-    quantidade = c.fetchone()[0]
-
-    # ðŸ’µ ticket mÃ©dio
-    ticket = total / quantidade if quantidade > 0 else 0
-
-    # ðŸš¨ atrasados (>2h)
-    c.execute("SELECT entrada FROM servicos WHERE COALESCE(TRIM(UPPER(status)), '')='EM ANDAMENTO'")
-    servicos = c.fetchall()
-
-    atrasados = 0
-    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
-
-    for s in servicos:
-        try:
-            entrada = interpretar_datahora_sistema(s["entrada"])
-            diff = (agora - entrada).total_seconds() if entrada else 0
-
-            if diff > 7200:
-                atrasados += 1
-        except:
-            pass
-
-    c.execute("""
-        SELECT
-            servicos.entrada,
-            servicos.entrega_prevista,
-            tipos_servico.nome AS tipo_nome,
-            veiculos.placa,
-            veiculos.modelo,
-            clientes.nome AS cliente_nome
-        FROM servicos
-        LEFT JOIN tipos_servico ON servicos.tipo_id = tipos_servico.id
-        LEFT JOIN veiculos ON servicos.veiculo_id = veiculos.id
-        LEFT JOIN clientes ON veiculos.cliente_id = clientes.id
-        WHERE COALESCE(TRIM(UPPER(servicos.status)), '')='EM ANDAMENTO'
-    """)
-    entregas_raw = [dict(row) for row in c.fetchall()]
-    resumo_entregas = resumir_entregas_em_andamento(entregas_raw, referencia=agora)
-
-    c.execute("""
-        SELECT
-            COALESCE(COUNT(*), 0) AS total,
-            COALESCE(MAX(id), 0) AS ultimo_id
-        FROM servicos
-    """)
-    servicos_total, servicos_ultimo_id = c.fetchone() or (0, 0)
-
-    c.execute("""
-        SELECT
-            COALESCE(COUNT(*), 0) AS total,
-            COALESCE(MAX(id), 0) AS ultimo_id
-        FROM veiculos
-    """)
-    veiculos_total, veiculos_ultimo_id = c.fetchone() or (0, 0)
-
-    c.execute("""
-        SELECT
-            COALESCE(COUNT(*), 0) AS total,
-            COALESCE(MAX(id), 0) AS ultimo_id
-        FROM clientes
-    """)
-    clientes_total, clientes_ultimo_id = c.fetchone() or (0, 0)
-
-    c.execute("""
-        SELECT
-            COALESCE(COUNT(*), 0) AS total,
-            COALESCE(MAX(id), 0) AS ultimo_id
-        FROM notificacoes
-    """)
-    notificacoes_total, notificacoes_ultimo_id = c.fetchone() or (0, 0)
-
-    c.execute("""
-        SELECT
-            COALESCE(COUNT(*), 0) AS total,
-            COALESCE(MAX(id), 0) AS ultimo_id
-        FROM auditoria
-    """)
-    auditoria_total, auditoria_ultimo_id = c.fetchone() or (0, 0)
-
-    c.execute("""
-        SELECT
-            COALESCE(COUNT(*), 0) AS total,
-            COALESCE(MAX(id), 0) AS ultimo_id
-        FROM usuarios
-    """)
-    usuarios_total, usuarios_ultimo_id = c.fetchone() or (0, 0)
-
-    conn.close()
-    itens_retornos = []
-    retornos_acao_agora = 0
-    retornos_reagendados_vencidos = 0
-    retornos_contatados_hoje = 0
-
-    try:
-        itens_retornos = montar_itens_retornos_comerciais()
-        hoje_data = agora.date()
-        retornos_acao_agora = sum(
-            1 for item in itens_retornos if item.get("mostrar_na_agenda")
-        )
-        retornos_reagendados_vencidos = sum(
-            1 for item in itens_retornos if item.get("reagendamento_vencido")
-        )
-        retornos_contatados_hoje = sum(
-            1
-            for item in itens_retornos
-            if (
-                item.get("status_retorno") == "contatado" and
-                interpretar_datahora_sistema(item.get("ultimo_contato_em")) and
-                interpretar_datahora_sistema(item.get("ultimo_contato_em")).date() == hoje_data
-            )
-        )
-    except Exception as erro:
-        print("ERRO HUD RETORNOS:", erro)
-
-    if retornos_acao_agora > 0:
-        mensagem_retornos_hud = (
-            f"Painel retornos requer atencao: {retornos_acao_agora} cliente(s)"
-        )
-        if retornos_reagendados_vencidos > 0:
-            mensagem_retornos_hud += (
-                f" | {retornos_reagendados_vencidos} reagendado(s) vencido(s)"
-            )
-    elif retornos_contatados_hoje > 0:
-        mensagem_retornos_hud = (
-            f"Painel retornos em dia | {retornos_contatados_hoje} contato(s) hoje"
-        )
-    else:
-        mensagem_retornos_hud = "Painel retornos em dia"
-
-    token_bruto = "|".join(
-        str(v)
-        for v in (
-            servicos_total,
-            servicos_ultimo_id,
-            veiculos_total,
-            veiculos_ultimo_id,
-            clientes_total,
-            clientes_ultimo_id,
-            notificacoes_total,
-            notificacoes_ultimo_id,
-            auditoria_total,
-            auditoria_ultimo_id,
-            usuarios_total,
-            usuarios_ultimo_id,
-        )
-    )
-    sync_token = hashlib.sha1(token_bruto.encode("utf-8")).hexdigest()
-
-    entrega_mensagem = "Entrega combinada em dia"
-    if resumo_entregas["total"] > 0:
-        if resumo_entregas["vencidas"] > 0:
-            entrega_mensagem = (
-                f"Entrega combinada: {resumo_entregas['vencidas']} vencida(s)"
-            )
-            if resumo_entregas["proxima"]:
-                entrega_mensagem += (
-                    f" | proxima em {formatar_duracao_segundos(resumo_entregas['proxima']['segundos'])}"
-                )
-        elif resumo_entregas["proxima"]:
-            entrega_mensagem = (
-                "Entrega combinada: proxima em "
-                f"{formatar_duracao_segundos(resumo_entregas['proxima']['segundos'])}"
-            )
-            if resumo_entregas["proxima"]["placa"]:
-                entrega_mensagem += f" ({resumo_entregas['proxima']['placa']})"
-        elif resumo_entregas["sem_horario"] > 0:
-            entrega_mensagem = (
-                f"Entrega combinada: {resumo_entregas['sem_horario']} sem horario"
-            )
-        else:
-            entrega_mensagem = (
-                f"Entrega combinada: {resumo_entregas['com_horario']} agendada(s)"
-            )
-
-    status_banco = obter_status_banco_online()
-    banco_online_ativo = bool(status_banco.get("conectado"))
-    banco_online_backend = status_banco.get("backend_label") or "Supabase / PostgreSQL"
-    banco_online_resumo = (
-        "Banco online ativo"
-        if banco_online_ativo
-        else "Banco online indisponivel"
-    )
-    banco_online_mensagem = (
-        f"Banco online ativo e gravando em tempo real ({banco_online_backend})"
-        if banco_online_ativo
-        else (status_banco.get("mensagem") or "Banco online indisponivel")
-    )
-
-    resultado = {
-        "total": round(total, 2),
-        "andamento": andamento,
-        "atrasados": atrasados,
-        "ticket": round(ticket, 2),
-        "entregas_ativas": resumo_entregas["total"],
-        "entregas_com_horario": resumo_entregas["com_horario"],
-        "entregas_sem_horario": resumo_entregas["sem_horario"],
-        "entregas_vencidas": resumo_entregas["vencidas"],
-        "entrega_proxima_em_minutos": resumo_entregas["proxima"]["minutos"] if resumo_entregas["proxima"] else None,
-        "entrega_proxima_placa": resumo_entregas["proxima"]["placa"] if resumo_entregas["proxima"] else "",
-        "entrega_proxima_hora": resumo_entregas["proxima"]["entrega_prevista"].strftime("%H:%M") if resumo_entregas["proxima"] else "",
-        "entrega_mensagem": entrega_mensagem,
-        "retornos_acao_agora": retornos_acao_agora,
-        "retornos_reagendados_vencidos": retornos_reagendados_vencidos,
-        "retornos_contatados_hoje": retornos_contatados_hoje,
-        "retornos_mensagem": mensagem_retornos_hud,
-        "banco_online_ativo": banco_online_ativo,
-        "banco_online_resumo": banco_online_resumo,
-        "banco_online_mensagem": banco_online_mensagem,
-        "banco_online_backend_label": banco_online_backend,
-        "versao": obter_versao_sistema(),
-        "usuario": session.get("usuario") or "",
-        "usuario_nome": session.get("usuario_nome") or session.get("usuario") or "",
-        "usuario_iniciais": session.get("usuario_iniciais") or obter_iniciais_usuario(
-            session.get("usuario_nome"),
-            session.get("usuario"),
-        ),
-        "usuario_foto_url": session.get("usuario_foto_url") or "",
-        "sync_token": sync_token,
-    }
-    HUD_CACHE["testado_em"] = agora_cache_ts
-    HUD_CACHE["usuario"] = usuario_cache
-    HUD_CACHE["resultado"] = dict(resultado)
-    return resultado
-
 def obter_payload_status_sync():
     if not session.get("usuario"):
         return {"status": "erro", "mensagem": "", "id": 0}
@@ -12316,31 +11911,6 @@ def api_home_snapshot():
     HOME_SNAPSHOT_CACHE["usuario"] = usuario_cache
     HOME_SNAPSHOT_CACHE["resultado"] = dict(resultado)
     return jsonify(resultado)
-
-    conn = conectar_somente_leitura()
-    c = conn.cursor()
-
-    c.execute("""
-        SELECT id, ultima_mensagem, ultimo_status
-        FROM sincronizacoes_clientes
-        ORDER BY id DESC
-        LIMIT 1
-    """)
-
-    row = c.fetchone()
-
-    if not row:
-        conn.close()
-        return jsonify({"status": "vazio"})
-
-    # ðŸ”¥ limpa a mensagem depois de ler (ANTI-SPAM)
-    conn.close()
-
-    return jsonify({
-        "status": row["ultimo_status"],
-        "mensagem": row["ultima_mensagem"],
-        "id": row["id"],
-    })
 
 @app.route("/editar_servico_inline/<int:id>", methods=["POST"])
 def editar_servico_inline(id):
@@ -12696,6 +12266,7 @@ def configuracoes():
     )
     pode_gerenciar_usuarios = usuario_gerencia_acessos() and not senha_pendente
     pode_gerenciar_banco_online = usuario_gerencia_banco_online()
+    pode_gerenciar_config_sistema = usuario_gerencia_configuracao_sistema() and not senha_pendente
     pode_gerenciar_base = usuario_desenvolvedor() and not senha_pendente
     usuarios = []
     configuracao_empresa = {}
@@ -12727,12 +12298,14 @@ def configuracoes():
             print("ERRO CONFIG BANCO FORM:", erro)
             banco_config = {}
 
-    if pode_gerenciar_base:
+    if pode_gerenciar_config_sistema:
         try:
             configuracao_empresa = obter_configuracao_empresa()
         except Exception as erro:
             print("ERRO CONFIG EMPRESA:", erro)
             configuracao_empresa = empresa_snapshot_padrao()
+
+    if pode_gerenciar_base:
 
         try:
             backup_config = obter_configuracao_backup()
@@ -12744,13 +12317,13 @@ def configuracoes():
             backup_status = obter_status_backup_banco()
         except Exception as erro:
             print("ERRO CONFIG BACKUP STATUS:", erro)
-            backup_status = {}
+            backup_status = status_backup_banco_padrao()
 
         try:
             arquivos_status = obter_status_arquivos()
         except Exception as erro:
             print("ERRO CONFIG ARQUIVOS:", erro)
-            arquivos_status = {}
+            arquivos_status = status_arquivos_padrao()
 
         try:
             backups_disponiveis = listar_arquivos_backup_banco()
@@ -12782,6 +12355,7 @@ def configuracoes():
         },
         usuarios=usuarios,
         gerencia_usuarios_logado=pode_gerenciar_usuarios,
+        configuracao_sistema_logado=pode_gerenciar_config_sistema,
         desenvolvedor_logado=pode_gerenciar_base,
         banco_online_logado=pode_gerenciar_banco_online,
         configuracao_empresa=configuracao_empresa,
@@ -12802,8 +12376,8 @@ def salvar_configuracao_versao():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_desenvolvedor():
-        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem alterar a versao do sistema.")
+    if not usuario_gerencia_configuracao_sistema():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem alterar a versao do sistema.")
         return redirect("/configuracoes")
 
     try:
@@ -12831,8 +12405,8 @@ def salvar_configuracao_clima():
         return redirect("/login")
 
     sincronizar_sessao_usuario()
-    if not usuario_desenvolvedor():
-        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem alterar o clima do sistema.")
+    if not usuario_gerencia_configuracao_sistema():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem alterar o clima do sistema.")
         return redirect("/configuracoes")
 
     try:
@@ -12964,6 +12538,8 @@ def migrar_banco_para_supabase():
             "DATABASE_ONLINE_MIGRADO": "1",
         })
         atualizar_configuracao_banco_runtime(migrado="1")
+        limpar_cache_banco_online()
+        limpar_caches_interface()
         registrar_auditoria(
             "migracao_banco_online",
             "banco",

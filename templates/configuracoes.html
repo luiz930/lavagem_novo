@@ -68,7 +68,7 @@
     </div>
 </div>
 
-{% if desenvolvedor_logado %}
+{% if configuracao_sistema_logado %}
 <div class="page-card top-spacing">
     <p class="pill-label">Versao do sistema</p>
     <h2 class="section-title top-spacing">{{ configuracao_empresa.versao_sistema_label }}</h2>
@@ -90,7 +90,7 @@
 </div>
 {% endif %}
 
-{% if desenvolvedor_logado %}
+{% if configuracao_sistema_logado %}
 <div class="page-card top-spacing">
     <p class="pill-label">Clima do HUD</p>
     <h2 class="section-title top-spacing">API e localizacao</h2>
@@ -239,7 +239,7 @@
                         readonly
                         data-database-url-input
                     >
-                    <button type="button" class="password-toggle-button" data-toggle-database-url>Editar conexão</button>
+                    <button type="button" class="password-toggle-button" data-toggle-database-url>Editar conexao</button>
                 </div>
             </div>
 
@@ -253,7 +253,7 @@
                 >
                 Migrar o banco local automaticamente ao ativar o Supabase
             </label>
-            <p class="muted-text">A migração manual continua disponivel. Esse modo automatico roda quando a conexao online e ativada pela primeira vez.</p>
+            <p class="muted-text">A migracao manual continua disponivel. Esse modo automatico roda quando a conexao online e ativada pela primeira vez.</p>
 
             <div class="actions-row actions-row--left">
                 <button type="submit">Salvar conexao</button>
@@ -653,12 +653,12 @@ if (databaseUrlInput && databaseUrlToggle) {
         const bloqueado = databaseUrlInput.hasAttribute("readonly");
         if (bloqueado) {
             databaseUrlInput.removeAttribute("readonly");
-            databaseUrlToggle.textContent = "Travar conexão";
+            databaseUrlToggle.textContent = "Travar conexao";
             databaseUrlInput.focus();
             databaseUrlInput.select();
         } else {
             databaseUrlInput.setAttribute("readonly", "readonly");
-            databaseUrlToggle.textContent = "Editar conexão";
+            databaseUrlToggle.textContent = "Editar conexao";
         }
     });
 }
