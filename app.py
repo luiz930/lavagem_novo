@@ -215,6 +215,7 @@ STRICT_ONLINE_DATABASE_RAW = (os.environ.get("STRICT_ONLINE_DATABASE") or "").st
 SESSION_COOKIE_SECURE_RAW = (os.environ.get("SESSION_COOKIE_SECURE") or "").strip().lower()
 CSRF_PROTECTION_RAW = (os.environ.get("CSRF_PROTECTION") or "0").strip().lower()
 FLASK_SECRET_KEY_RAW = (os.environ.get("FLASK_SECRET_KEY") or "").strip()
+FLASK_SECRET_KEY_FALLBACK = "wagen-estetica-local-secret"
 TELEMETRIA_ATIVA_RAW = (os.environ.get("TELEMETRIA_ATIVA") or "1").strip().lower()
 
 UPLOAD_FOLDER = "static/uploads"
@@ -2869,7 +2870,7 @@ def adicionar_coluna_se_preciso(cursor, tabela, definicao_coluna):
 app = Flask(__name__)
 app.config.update(
     build_flask_security_config(
-        FLASK_SECRET_KEY_RAW or None,
+        FLASK_SECRET_KEY_RAW or FLASK_SECRET_KEY_FALLBACK,
         secure_cookie=SESSION_COOKIE_SECURE_RAW in {"1", "true", "yes", "on"},
     )
 )

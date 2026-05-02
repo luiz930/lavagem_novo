@@ -1,7 +1,12 @@
 import sqlite3
 import unittest
 
-from core.product_foundation import build_brand_context, run_product_foundation_migrations
+from core.product_foundation import (
+    apply_empresa_indexes,
+    apply_extended_empresa_scope,
+    build_brand_context,
+    run_product_foundation_migrations,
+)
 
 
 def add_column_if_needed(cursor, tabela, definicao_coluna):
@@ -112,6 +117,59 @@ class ProductFoundationMigrationsTests(unittest.TestCase):
             if indice[2] and colunas == ["placa"]:
                 unico_global_veiculos.append(nome)
         self.assertEqual(unico_global_veiculos, [])
+
+    def test_postgres_helpers_do_not_use_sqlite_metadata(self):
+        class FakeCursor:
+            backend = "postgres"
+
+            def __init__(self):
+                self.commands = []
+
+            def execute(self, sql, params=None):
+                texto = str(sql)
+                self.commands.append((texto, tuple(params or ())))
+                if "sqlite_master" in texto or "PRAGMA " in texto.upper():
+                    raise AssertionError("SQLite metadata SQL should not run on Postgres")
+                self._last_sql = texto
+                self._last_params = tuple(params or ())
+
+            def fetchone(self):
+                sql = getattr(self, "_last_sql", "")
+                params = getattr(self, "_last_params", ())
+                if "information_schema.tables" in sql:
+                    return (1,) if params and params[0] == "historico_lavagens_sync" else None
+                return None
+
+            def fetchall(self):
+                sql = getattr(self, "_last_sql", "")
+                params = getattr(self, "_last_params", ())
+                if "information_schema.columns" in sql:
+                    tabela = params[0] if params else ""
+                    colunas_por_tabela = {
+                        "clientes": [("empresa_id",), ("telefone",)],
+                        "veiculos": [("empresa_id",), ("placa",)],
+                        "servicos": [("empresa_id",), ("status",), ("id",), ("veiculo_id",)],
+                        "fotos": [("empresa_id",), ("servico_id",)],
+                        "retornos_clientes": [("empresa_id",), ("placa",)],
+                        "historico_lavagens_sync": [("empresa_id",), ("placa",)],
+                        "sincronizacoes_clientes": [("empresa_id",), ("ativo",), ("proximo_sync_em",)],
+                    }
+                    return colunas_por_tabela.get(tabela, [])
+                return []
+
+        cursor = FakeCursor()
+
+        def add_column_fake(_cursor, _tabela, _definicao):
+            return None
+
+        apply_extended_empresa_scope(cursor, add_column_fake)
+        apply_empresa_indexes(cursor)
+
+        comandos = "\n".join(sql for sql, _ in cursor.commands)
+        self.assertNotIn("sqlite_master", comandos)
+        self.assertNotIn("PRAGMA", comandos.upper())
+        self.assertIn("information_schema.tables", comandos)
+        self.assertIn("information_schema.columns", comandos)
 
 
 if __name__ == "__main__":

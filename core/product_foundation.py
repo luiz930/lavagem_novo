@@ -205,10 +205,7 @@ def apply_empresa_scope(cursor, add_column):
 
 
 def apply_extended_empresa_scope(cursor, add_column):
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='historico_lavagens_sync'"
-    )
-    if not cursor.fetchone():
+    if not _table_exists(cursor, "historico_lavagens_sync"):
         return
     add_column(cursor, "historico_lavagens_sync", "empresa_id INTEGER DEFAULT 1")
     cursor.execute(
@@ -281,8 +278,7 @@ def apply_branding_and_storage(cursor, add_column):
 
 def apply_empresa_indexes(cursor):
     def colunas_da_tabela(tabela):
-        cursor.execute(f"PRAGMA table_info({tabela})")
-        return {row[1] for row in cursor.fetchall()}
+        return _table_columns(cursor, tabela)
 
     def criar_indice_se_possivel(sql, tabela, *colunas):
         existentes = colunas_da_tabela(tabela)
@@ -361,12 +357,60 @@ def _backend_name(cursor):
     return getattr(cursor, "backend", "") or "sqlite"
 
 
-def _sqlite_table_exists(cursor, tabela):
+def _table_exists(cursor, tabela):
+    backend = _backend_name(cursor)
+    if backend == "postgres":
+        cursor.execute(
+            """
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name = ?
+            LIMIT 1
+            """,
+            (tabela,),
+        )
+        return cursor.fetchone() is not None
     cursor.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
         (tabela,),
     )
     return cursor.fetchone() is not None
+
+
+def _table_columns(cursor, tabela):
+    backend = _backend_name(cursor)
+    if backend == "postgres":
+        cursor.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = ?
+            ORDER BY ordinal_position
+            """,
+            (tabela,),
+        )
+        colunas = []
+        for row in cursor.fetchall():
+            if hasattr(row, "keys"):
+                colunas.append(str(row["column_name"]))
+            else:
+                colunas.append(str(row[0]))
+        return set(colunas)
+
+    cursor.execute(f"PRAGMA table_info({_quote_ident(tabela)})")
+    colunas = []
+    for row in cursor.fetchall():
+        if hasattr(row, "keys"):
+            colunas.append(str(row["name"]))
+        else:
+            colunas.append(str(row[1]))
+    return set(colunas)
+
+
+def _sqlite_table_exists(cursor, tabela):
+    return _table_exists(cursor, tabela)
 
 
 def _sqlite_column_sql(coluna, total_pk_colunas):
