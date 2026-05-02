@@ -3,13 +3,13 @@
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta charset="UTF-8">
-<title>Gestão Estética</title>
+<title>{{ site_title }}</title>
 
-<link rel="icon" href="/static/favicon.jpg">
-<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="icon" href="{{ brand_logo_url or '/static/favicon.jpg' }}">
+<link rel="apple-touch-icon" href="{{ brand_logo_url or '/static/icon-192.jpg' }}">
 
 <link rel="manifest" href="/static/manifest.json">
-<meta name="theme-color" content="#facc15">
+<meta name="theme-color" content="{{ brand_primary_color }}">
 
 <script>
 if ("serviceWorker" in navigator) {
@@ -19,14 +19,26 @@ if ("serviceWorker" in navigator) {
 </script>
 
 <style>
+:root {
+    --bg: {{ brand_background_color }};
+    --surface: {{ brand_surface_color }};
+    --surface-soft: {{ brand_secondary_color }};
+    --text: {{ brand_text_color }};
+    --primary: {{ brand_primary_color }};
+    --primary-strong: {{ brand_primary_color }};
+    --primary-rgb: {{ brand_primary_rgb }};
+    --surface-rgb: {{ brand_surface_rgb }};
+    --background-rgb: {{ brand_background_rgb }};
+    --text-rgb: {{ brand_text_rgb }};
+}
 
 .popup {
     position: fixed;
     bottom: 20px;
     right: 20px;
     width: min(92vw, 380px);
-    background: #111;
-    color: #fff;
+    background: var(--surface);
+    color: var(--text);
     padding: 15px 20px;
     border-radius: 10px;
     opacity: 0;
@@ -57,8 +69,8 @@ if ("serviceWorker" in navigator) {
 /* ================= BASE ================= */
 body {
     font-family: Arial;
-    background: #0b0b0b;
-    color: white;
+    background: var(--bg);
+    color: var(--text);
     text-align: center;
     -webkit-tap-highlight-color: transparent;
     margin: 0;
@@ -75,14 +87,14 @@ button {
     margin: 5px;
     border-radius: 6px;
     border: none;
-    background: #facc15;
-    color: black;
+    background: var(--primary);
+    color: var(--surface);
     font-weight: bold;
     cursor: pointer;
 }
 
 button:hover {
-    background: #eab308;
+    filter: saturate(1.06);
 }
 
 /* ================= INPUTS ================= */
@@ -91,8 +103,8 @@ input, select {
     margin: 5px;
     border-radius: 6px;
     border: none;
-    background: #1f2937;
-    color: white;
+    background: var(--surface-soft);
+    color: var(--text);
     font-size: 16px;
     width: 100%;
     max-width: 320px;
@@ -114,9 +126,9 @@ input, select {
     text-align: center;
     padding: 0;
     margin: 0;
-    background: #facc15;
+    background: var(--primary);
     border-radius: 6px;
-    box-shadow: 0 0 10px rgba(250, 204, 21, 0.6);
+    box-shadow: 0 0 10px rgba(var(--primary-rgb), 0.6);
 }
 
 /* ================= SIDEBAR ================= */
@@ -128,8 +140,8 @@ input, select {
     width: 250px;
     height: 100%;
 
-    background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
-    border-right: 2px solid #facc15;
+    background: linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
+    border-right: 2px solid var(--primary);
     box-shadow: 14px 0 30px rgba(0, 0, 0, 0.35);
     padding: 24px 14px;
 
@@ -151,9 +163,9 @@ input, select {
 .sidebar-header {
     margin: 28px 6px 4px;
     padding: 18px 14px 20px;
-    border: 1px solid rgba(250, 204, 21, 0.22);
+    border: 1px solid rgba(var(--primary-rgb), 0.22);
     border-radius: 18px;
-    background: linear-gradient(180deg, rgba(250, 204, 21, 0.14), rgba(250, 204, 21, 0.03));
+    background: linear-gradient(180deg, rgba(var(--primary-rgb), 0.14), rgba(var(--primary-rgb), 0.03));
     text-align: center;
 }
 
@@ -163,21 +175,21 @@ input, select {
     display: block;
     object-fit: cover;
     border-radius: 50%;
-    border: 3px solid rgba(250, 204, 21, 0.45);
-    box-shadow: 0 12px 25px rgba(250, 204, 21, 0.15);
+    border: 3px solid rgba(var(--primary-rgb), 0.45);
+    box-shadow: 0 12px 25px rgba(var(--primary-rgb), 0.15);
     margin: 0 auto 14px;
 }
 
 .sidebar-title {
     margin: 0;
-    color: #ffffff;
+    color: var(--text);
     font-size: 20px;
     font-weight: 700;
 }
 
 .sidebar-subtitle {
     margin: 6px 0 0;
-    color: rgba(250, 204, 21, 0.82);
+    color: rgba(var(--primary-rgb), 0.82);
     font-size: 11px;
     letter-spacing: 1.6px;
     text-transform: uppercase;
@@ -567,9 +579,9 @@ input[type="file"] {
     margin: 28px auto 0;
     padding: 18px 22px;
     border-radius: 18px;
-    border: 1px solid rgba(250, 204, 21, 0.18);
-    background: linear-gradient(180deg, rgba(17, 24, 39, 0.9), rgba(15, 23, 42, 0.94));
-    color: #9ca3af;
+    border: 1px solid rgba(var(--primary-rgb), 0.18);
+    background: linear-gradient(180deg, rgba(var(--surface-rgb), 0.9), rgba(var(--background-rgb), 0.94));
+    color: rgba(var(--text-rgb), 0.68);
     text-align: center;
     font-size: 0.92rem;
     line-height: 1.6;
@@ -590,8 +602,8 @@ input[type="file"] {
     bottom: 10px;
     right: 10px;
 
-    background: #111827;
-    border: 2px solid #facc15;
+    background: var(--surface);
+    border: 2px solid var(--primary);
     border-radius: 10px;
 
     padding: 12px 12px 10px;
@@ -599,7 +611,7 @@ input[type="file"] {
     font-size: 12px;
     line-height: 1.45;
 
-    box-shadow: 0 0 12px rgba(250, 204, 21, 0.28);
+    box-shadow: 0 0 12px rgba(var(--primary-rgb), 0.28);
 
     width: 276px;
     max-width: min(88vw, 276px);
@@ -627,9 +639,9 @@ input[type="file"] {
     width: 24px;
     height: 24px;
     border-radius: 999px;
-    border: 1px solid rgba(250, 204, 21, 0.45);
-    background: rgba(17, 24, 39, 0.92);
-    color: #facc15;
+    border: 1px solid rgba(var(--primary-rgb), 0.45);
+    background: rgba(var(--surface-rgb), 0.92);
+    color: var(--primary);
     padding: 0;
     margin: 0;
     display: inline-flex;
@@ -643,8 +655,8 @@ input[type="file"] {
 }
 
 .hud-toggle-button:hover {
-    background: rgba(31, 41, 55, 0.98);
-    box-shadow: 0 0 10px rgba(250, 204, 21, 0.18);
+    background: rgba(var(--surface-rgb), 0.98);
+    box-shadow: 0 0 10px rgba(var(--primary-rgb), 0.18);
 }
 
 .hud-content {
@@ -845,10 +857,10 @@ input[type="file"] {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: #111827;
-    border: 2px solid #facc15;
-    box-shadow: 0 0 14px rgba(250, 204, 21, 0.28);
-    color: #facc15;
+    background: var(--surface);
+    border: 2px solid var(--primary);
+    box-shadow: 0 0 14px rgba(var(--primary-rgb), 0.28);
+    color: var(--primary);
     font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.8px;
@@ -1189,9 +1201,9 @@ input[type="file"] {
 <div class="sidebar">
 
 <div class="sidebar-header">
-<img src="/static/logo.jpg" class="sidebar-logo">
-<h2 class="sidebar-title">Wagen Estetica</h2>
-<p class="sidebar-subtitle">Gestao Automotiva</p>
+<img src="{{ brand_logo_url or '/static/logo.jpg' }}" class="sidebar-logo" alt="{{ brand_name }}">
+<h2 class="sidebar-title">{{ brand_name }}</h2>
+<p class="sidebar-subtitle">{{ brand_subtitle }}</p>
 </div>
 
 <div class="sidebar-nav">
@@ -1222,6 +1234,7 @@ input[type="file"] {
 <a href="/clima"><button><span>&#9729;</span> Clima</button></a>
 <a href="/auditoria"><button><span>&#128269;</span> Auditoria</button></a>
 <a href="/changelog"><button><span>&#128221;</span> Changelog</button></a>
+<a href="/configuracoes/site"><button><span>&#127912;</span> Configuracoes do site</button></a>
 <a href="/configuracoes"><button><span>&#9881;</span> Configurações</button></a>
 </div>
 <a href="/logout">
@@ -1253,7 +1266,7 @@ input[type="file"] {
 ☰
 </button>
 
-<h1>🚗 Wagen Estética Automotiva</h1>
+<h1>🚗 {{ brand_name }}</h1>
 
 <!-- BUSCA -->
 <div class="search-panel">
@@ -1584,7 +1597,7 @@ Hidro vidros {{ "Sim" if s.hidro_vidros == "Sim" else "Nao" }}
 </div>
 
 <footer class="site-footer">
-Desenvolvido por Luiz Henrique | Qualquer erro Contato o Desenvolvedor | Wagen Estetica Automotiva | {{ app_version }} | Direitos Reservados.
+{{ site_footer_text }} | {{ app_version }}
 </footer>
 
 <script>

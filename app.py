@@ -3041,6 +3041,11 @@ def contexto_produto_padrao():
             "marca_subtitulo": "Gestao Estetica",
             "marca_cor_primaria": "#facc15",
             "marca_cor_secundaria": "#111827",
+            "marca_cor_fundo": "#0b0b0b",
+            "marca_cor_superficie": "#111827",
+            "marca_cor_texto": "#f9fafb",
+            "site_titulo": "Gestao Estetica",
+            "site_rodape_texto": "Desenvolvido por Luiz Henrique | Qualquer Erro Contate o Desenvolvedor | Wagen Estetica Automotiva | Direitos Reservados.",
             "storage_provider": "database",
             "licenca_plano": "starter",
             "licenca_status": "trial",
@@ -3058,7 +3063,31 @@ def carregar_contexto_produto():
 
     def carregar(conn):
         c = conn.cursor()
-        c.execute("SELECT * FROM configuracao_empresa WHERE id=1")
+        c.execute(
+            """
+            SELECT
+                id,
+                empresa_id,
+                marca_nome,
+                marca_subtitulo,
+                marca_logo_url,
+                CASE WHEN marca_logo_blob IS NOT NULL THEN 1 ELSE 0 END AS marca_logo_tem_blob,
+                marca_cor_primaria,
+                marca_cor_secundaria,
+                marca_cor_fundo,
+                marca_cor_superficie,
+                marca_cor_texto,
+                site_titulo,
+                site_rodape_texto,
+                whitelabel_ativo,
+                storage_provider,
+                licenca_plano,
+                licenca_status,
+                onboarding_concluido
+            FROM configuracao_empresa
+            WHERE id=1
+            """
+        )
         config = row_para_dict(c.fetchone())
 
         empresa_id = int(config.get("empresa_id") or 1)
@@ -3146,6 +3175,11 @@ def obter_versao_sistema():
 @app.context_processor
 def inject_global_template_context():
     produto = carregar_contexto_produto()
+    produto["brand_primary_rgb"] = cor_hex_para_rgb_css(produto.get("brand_primary_color"), "#facc15")
+    produto["brand_secondary_rgb"] = cor_hex_para_rgb_css(produto.get("brand_secondary_color"), "#111827")
+    produto["brand_background_rgb"] = cor_hex_para_rgb_css(produto.get("brand_background_color"), "#0b0b0b")
+    produto["brand_surface_rgb"] = cor_hex_para_rgb_css(produto.get("brand_surface_color"), "#111827")
+    produto["brand_text_rgb"] = cor_hex_para_rgb_css(produto.get("brand_text_color"), "#f9fafb")
     return {
         "app_version": obter_versao_sistema(),
         "csrf_token": lambda: issue_csrf_token(session),
@@ -6727,6 +6761,20 @@ def formatar_numero_documento(numero, tamanho=6):
     except Exception:
         return str(numero or "-")
 
+def normalizar_cor_hex(valor, padrao):
+    texto = normalizar_texto_campo(valor)
+    if not texto:
+        return padrao
+    if not texto.startswith("#"):
+        texto = f"#{texto}"
+    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", texto):
+        return padrao
+    return texto.lower()
+
+def cor_hex_para_rgb_css(valor, padrao):
+    cor = normalizar_cor_hex(valor, padrao).lstrip("#")
+    return f"{int(cor[0:2], 16)}, {int(cor[2:4], 16)}, {int(cor[4:6], 16)}"
+
 def empresa_snapshot_padrao():
     return {
         "razao_social": "",
@@ -6754,6 +6802,16 @@ def empresa_snapshot_padrao():
         "clima_longitude": -51.13,
         "clima_timezone": "America/Sao_Paulo",
         "clima_timeout_segundos": 8,
+        "marca_nome": "Wagen Estetica Automotiva",
+        "marca_subtitulo": "Gestao Estetica",
+        "marca_logo_url": "",
+        "marca_cor_primaria": "#facc15",
+        "marca_cor_secundaria": "#111827",
+        "marca_cor_fundo": "#0b0b0b",
+        "marca_cor_superficie": "#111827",
+        "marca_cor_texto": "#f9fafb",
+        "site_titulo": "Gestao Estetica",
+        "site_rodape_texto": "Desenvolvido por Luiz Henrique | Qualquer Erro Contate o Desenvolvedor | Wagen Estetica Automotiva | Direitos Reservados.",
     }
 
 def obter_configuracao_empresa():
@@ -6786,6 +6844,16 @@ def obter_configuracao_empresa():
     dados["clima_longitude"] = converter_valor_numerico(dados.get("clima_longitude"))
     dados["clima_timezone"] = normalizar_texto_campo(dados.get("clima_timezone")) or "America/Sao_Paulo"
     dados["clima_timeout_segundos"] = max(3, min(20, converter_inteiro(dados.get("clima_timeout_segundos"), 8)))
+    dados["marca_nome"] = normalizar_texto_campo(dados.get("marca_nome")) or "Wagen Estetica Automotiva"
+    dados["marca_subtitulo"] = normalizar_texto_campo(dados.get("marca_subtitulo")) or "Gestao Estetica"
+    dados["marca_logo_url"] = normalizar_texto_campo(dados.get("marca_logo_url"))
+    dados["marca_cor_primaria"] = normalizar_cor_hex(dados.get("marca_cor_primaria"), "#facc15")
+    dados["marca_cor_secundaria"] = normalizar_cor_hex(dados.get("marca_cor_secundaria"), "#111827")
+    dados["marca_cor_fundo"] = normalizar_cor_hex(dados.get("marca_cor_fundo"), "#0b0b0b")
+    dados["marca_cor_superficie"] = normalizar_cor_hex(dados.get("marca_cor_superficie"), "#111827")
+    dados["marca_cor_texto"] = normalizar_cor_hex(dados.get("marca_cor_texto"), "#f9fafb")
+    dados["site_titulo"] = normalizar_texto_campo(dados.get("site_titulo")) or "Gestao Estetica"
+    dados["site_rodape_texto"] = normalizar_texto_campo(dados.get("site_rodape_texto")) or "Desenvolvido por Luiz Henrique | Qualquer Erro Contate o Desenvolvedor | Wagen Estetica Automotiva | Direitos Reservados."
     return dados
 
 def salvar_configuracao_versao_form(form):
@@ -7201,6 +7269,111 @@ def salvar_configuracao_clima_form(form):
         "clima_longitude": clima_longitude,
         "clima_timezone": clima_timezone,
         "clima_timeout_segundos": clima_timeout_segundos,
+    }
+
+
+def salvar_configuracao_site_form(form, files):
+    atual = obter_configuracao_empresa()
+    remover_logo = bool_config_ativo(form.get("remover_logo"))
+    logo_info = preparar_logo_site_upload(files.get("marca_logo"))
+
+    marca_nome = normalizar_texto_campo(form.get("marca_nome")) or "Wagen Estetica Automotiva"
+    marca_subtitulo = normalizar_texto_campo(form.get("marca_subtitulo")) or "Gestao Estetica"
+    site_titulo = normalizar_texto_campo(form.get("site_titulo")) or "Gestao Estetica"
+    site_rodape_texto = (
+        normalizar_texto_campo(form.get("site_rodape_texto"))
+        or f"Desenvolvido por Luiz Henrique | Qualquer Erro Contate o Desenvolvedor | {marca_nome} | Direitos Reservados."
+    )
+    marca_logo_url = normalizar_texto_campo(form.get("marca_logo_url"))
+    marca_cor_primaria = normalizar_cor_hex(form.get("marca_cor_primaria"), "#facc15")
+    marca_cor_secundaria = normalizar_cor_hex(form.get("marca_cor_secundaria"), "#111827")
+    marca_cor_fundo = normalizar_cor_hex(form.get("marca_cor_fundo"), "#0b0b0b")
+    marca_cor_superficie = normalizar_cor_hex(form.get("marca_cor_superficie"), "#111827")
+    marca_cor_texto = normalizar_cor_hex(form.get("marca_cor_texto"), "#f9fafb")
+    whitelabel_ativo = 1 if bool_config_ativo(form.get("whitelabel_ativo")) else 0
+
+    logo_blob = atual.get("marca_logo_blob")
+    logo_mime_type = atual.get("marca_logo_mime_type")
+    logo_arquivo_nome = atual.get("marca_logo_arquivo_nome")
+
+    if remover_logo:
+        logo_blob = None
+        logo_mime_type = ""
+        logo_arquivo_nome = ""
+        marca_logo_url = ""
+
+    if logo_info:
+        logo_blob = logo_info.get("arquivo_blob")
+        logo_mime_type = logo_info.get("mime_type")
+        logo_arquivo_nome = logo_info.get("arquivo_nome")
+
+    conn = conectar()
+    c = conn.cursor()
+    c.execute(
+        """
+        INSERT INTO configuracao_empresa (
+            id, marca_nome, marca_subtitulo, marca_logo_url,
+            marca_logo_blob, marca_logo_mime_type, marca_logo_arquivo_nome,
+            marca_cor_primaria, marca_cor_secundaria, marca_cor_fundo,
+            marca_cor_superficie, marca_cor_texto, site_titulo,
+            site_rodape_texto, whitelabel_ativo, atualizado_em
+        )
+        VALUES (
+            1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+        ON CONFLICT(id) DO UPDATE SET
+            marca_nome=excluded.marca_nome,
+            marca_subtitulo=excluded.marca_subtitulo,
+            marca_logo_url=excluded.marca_logo_url,
+            marca_logo_blob=excluded.marca_logo_blob,
+            marca_logo_mime_type=excluded.marca_logo_mime_type,
+            marca_logo_arquivo_nome=excluded.marca_logo_arquivo_nome,
+            marca_cor_primaria=excluded.marca_cor_primaria,
+            marca_cor_secundaria=excluded.marca_cor_secundaria,
+            marca_cor_fundo=excluded.marca_cor_fundo,
+            marca_cor_superficie=excluded.marca_cor_superficie,
+            marca_cor_texto=excluded.marca_cor_texto,
+            site_titulo=excluded.site_titulo,
+            site_rodape_texto=excluded.site_rodape_texto,
+            whitelabel_ativo=excluded.whitelabel_ativo,
+            atualizado_em=excluded.atualizado_em
+        """,
+        (
+            marca_nome,
+            marca_subtitulo,
+            marca_logo_url,
+            logo_blob,
+            logo_mime_type,
+            logo_arquivo_nome,
+            marca_cor_primaria,
+            marca_cor_secundaria,
+            marca_cor_fundo,
+            marca_cor_superficie,
+            marca_cor_texto,
+            site_titulo,
+            site_rodape_texto,
+            whitelabel_ativo,
+            agora_iso(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    limpar_caches_interface()
+
+    return {
+        "marca_nome": marca_nome,
+        "marca_subtitulo": marca_subtitulo,
+        "site_titulo": site_titulo,
+        "site_rodape_texto": site_rodape_texto,
+        "marca_logo_url": marca_logo_url,
+        "marca_logo_arquivo_nome": logo_arquivo_nome,
+        "marca_cor_primaria": marca_cor_primaria,
+        "marca_cor_secundaria": marca_cor_secundaria,
+        "marca_cor_fundo": marca_cor_fundo,
+        "marca_cor_superficie": marca_cor_superficie,
+        "marca_cor_texto": marca_cor_texto,
+        "whitelabel_ativo": bool(whitelabel_ativo),
+        "tem_logo_blob": bool(logo_blob),
     }
 
 def salvar_configuracao_empresa_form(form):
@@ -8375,6 +8548,57 @@ def salvar_foto_perfil_usuario(foto, identificador="usuario"):
     }
 
 
+def preparar_logo_site_upload(foto):
+    if not foto or not str(getattr(foto, "filename", "") or "").strip():
+        return None
+
+    if not arquivo_permitido(foto.filename):
+        raise ValueError("Envie a logo em JPG, PNG, WEBP, HEIC ou HEIF.")
+
+    nome_seguro = secure_filename(foto.filename or "") or "logo"
+    nome_base, ext_original = os.path.splitext(nome_seguro)
+    nome_base = re.sub(r"[^A-Za-z0-9_-]+", "_", nome_base or "logo").strip("_") or "logo"
+    ext_original = (ext_original or ".jpg").lower()
+
+    if PILLOW_DISPONIVEL:
+        try:
+            foto.stream.seek(0)
+            imagem = Image.open(foto.stream)
+            imagem = ImageOps.exif_transpose(imagem)
+            if max(imagem.size) > 640:
+                imagem.thumbnail((640, 640), obter_resample_lanczos())
+            if imagem.mode != "RGBA":
+                imagem = imagem.convert("RGBA")
+            fundo = Image.new("RGB", imagem.size, (11, 11, 11))
+            fundo.paste(imagem, mask=imagem.split()[-1] if "A" in imagem.getbands() else None)
+            buffer = BytesIO()
+            fundo.save(
+                buffer,
+                format="JPEG",
+                quality=92,
+                optimize=True,
+                progressive=True,
+            )
+            conteudo = buffer.getvalue()
+            return {
+                "arquivo_blob": conteudo,
+                "mime_type": "image/jpeg",
+                "arquivo_nome": f"{nome_base}.jpg",
+            }
+        except (UnidentifiedImageError, OSError, ValueError):
+            raise ValueError("Nao consegui processar a logo enviada. Tente outra imagem.")
+        except Exception:
+            raise ValueError("Nao consegui salvar a logo do site agora.")
+
+    foto.stream.seek(0)
+    conteudo = foto.stream.read()
+    return {
+        "arquivo_blob": conteudo,
+        "mime_type": detectar_mime_type_arquivo(f"logo{ext_original}"),
+        "arquivo_nome": f"{nome_base}{ext_original}",
+    }
+
+
 def detectar_mime_type_arquivo(caminho):
     mime_type = mimetypes.guess_type(str(caminho or ""))[0] or ""
     return mime_type or "application/octet-stream"
@@ -8759,6 +8983,47 @@ def servir_foto_perfil_usuario_banco(usuario_id):
             return redirect(caminho_foto_para_url(caminho))
 
     return ("Foto de perfil nao encontrada.", 404)
+
+
+@app.route("/branding/logo")
+def servir_logo_site():
+    if not INIT_DB_EXECUTADO:
+        return redirect("/static/logo.jpg")
+
+    def carregar(conn):
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT marca_logo_blob, marca_logo_mime_type, marca_logo_arquivo_nome, marca_logo_url
+            FROM configuracao_empresa
+            WHERE id=1
+            """
+        )
+        row = c.fetchone()
+        return row_para_dict(row)
+
+    dados = executar_leitura_resiliente(
+        carregar,
+        descricao="LOGO SITE",
+        padrao={},
+    )
+
+    blob = dados.get("marca_logo_blob")
+    if blob:
+        nome_arquivo = str(dados.get("marca_logo_arquivo_nome") or "").strip() or "logo-site.jpg"
+        mime_type = str(dados.get("marca_logo_mime_type") or "").strip() or detectar_mime_type_arquivo(nome_arquivo)
+        return send_file(
+            BytesIO(bytes(blob)),
+            mimetype=mime_type,
+            download_name=nome_arquivo,
+            max_age=86400,
+        )
+
+    logo_url = normalizar_texto_campo(dados.get("marca_logo_url"))
+    if logo_url:
+        return redirect(logo_url)
+
+    return redirect("/static/logo.jpg")
 
 
 def listar_fotos_servicos(ids_servicos):
@@ -12444,6 +12709,59 @@ def salvar_configuracao_clima():
         ),
     )
     return redirect("/configuracoes")
+
+
+@app.route("/configuracoes/site", methods=["GET", "POST"])
+def configuracoes_site():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario(force=request.method == "GET")
+    if not usuario_gerencia_configuracao_sistema() or session.get("senha_alteracao_obrigatoria"):
+        definir_feedback_configuracoes(
+            "erro",
+            "Somente administradores ou desenvolvedores com senha regularizada podem alterar a identidade visual do sistema.",
+        )
+        return redirect("/configuracoes")
+
+    if request.method == "POST":
+        try:
+            site = salvar_configuracao_site_form(request.form, request.files)
+        except ValueError as erro:
+            definir_feedback_configuracoes("erro", str(erro))
+            return redirect("/configuracoes/site")
+        except Exception as erro:
+            definir_feedback_configuracoes("erro", f"Nao foi possivel salvar as configuracoes do site: {erro}")
+            return redirect("/configuracoes/site")
+
+        registrar_auditoria(
+            "atualizou_configuracoes_site",
+            "configuracao_empresa",
+            detalhes={
+                "marca_nome": site.get("marca_nome"),
+                "marca_subtitulo": site.get("marca_subtitulo"),
+                "site_titulo": site.get("site_titulo"),
+                "whitelabel_ativo": site.get("whitelabel_ativo"),
+                "tem_logo_blob": site.get("tem_logo_blob"),
+            },
+        )
+        definir_feedback_configuracoes(
+            "sucesso",
+            "Configuracoes do site atualizadas. O branding novo ja passa a valer nas telas e abas do sistema.",
+        )
+        return redirect("/configuracoes/site")
+
+    try:
+        configuracao_empresa = obter_configuracao_empresa()
+    except Exception as erro:
+        print("ERRO CONFIG SITE:", erro)
+        configuracao_empresa = empresa_snapshot_padrao()
+
+    return render_template(
+        "configuracoes_site.html",
+        feedback=session.pop("configuracoes_feedback", None),
+        configuracao_empresa=configuracao_empresa,
+    )
 
 @app.route("/configuracoes/banco", methods=["POST"])
 def salvar_configuracao_banco():

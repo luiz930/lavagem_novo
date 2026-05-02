@@ -5,15 +5,34 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="csrf-token" content="{{ csrf_token() }}">
 
-<title>{% block title %}{% endblock %}</title>
+{% set page_title = self.title() | trim %}
+<title>{% if page_title %}{{ page_title }} | {% endif %}{{ site_title }}</title>
 
 <link rel="manifest" href="/static/manifest.json">
-<meta name="theme-color" content="#facc15">
+<meta name="theme-color" content="{{ brand_primary_color }}">
 
-<link rel="icon" href="/static/favicon.jpg">
-<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="icon" href="{{ brand_logo_url or '/static/favicon.jpg' }}">
+<link rel="apple-touch-icon" href="{{ brand_logo_url or '/static/icon-192.jpg' }}">
 
 <link rel="stylesheet" href="/static/responsive.css">
+
+<style>
+:root {
+    --bg: {{ brand_background_color }};
+    --surface: rgba({{ brand_surface_rgb }}, 0.94);
+    --surface-strong: {{ brand_surface_color }};
+    --surface-soft: {{ brand_secondary_color }};
+    --primary: {{ brand_primary_color }};
+    --primary-strong: {{ brand_primary_color }};
+    --text: {{ brand_text_color }};
+    --muted: rgba({{ brand_text_rgb }}, 0.68);
+    --surface-border: rgba({{ brand_primary_rgb }}, 0.24);
+    --panel-gradient: linear-gradient(180deg, rgba({{ brand_surface_rgb }}, 0.98), rgba({{ brand_background_rgb }}, 0.96));
+    --header-gradient: linear-gradient(180deg, rgba({{ brand_primary_rgb }}, 0.14), rgba({{ brand_primary_rgb }}, 0.04));
+    --gold-shadow: 0 14px 28px rgba({{ brand_primary_rgb }}, 0.12);
+    --shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+}
+</style>
 
 <script>
 if ("serviceWorker" in navigator) {
@@ -36,8 +55,8 @@ body.responsive-page.sidebar-open {
     left: -100%;
     width: 250px;
     height: 100%;
-    background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
-    border-right: 2px solid #facc15;
+    background: linear-gradient(180deg, var(--surface-strong) 0%, var(--bg) 100%);
+    border-right: 2px solid var(--primary);
     box-shadow: 14px 0 30px rgba(0, 0, 0, 0.35);
     padding: 24px 14px;
     display: flex;
@@ -73,9 +92,9 @@ body.responsive-page.sidebar-open {
 .sidebar-header {
     margin: 28px 6px 4px;
     padding: 18px 14px 20px;
-    border: 1px solid rgba(250, 204, 21, 0.22);
+    border: 1px solid rgba({{ brand_primary_rgb }}, 0.22);
     border-radius: 18px;
-    background: linear-gradient(180deg, rgba(250, 204, 21, 0.14), rgba(250, 204, 21, 0.03));
+    background: linear-gradient(180deg, rgba({{ brand_primary_rgb }}, 0.14), rgba({{ brand_primary_rgb }}, 0.03));
     text-align: center;
 }
 
@@ -85,21 +104,21 @@ body.responsive-page.sidebar-open {
     display: block;
     object-fit: cover;
     border-radius: 50%;
-    border: 3px solid rgba(250, 204, 21, 0.45);
-    box-shadow: 0 12px 25px rgba(250, 204, 21, 0.15);
+    border: 3px solid rgba({{ brand_primary_rgb }}, 0.45);
+    box-shadow: 0 12px 25px rgba({{ brand_primary_rgb }}, 0.15);
     margin: 0 auto 14px;
 }
 
 .sidebar-title {
     margin: 0;
-    color: #ffffff;
+    color: var(--text);
     font-size: 20px;
     font-weight: 700;
 }
 
 .sidebar-subtitle {
     margin: 6px 0 0;
-    color: rgba(250, 204, 21, 0.82);
+    color: rgba({{ brand_primary_rgb }}, 0.82);
     font-size: 11px;
     letter-spacing: 1.6px;
     text-transform: uppercase;
@@ -124,10 +143,10 @@ body.responsive-page.sidebar-open {
 }
 
 .sidebar-home-link button {
-    background: linear-gradient(135deg, #facc15, #f59e0b);
-    color: #111827;
-    border-color: rgba(250, 204, 21, 0.72);
-    box-shadow: 0 14px 24px rgba(250, 204, 21, 0.18);
+    background: linear-gradient(135deg, var(--primary), var(--primary-strong));
+    color: var(--surface-strong);
+    border-color: rgba({{ brand_primary_rgb }}, 0.72);
+    box-shadow: 0 14px 24px rgba({{ brand_primary_rgb }}, 0.18);
 }
 
 .sidebar-home-link button:hover {
@@ -138,14 +157,14 @@ body.responsive-page.sidebar-open {
 .sidebar-group {
     padding: 12px;
     border-radius: 18px;
-    border: 1px solid rgba(250, 204, 21, 0.14);
-    background: linear-gradient(180deg, rgba(17, 24, 39, 0.78), rgba(15, 23, 42, 0.72));
+    border: 1px solid rgba({{ brand_primary_rgb }}, 0.14);
+    background: linear-gradient(180deg, rgba({{ brand_surface_rgb }}, 0.78), rgba({{ brand_background_rgb }}, 0.72));
 }
 
 .sidebar-group-label {
     margin: 0;
     padding: 0 4px;
-    color: rgba(250, 204, 21, 0.82);
+    color: rgba({{ brand_primary_rgb }}, 0.82);
     font-size: 0.7rem;
     font-weight: 700;
     letter-spacing: 1.7px;
@@ -162,9 +181,9 @@ body.responsive-page.sidebar-open {
     margin: 0;
     padding: 14px 16px;
     border-radius: 14px;
-    border: 1px solid rgba(250, 204, 21, 0.18);
-    background: linear-gradient(135deg, rgba(31, 41, 55, 0.98), rgba(17, 24, 39, 0.98));
-    color: #f9fafb;
+    border: 1px solid rgba({{ brand_primary_rgb }}, 0.18);
+    background: linear-gradient(135deg, rgba({{ brand_secondary_rgb }}, 0.98), rgba({{ brand_surface_rgb }}, 0.98));
+    color: var(--text);
     display: flex;
     align-items: center;
     gap: 12px;
@@ -175,9 +194,9 @@ body.responsive-page.sidebar-open {
 }
 
 .sidebar-nav button:hover {
-    background: linear-gradient(135deg, #facc15, #f59e0b);
-    color: #111827;
-    border-color: rgba(250, 204, 21, 0.75);
+    background: linear-gradient(135deg, var(--primary), var(--primary-strong));
+    color: var(--surface-strong);
+    border-color: rgba({{ brand_primary_rgb }}, 0.75);
     transform: translateX(4px);
 }
 
@@ -202,9 +221,9 @@ body.responsive-page.sidebar-open {
     text-align: center;
     padding: 0;
     margin: 0;
-    background: #facc15;
+    background: var(--primary);
     border-radius: 6px;
-    box-shadow: 0 0 10px rgba(250, 204, 21, 0.6);
+    box-shadow: 0 0 10px rgba({{ brand_primary_rgb }}, 0.6);
 }
 
 .overlay {
@@ -238,8 +257,8 @@ body.responsive-page.sidebar-open {
     width: min(88vw, 280px);
     padding: 10px 10px 9px;
     border-radius: 14px;
-    border: 1px solid rgba(250, 204, 21, 0.26);
-    background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(17, 24, 39, 0.98));
+    border: 1px solid rgba({{ brand_primary_rgb }}, 0.26);
+    background: linear-gradient(180deg, rgba({{ brand_background_rgb }}, 0.98), rgba({{ brand_surface_rgb }}, 0.98));
     box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
     z-index: 2500;
 }
@@ -347,9 +366,9 @@ body.responsive-page.sidebar-open {
 
 <div id="sidebar" class="sidebar">
     <div class="sidebar-header">
-        <img src="/static/logo.jpg" class="sidebar-logo">
-        <h2 class="sidebar-title">Wagen Estetica</h2>
-        <p class="sidebar-subtitle">Gestao Automotiva</p>
+        <img src="{{ brand_logo_url or '/static/logo.jpg' }}" class="sidebar-logo" alt="{{ brand_name }}">
+        <h2 class="sidebar-title">{{ brand_name }}</h2>
+        <p class="sidebar-subtitle">{{ brand_subtitle }}</p>
     </div>
 
     <div class="sidebar-nav">
@@ -380,6 +399,7 @@ body.responsive-page.sidebar-open {
             <a href="{{ url_for('clima') }}"><button><span>&#9729;</span> Clima</button></a>
             <a href="{{ url_for('pagina_auditoria') }}"><button><span>&#128269;</span> Auditoria</button></a>
             <a href="{{ url_for('pagina_changelog') }}"><button><span>&#128221;</span> Changelog</button></a>
+            <a href="{{ url_for('configuracoes_site') }}"><button><span>&#127912;</span> Configuracoes do site</button></a>
             <a href="{{ url_for('configuracoes') }}"><button><span>&#9881;</span> Configuracoes</button></a>
         </div>
 
@@ -403,9 +423,9 @@ body.responsive-page.sidebar-open {
 
     <div class="page-header">
         <div class="brand-block">
-            <img src="/static/logo.jpg" class="brand-avatar">
+            <img src="{{ brand_logo_url or '/static/logo.jpg' }}" class="brand-avatar" alt="{{ brand_name }}">
             <div>
-                <p class="brand-kicker">Wagen Estetica</p>
+                <p class="brand-kicker">{{ brand_subtitle }}</p>
                 <h1 class="page-title">{% block titulo %}{% endblock %}</h1>
                 <p class="page-subtitle">{% block subtitulo %}{% endblock %}</p>
             </div>
@@ -421,7 +441,7 @@ body.responsive-page.sidebar-open {
 </div>
 
 <footer class="site-footer">
-    Desenvolvido por Luiz Henrique | Qualquer Erro Contate o Desenvolvedor | Wagen Estetica Automotiva | {{ app_version }} | Direitos Reservados.
+    {{ site_footer_text }} | {{ app_version }}
 </footer>
 
 </div>

@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Editar Servico</title>
+<title>Editar Servico | {{ site_title }}</title>
 
 <link rel="manifest" href="/static/manifest.json">
-<meta name="theme-color" content="#facc15">
+<meta name="theme-color" content="{{ brand_primary_color }}">
 
-<link rel="icon" href="/static/favicon.jpg">
-<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="icon" href="{{ brand_logo_url or '/static/favicon.jpg' }}">
+<link rel="apple-touch-icon" href="{{ brand_logo_url or '/static/icon-192.jpg' }}">
 <link rel="stylesheet" href="/static/responsive.css">
 
 <script>
@@ -28,11 +28,11 @@ if ("serviceWorker" in navigator) {
 <div class="page-shell page-shell--narrow">
     <div class="page-header">
         <div class="brand-block">
-            <img src="/static/logo.jpg" class="brand-avatar">
+            <img src="{{ brand_logo_url or '/static/logo.jpg' }}" class="brand-avatar" alt="{{ brand_name }}">
             <div>
-                <p class="brand-kicker">Wagen Estetica</p>
-            <h1 class="page-title">Editar Servico</h1>
-            <p class="page-subtitle">Ajuste nome e valor com conforto em qualquer tamanho de tela.</p>
+                <p class="brand-kicker">{{ brand_subtitle }}</p>
+                <h1 class="page-title">Editar Servico</h1>
+                <p class="page-subtitle">Ajuste nome e valor com conforto em qualquer tamanho de tela.</p>
             </div>
         </div>
         <a href="/cadastrar_servico" class="button-link">
@@ -50,7 +50,7 @@ if ("serviceWorker" in navigator) {
 </div>
 
 <footer class="site-footer">
-    Desenvolvido por Luiz Henrique | Wagen Estetica Automotiva | {{ app_version }} | Direitos Reservados.
+    {{ site_footer_text }} | {{ app_version }}
 </footer>
 
 </body>

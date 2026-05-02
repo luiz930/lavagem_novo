@@ -10,6 +10,7 @@ FOUNDATION_MIGRATIONS = (
     "foundation_telemetria",
     "foundation_empresa_scope",
     "foundation_branding_storage",
+    "foundation_site_customization",
     "foundation_empresa_scope_extended",
     "foundation_empresa_indexes",
     "foundation_legacy_plate_uniqueness",
@@ -274,6 +275,33 @@ def apply_branding_and_storage(cursor, add_column):
             WHERE id=1
             """
         )
+
+
+def apply_site_customization(cursor, add_column):
+    add_column(cursor, "configuracao_empresa", "site_titulo TEXT")
+    add_column(cursor, "configuracao_empresa", "site_rodape_texto TEXT")
+    add_column(cursor, "configuracao_empresa", "marca_cor_fundo TEXT")
+    add_column(cursor, "configuracao_empresa", "marca_cor_superficie TEXT")
+    add_column(cursor, "configuracao_empresa", "marca_cor_texto TEXT")
+    add_column(cursor, "configuracao_empresa", "marca_logo_blob BLOB")
+    add_column(cursor, "configuracao_empresa", "marca_logo_mime_type TEXT")
+    add_column(cursor, "configuracao_empresa", "marca_logo_arquivo_nome TEXT")
+
+    cursor.execute(
+        """
+        UPDATE configuracao_empresa
+        SET
+            site_titulo = COALESCE(NULLIF(site_titulo, ''), 'Gestao Estetica'),
+            site_rodape_texto = COALESCE(
+                NULLIF(site_rodape_texto, ''),
+                'Desenvolvido por Luiz Henrique | Qualquer Erro Contate o Desenvolvedor | Wagen Estetica Automotiva | Direitos Reservados.'
+            ),
+            marca_cor_fundo = COALESCE(NULLIF(marca_cor_fundo, ''), '#0b0b0b'),
+            marca_cor_superficie = COALESCE(NULLIF(marca_cor_superficie, ''), '#111827'),
+            marca_cor_texto = COALESCE(NULLIF(marca_cor_texto, ''), '#f9fafb')
+        WHERE id = 1
+        """
+    )
 
 
 def apply_empresa_indexes(cursor):
@@ -610,6 +638,10 @@ def run_product_foundation_migrations(conn, add_column, now_iso, print_func=prin
         apply_branding_and_storage(cursor, add_column)
         mark_migration_applied(cursor, "foundation_branding_storage", now_iso())
 
+    if "foundation_site_customization" not in applied:
+        apply_site_customization(cursor, add_column)
+        mark_migration_applied(cursor, "foundation_site_customization", now_iso())
+
     if "foundation_empresa_scope_extended" not in applied:
         apply_extended_empresa_scope(cursor, add_column)
         mark_migration_applied(cursor, "foundation_empresa_scope_extended", now_iso())
@@ -641,13 +673,33 @@ def build_brand_context(config_row=None, empresa_row=None):
         config.get("marca_subtitulo")
         or "Gestao Estetica"
     )
+    logo_blob = bool(config.get("marca_logo_blob") or config.get("marca_logo_tem_blob"))
+    site_title = (
+        config.get("site_titulo")
+        or config.get("marca_subtitulo")
+        or "Gestao Estetica"
+    )
+    site_footer_text = (
+        config.get("site_rodape_texto")
+        or f"Desenvolvido por Luiz Henrique | Qualquer Erro Contate o Desenvolvedor | {brand_name} | Direitos Reservados."
+    )
+    brand_primary_color = config.get("marca_cor_primaria") or empresa.get("cor_primaria") or "#facc15"
+    brand_secondary_color = config.get("marca_cor_secundaria") or empresa.get("cor_secundaria") or "#111827"
+    brand_background_color = config.get("marca_cor_fundo") or "#0b0b0b"
+    brand_surface_color = config.get("marca_cor_superficie") or brand_secondary_color or "#111827"
+    brand_text_color = config.get("marca_cor_texto") or "#f9fafb"
 
     return {
         "brand_name": brand_name,
         "brand_subtitle": brand_subtitle,
-        "brand_logo_url": config.get("marca_logo_url") or empresa.get("logo_url") or "",
-        "brand_primary_color": config.get("marca_cor_primaria") or empresa.get("cor_primaria") or "#facc15",
-        "brand_secondary_color": config.get("marca_cor_secundaria") or empresa.get("cor_secundaria") or "#111827",
+        "brand_logo_url": "/branding/logo" if logo_blob else (config.get("marca_logo_url") or empresa.get("logo_url") or "/static/logo.jpg"),
+        "brand_primary_color": brand_primary_color,
+        "brand_secondary_color": brand_secondary_color,
+        "brand_background_color": brand_background_color,
+        "brand_surface_color": brand_surface_color,
+        "brand_text_color": brand_text_color,
+        "site_title": site_title,
+        "site_footer_text": site_footer_text,
         "whitelabel_ativo": bool(int(config.get("whitelabel_ativo") or 0)),
         "storage_provider": config.get("storage_provider") or empresa.get("storage_provider") or "database",
         "licenca_plano": config.get("licenca_plano") or empresa.get("plano_codigo") or "starter",

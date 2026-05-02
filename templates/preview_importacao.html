@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pre-visualizacao da Importacao</title>
+<title>Pre-visualizacao da Importacao | {{ site_title }}</title>
 
 <link rel="manifest" href="/static/manifest.json">
-<meta name="theme-color" content="#facc15">
+<meta name="theme-color" content="{{ brand_primary_color }}">
 
-<link rel="icon" href="/static/favicon.jpg">
-<link rel="apple-touch-icon" href="/static/icon-192.jpg">
+<link rel="icon" href="{{ brand_logo_url or '/static/favicon.jpg' }}">
+<link rel="apple-touch-icon" href="{{ brand_logo_url or '/static/icon-192.jpg' }}">
 <link rel="stylesheet" href="/static/responsive.css">
 
 <script>
@@ -24,7 +24,7 @@ label {
     display: block;
     margin-bottom: 6px;
     text-align: left;
-    color: #facc15;
+    color: var(--primary);
     font-weight: bold;
 }
 
@@ -46,11 +46,11 @@ label {
 <div class="page-shell page-shell--wide">
     <div class="page-header">
         <div class="brand-block">
-            <img src="/static/logo.jpg" class="brand-avatar">
+            <img src="{{ brand_logo_url or '/static/logo.jpg' }}" class="brand-avatar" alt="{{ brand_name }}">
             <div>
-                <p class="brand-kicker">Wagen Estetica</p>
-            <h1 class="page-title">Pre-visualizacao da Importacao</h1>
-            <p class="page-subtitle">Mapeie as colunas e confira os dados com conforto em telas menores.</p>
+                <p class="brand-kicker">{{ brand_subtitle }}</p>
+                <h1 class="page-title">Pre-visualizacao da Importacao</h1>
+                <p class="page-subtitle">Mapeie as colunas e confira os dados com conforto em telas menores.</p>
             </div>
         </div>
 
@@ -139,7 +139,7 @@ label {
 </div>
 
 <footer class="site-footer">
-    Desenvolvido por Luiz Henrique | Wagen Estetica Automotiva | {{ app_version }} | Direitos Reservados.
+    {{ site_footer_text }} | {{ app_version }}
 </footer>
 
 </body>

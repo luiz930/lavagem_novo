@@ -60,12 +60,22 @@ class ProductFoundationMigrationsTests(unittest.TestCase):
         colunas = {row[1] for row in c.fetchall()}
         self.assertIn("marca_nome", colunas)
         self.assertIn("licenca_plano", colunas)
+        self.assertIn("site_titulo", colunas)
+        self.assertIn("site_rodape_texto", colunas)
+        self.assertIn("marca_logo_blob", colunas)
+        self.assertIn("marca_cor_fundo", colunas)
 
     def test_build_brand_context_prefers_config_values(self):
         contexto = build_brand_context(
             {
                 "marca_nome": "Minha Marca",
                 "marca_subtitulo": "Minha Operacao",
+                "site_titulo": "Meu Sistema",
+                "site_rodape_texto": "Rodape customizado",
+                "marca_logo_blob": b"abc",
+                "marca_cor_fundo": "#010203",
+                "marca_cor_superficie": "#111111",
+                "marca_cor_texto": "#eeeeee",
                 "licenca_plano": "pro",
                 "licenca_status": "ativa",
             },
@@ -73,6 +83,12 @@ class ProductFoundationMigrationsTests(unittest.TestCase):
         )
         self.assertEqual(contexto["brand_name"], "Minha Marca")
         self.assertEqual(contexto["brand_subtitle"], "Minha Operacao")
+        self.assertEqual(contexto["site_title"], "Meu Sistema")
+        self.assertEqual(contexto["site_footer_text"], "Rodape customizado")
+        self.assertEqual(contexto["brand_logo_url"], "/branding/logo")
+        self.assertEqual(contexto["brand_background_color"], "#010203")
+        self.assertEqual(contexto["brand_surface_color"], "#111111")
+        self.assertEqual(contexto["brand_text_color"], "#eeeeee")
         self.assertEqual(contexto["licenca_plano"], "pro")
         self.assertEqual(contexto["licenca_status"], "ativa")
 

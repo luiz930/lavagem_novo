@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block title %}Configuracoes do site{% endblock %}
+{% block titulo %}Configuracoes do site{% endblock %}
+{% block subtitulo %}Logo, paleta, nomes publicos e identidade visual do sistema{% endblock %}
+
+{% block actions %}
+<a href="/configuracoes" class="button-link">
+    <button type="button">Voltar</button>
+</a>
+{% endblock %}
+
+{% block content %}
+
+{% if feedback %}
+<div class="page-card {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
+</div>
+{% endif %}
+
+<div class="page-grid">
+    <div class="page-card">
+        <p class="pill-label">Preview atual</p>
+        <div class="brand-block top-spacing">
+            <img src="{{ brand_logo_url or '/static/logo.jpg' }}" alt="{{ brand_name }}" class="brand-avatar">
+            <div>
+                <p class="brand-kicker">{{ brand_subtitle }}</p>
+                <h2 class="section-title">{{ brand_name }}</h2>
+                <p class="muted-text">Aba: {{ site_title }}</p>
+            </div>
+        </div>
+        <p class="muted-text top-spacing">{{ site_footer_text }}</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">White-label</p>
+        <h2 class="section-title top-spacing">Identidade publica</h2>
+        <p class="muted-text">Esses campos controlam o nome exibido no menu, cabecalho, login, rodape e nas abas do navegador.</p>
+
+        <form action="/configuracoes/site" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide top-spacing">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+            <div class="field-grid">
+                <input
+                    name="marca_nome"
+                    type="text"
+                    value="{{ configuracao_empresa.marca_nome }}"
+                    placeholder="Nome principal da marca"
+                    autocomplete="off"
+                    required
+                >
+                <input
+                    name="marca_subtitulo"
+                    type="text"
+                    value="{{ configuracao_empresa.marca_subtitulo }}"
+                    placeholder="Subtitulo curto / slogan"
+                    autocomplete="off"
+                    required
+                >
+            </div>
+
+            <div class="field-grid">
+                <input
+                    name="site_titulo"
+                    type="text"
+                    value="{{ configuracao_empresa.site_titulo }}"
+                    placeholder="Titulo das abas e PWA"
+                    autocomplete="off"
+                    required
+                >
+                <input
+                    name="marca_logo_url"
+                    type="text"
+                    value="{{ configuracao_empresa.marca_logo_url }}"
+                    placeholder="URL externa da logo (opcional)"
+                    autocomplete="off"
+                >
+            </div>
+
+            <textarea
+                name="site_rodape_texto"
+                rows="3"
+                placeholder="Texto do rodape do site"
+                required
+            >{{ configuracao_empresa.site_rodape_texto }}</textarea>
+
+            <div class="page-card page-card--soft top-spacing">
+                <h3 class="section-title">Logo</h3>
+                <input type="file" name="marca_logo" accept="image/*">
+                <label class="inline-toggle top-spacing">
+                    <input type="checkbox" name="remover_logo" value="1">
+                    Remover logo personalizada e voltar para a padrao
+                </label>
+                <p class="muted-text">Se enviar um arquivo, ele passa a ter prioridade sobre a URL externa.</p>
+            </div>
+
+            <div class="page-card page-card--soft top-spacing">
+                <h3 class="section-title">Paleta de cores</h3>
+                <div class="field-grid">
+                    <label>
+                        <span class="muted-text">Cor primaria</span>
+                        <input name="marca_cor_primaria" type="color" value="{{ configuracao_empresa.marca_cor_primaria }}">
+                    </label>
+                    <label>
+                        <span class="muted-text">Cor secundaria</span>
+                        <input name="marca_cor_secundaria" type="color" value="{{ configuracao_empresa.marca_cor_secundaria }}">
+                    </label>
+                    <label>
+                        <span class="muted-text">Cor de fundo</span>
+                        <input name="marca_cor_fundo" type="color" value="{{ configuracao_empresa.marca_cor_fundo }}">
+                    </label>
+                    <label>
+                        <span class="muted-text">Cor de superficie</span>
+                        <input name="marca_cor_superficie" type="color" value="{{ configuracao_empresa.marca_cor_superficie }}">
+                    </label>
+                    <label>
+                        <span class="muted-text">Cor do texto</span>
+                        <input name="marca_cor_texto" type="color" value="{{ configuracao_empresa.marca_cor_texto }}">
+                    </label>
+                </div>
+            </div>
+
+            <label class="inline-toggle top-spacing">
+                <input
+                    type="checkbox"
+                    name="whitelabel_ativo"
+                    value="1"
+                    {% if whitelabel_ativo %}checked{% endif %}
+                >
+                Marcar o projeto como white-label ativo
+            </label>
+
+            <div class="actions-row actions-row--left top-spacing">
+                <button type="submit">Salvar configuracoes do site</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
