@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}Changelog{% endblock %}
+{% block titulo %}Changelog do Projeto{% endblock %}
+{% block subtitulo %}Linha do tempo de desenvolvimento, marcos tecnicos e historico de alteracoes{% endblock %}
+
+{% block actions %}
+<a href="/" class="button-link">
+    <button type="button">Voltar</button>
+</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="page-grid">
+    <div class="page-card">
+        <p class="pill-label">Versao atual</p>
+        <h2 class="section-title top-spacing">{{ changelog_resumo.versao_atual }}</h2>
+        <p class="muted-text">Versao exibida hoje no sistema.</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Commits rastreados</p>
+        <h2 class="section-title top-spacing">{{ changelog_resumo.total_commits }}</h2>
+        <p class="muted-text">Historico lido do repositorio Git.</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Inicio do historico</p>
+        <h2 class="section-title top-spacing">{{ changelog_resumo.primeiro_commit_em }}</h2>
+        <p class="muted-text">Primeiro commit encontrado no projeto.</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Ultima revisao</p>
+        <h2 class="section-title top-spacing">{{ changelog_resumo.ultimo_commit_em }}</h2>
+        <p class="muted-text">Branch {{ changelog_resumo.branch_atual }} | HEAD {{ changelog_resumo.hash_atual }}</p>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <p class="muted-text">
+        Esta pagina usa o historico real do repositorio como changelog oficial.
+        Gerado em {{ changelog_gerado_em }}.
+        {% if not changelog_resumo.tem_git %}
+        O historico Git nao ficou disponivel neste ambiente.
+        {% endif %}
+    </p>
+</div>
+
+<div class="top-spacing">
+    <h2 class="section-title">Marcos principais</h2>
+
+    <div class="list-grid top-spacing">
+        {% for item in changelog_marcos %}
+        <div class="page-card">
+            <div class="actions-row actions-row--left">
+                <span class="pill-label">{{ item.destaque }}</span>
+                <span class="status-badge status-badge--muted">{{ item.data_label }}</span>
+            </div>
+            <p class="top-spacing"><b>{{ item.assunto }}</b></p>
+            <p class="muted-text">{{ item.categoria }} | Commit {{ item.hash_curto }}</p>
+        </div>
+        {% else %}
+        <div class="page-card page-card--soft">
+            <p class="muted-text">Nenhum marco disponivel ainda.</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="top-spacing">
+    <h2 class="section-title">Linha do tempo completa</h2>
+
+    {% for grupo in changelog_grupos %}
+    <details class="page-card top-spacing" {% if loop.index <= 2 %}open{% endif %}>
+        <summary>
+            <b>{{ grupo.periodo_label }}</b>
+            <span class="muted-text"> | {{ grupo.itens|length }} commit(s)</span>
+        </summary>
+
+        <div class="top-spacing">
+            {% for item in grupo.itens %}
+            <div class="{% if not loop.first %}top-spacing {% endif %}page-card page-card--soft">
+                <div class="actions-row actions-row--left">
+                    <span class="pill-label">{{ item.categoria }}</span>
+                    <span class="status-badge status-badge--muted">{{ item.data_label }}</span>
+                    <span class="status-badge status-badge--warning">{{ item.hash_curto }}</span>
+                </div>
+                <p class="top-spacing"><b>{{ item.assunto }}</b></p>
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+    {% else %}
+    <div class="page-card page-card--soft top-spacing">
+        <p class="muted-text">Nenhum commit encontrado para montar o changelog.</p>
+    </div>
+    {% endfor %}
+</div>
+
+{% endblock %}

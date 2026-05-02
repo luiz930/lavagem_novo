@@ -56,6 +56,7 @@ from domains.clientes import (
     consultar_ultimas_lavagens_sync as consultar_ultimas_lavagens_sync_domain,
     salvar_cliente_veiculo_cursor as salvar_cliente_veiculo_cursor_domain,
 )
+from domains.changelog import carregar_contexto_changelog as carregar_contexto_changelog_domain
 from domains.historico import (
     carregar_recursos_edicao_historico as carregar_recursos_edicao_historico_domain,
     excluir_dependencias_historico_servico as excluir_dependencias_historico_servico_domain,
@@ -9139,7 +9140,7 @@ def corrigir_link_google_sheets(url):
 
             return montar_url_google_sheets_csv(sheet_id, extrair_gid_url(url))
 
-        raise Exception("Link nÃ£o suportado. Use uma planilha do Google Sheets.")
+        raise Exception("Link nao suportado. Use uma planilha do Google Sheets.")
 
     except Exception as e:
         raise Exception(f"Erro ao processar link: {e}")
@@ -10128,8 +10129,8 @@ def importar_clientes_dataframe(df, mapeamento, empresa_id=None):
 def resumir_importacao_clientes(estatisticas):
     resumo = (
         f"{estatisticas['linhas_processadas']} linha(s) processada(s), "
-        f"{estatisticas['veiculos_novos']} veÃ­culo(s) novo(s), "
-        f"{estatisticas['veiculos_atualizados']} veÃ­culo(s) atualizado(s), "
+            f"{estatisticas['veiculos_novos']} veiculo(s) novo(s), "
+            f"{estatisticas['veiculos_atualizados']} veiculo(s) atualizado(s), "
         f"{estatisticas['clientes_novos']} cliente(s) novo(s), "
         f"{estatisticas['clientes_atualizados']} cliente(s) atualizado(s)"
     )
@@ -10304,7 +10305,7 @@ def importar_planilha_local():
         caminho = os.path.join("static", "CONTROLE LAVAGENS.xlsx")
 
         if not os.path.exists(caminho):
-            return False, "Arquivo clientes.csv nÃ£o encontrado."
+            return False, "Arquivo CONTROLE LAVAGENS.xlsx nao encontrado."
 
         df = pd.read_excel(caminho)
 
@@ -11915,6 +11916,9 @@ def api_home_snapshot():
 
 @app.route("/editar_servico_inline/<int:id>", methods=["POST"])
 def editar_servico_inline(id):
+    if not session.get("usuario"):
+        return jsonify({"status": "erro", "mensagem": "nao autorizado"}), 401
+
     data = request.get_json()
 
     nome = data.get("nome")
@@ -13348,6 +13352,25 @@ def pagina_auditoria():
         resumo_auditoria=contexto["resumo"],
     )
 
+
+@app.route("/changelog")
+def pagina_changelog():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    contexto = carregar_contexto_changelog_domain(
+        os.path.dirname(os.path.abspath(__file__)),
+        versao_atual=obter_versao_sistema(),
+    )
+    return render_template(
+        "changelog.html",
+        changelog_resumo=contexto["resumo"],
+        changelog_marcos=contexto["marcos"],
+        changelog_grupos=contexto["grupos"],
+        changelog_gerado_em=contexto["gerado_em"],
+    )
+
 @app.route("/clima")
 def clima():
     if not session.get("usuario"):
@@ -13682,9 +13705,8 @@ def preview_sincronizacao_clientes():
             raise ValueError("Nao encontrei uma coluna de placa para configurar a sincronizacao.")
 
         if not colunas:
-            raise ValueError("NÃ£o encontrei colunas vÃ¡lidas nessa planilha.")
+            raise ValueError("Nao encontrei colunas validas nessa planilha.")
 
-        # ðŸ”¥ CORREÃ‡ÃƒO CRÃTICA AQUI
         amostra_tratada = [
             {k: sanitizar_para_json(v) for k, v in linha.items()}
             for linha in df.head(8).to_dict(orient="records")
@@ -13698,7 +13720,7 @@ def preview_sincronizacao_clientes():
             "mapeamento_sugerido": mapeamento_sugerido,
             "mapeamento_automatico": mapeamento_sugerido,
             "colunas_exibicao": colunas_exibicao,
-            "amostra": amostra_tratada,  # âœ… agora seguro
+            "amostra": amostra_tratada,
             "total_linhas": len(df.index),
             "intervalo_label": obter_label_intervalo_sincronizacao(intervalo_minutos),
             "proximo_sync_previsto": proximo_sync_previsto,
@@ -13708,12 +13730,12 @@ def preview_sincronizacao_clientes():
 
         definir_feedback_clientes(
             "sucesso",
-            f"Planilha carregada. {len(df.index)} linha(s) encontrada(s) para configurar a sincronizaÃ§Ã£o."
+            f"Planilha carregada. {len(df.index)} linha(s) encontrada(s) para configurar a sincronizacao."
         )
 
     except Exception as e:
         limpar_preview_sincronizacao()
-        definir_feedback_clientes("erro", f"NÃ£o consegui ler a planilha: {e}")
+        definir_feedback_clientes("erro", f"Nao consegui ler a planilha: {e}")
 
     return redirect("/clientes")
 
@@ -13723,7 +13745,7 @@ def cancelar_preview_sincronizacao_clientes():
         return redirect("/login")
 
     limpar_preview_sincronizacao()
-    definir_feedback_clientes("sucesso", "PrÃ©-visualizaÃ§Ã£o cancelada.")
+    definir_feedback_clientes("sucesso", "Pre-visualizacao cancelada.")
     return redirect("/clientes")
 
 @app.route("/clientes/sincronizacao/adicionar", methods=["POST"])
@@ -13938,7 +13960,7 @@ def alternar_sync_clientes(sync_id):
 
     if not sync:
         conn.close()
-        definir_feedback_clientes("erro", "SincronizaÃ§Ã£o nÃ£o encontrada.")
+        definir_feedback_clientes("erro", "Sincronizacao nao encontrada.")
         return redirect("/clientes")
 
     novo_ativo = 0 if sync["ativo"] else 1
@@ -13960,7 +13982,7 @@ def alternar_sync_clientes(sync_id):
 
     definir_feedback_clientes(
         "sucesso",
-        "SincronizaÃ§Ã£o ativada." if novo_ativo else "SincronizaÃ§Ã£o pausada."
+        "Sincronizacao ativada." if novo_ativo else "Sincronizacao pausada."
     )
     return redirect("/clientes")
 
@@ -13978,15 +14000,15 @@ def excluir_sync_clientes(sync_id):
         conn.close()
 
         if removidos:
-            definir_feedback_clientes("sucesso", "SincronizaÃ§Ã£o removida.")
+            definir_feedback_clientes("sucesso", "Sincronizacao removida.")
         else:
-            definir_feedback_clientes("erro", "SincronizaÃ§Ã£o nÃ£o encontrada.")
+            definir_feedback_clientes("erro", "Sincronizacao nao encontrada.")
     except Exception as e:
         try:
             conn.close()
         except Exception:
             pass
-        definir_feedback_clientes("erro", f"NÃ£o foi possÃ­vel excluir a sincronizaÃ§Ã£o: {e}")
+        definir_feedback_clientes("erro", f"Nao foi possivel excluir a sincronizacao: {e}")
     return redirect("/clientes")
 
 @app.route("/cadastrar", methods=["POST"])
@@ -14082,7 +14104,7 @@ def servico():
 
     if not veiculo:
         conn.close()
-        return "Erro: veÃ­culo nÃ£o encontrado"
+        return "Erro: veiculo nao encontrado"
 
     veiculo_id = veiculo["id"]
     cliente_id = veiculo["cliente_id"] if veiculo["cliente_id"] else None
@@ -14095,7 +14117,7 @@ def servico():
 
     if not tipo:
         conn.close()
-        return "Erro: tipo nÃ£o encontrado"
+        return "Erro: tipo nao encontrado"
 
     tipo_id = tipo["id"]
     valor_base = converter_valor_numerico(tipo["valor"])
@@ -14624,6 +14646,9 @@ def prioridade(id, acao):
 
 @app.route("/cadastrar_servico", methods=["GET", "POST"])
 def cadastrar_servico():
+    if not session.get("usuario"):
+        return redirect("/login")
+
     conn = conectar()
     c = conn.cursor()
 
@@ -14643,6 +14668,9 @@ def cadastrar_servico():
 
 @app.route("/pneu", methods=["GET", "POST"])
 def cadastrar_pneu():
+    if not session.get("usuario"):
+        return redirect("/login")
+
     conn = conectar()
     c = conn.cursor()
 
