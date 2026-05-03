@@ -4,6 +4,7 @@ import json
 import math
 import sqlite3
 import socket
+from copy import deepcopy
 import base64
 import mimetypes
 from zoneinfo import ZoneInfo
@@ -3374,49 +3375,72 @@ HUD_CACHE = {
     "usuario": "",
     "resultado": None,
 }
-HUD_CACHE_TTL = 30
+HUD_CACHE_TTL = 45
 HOME_SNAPSHOT_CACHE = {
     "testado_em": 0.0,
     "usuario": "",
     "resultado": None,
 }
-HOME_SNAPSHOT_CACHE_TTL = 35
+HOME_SNAPSHOT_CACHE_TTL = 45
 NOTIFICACOES_CACHE = {
     "testado_em": 0.0,
     "usuario": "",
     "resultado": None,
 }
-NOTIFICACOES_CACHE_TTL = 45
+NOTIFICACOES_CACHE_TTL = 60
 STATUS_SYNC_CACHE = {
     "testado_em": 0.0,
     "usuario": "",
     "resultado": None,
 }
-STATUS_SYNC_CACHE_TTL = 45
+STATUS_SYNC_CACHE_TTL = 60
 SYNC_TOKEN_CACHE = {
     "testado_em": 0.0,
     "usuario": "",
     "resultado": None,
 }
-SYNC_TOKEN_CACHE_TTL = 45
+SYNC_TOKEN_CACHE_TTL = 60
 RETORNOS_HUD_CACHE = {
     "testado_em": 0.0,
     "usuario": "",
     "resultado": None,
 }
-RETORNOS_HUD_CACHE_TTL = 45
+RETORNOS_HUD_CACHE_TTL = 60
 AGENDA_RETORNO_CACHE = {
     "testado_em": 0.0,
     "usuario": "",
     "resultado": None,
 }
-AGENDA_RETORNO_CACHE_TTL = 60
+AGENDA_RETORNO_CACHE_TTL = 90
 VOZ_CACHE = {
     "testado_em": 0.0,
     "usuario": "",
     "resultado": None,
 }
-VOZ_CACHE_TTL = 90
+VOZ_CACHE_TTL = 120
+CLIENTES_CONTEXT_CACHE = {
+    "testado_em": 0.0,
+    "chave": "",
+    "resultado": None,
+}
+CLIENTES_CONTEXT_CACHE_TTL = 20
+HISTORICO_CONTEXT_CACHE = {
+    "testado_em": 0.0,
+    "chave": "",
+    "resultado": None,
+}
+HISTORICO_CONTEXT_CACHE_TTL = 25
+PAINEL_CONTEXT_CACHE = {
+    "testado_em": 0.0,
+    "chave": "",
+    "resultado": None,
+}
+PAINEL_CONTEXT_CACHE_TTL = 12
+PRODUTOS_PNEU_CACHE = {
+    "testado_em": 0.0,
+    "resultado": None,
+}
+PRODUTOS_PNEU_CACHE_TTL = 300
 CLIMA_CACHE = {
     "testado_em": 0.0,
     "resultado": None,
@@ -3468,6 +3492,17 @@ def limpar_caches_interface():
     VOZ_CACHE["testado_em"] = 0.0
     VOZ_CACHE["usuario"] = ""
     VOZ_CACHE["resultado"] = None
+    CLIENTES_CONTEXT_CACHE["testado_em"] = 0.0
+    CLIENTES_CONTEXT_CACHE["chave"] = ""
+    CLIENTES_CONTEXT_CACHE["resultado"] = None
+    HISTORICO_CONTEXT_CACHE["testado_em"] = 0.0
+    HISTORICO_CONTEXT_CACHE["chave"] = ""
+    HISTORICO_CONTEXT_CACHE["resultado"] = None
+    PAINEL_CONTEXT_CACHE["testado_em"] = 0.0
+    PAINEL_CONTEXT_CACHE["chave"] = ""
+    PAINEL_CONTEXT_CACHE["resultado"] = None
+    PRODUTOS_PNEU_CACHE["testado_em"] = 0.0
+    PRODUTOS_PNEU_CACHE["resultado"] = None
 
 
 def limpar_cache_banco_online():
@@ -4335,6 +4370,33 @@ def copiar_valor_padrao(padrao):
     if isinstance(padrao, set):
         return set(padrao)
     return padrao
+
+
+def copiar_estrutura_cache(valor):
+    try:
+        return deepcopy(valor)
+    except Exception:
+        return copiar_valor_padrao(valor)
+
+
+def cache_consulta_valido(cache, chave, ttl):
+    if cache.get("resultado") is None:
+        return False
+    if str(cache.get("chave") or "") != str(chave or ""):
+        return False
+    return time.time() - float(cache.get("testado_em") or 0.0) < ttl
+
+
+def obter_cache_consulta(cache, chave, ttl):
+    if not cache_consulta_valido(cache, chave, ttl):
+        return None
+    return copiar_estrutura_cache(cache.get("resultado"))
+
+
+def salvar_cache_consulta(cache, chave, resultado):
+    cache["testado_em"] = time.time()
+    cache["chave"] = str(chave or "")
+    cache["resultado"] = copiar_estrutura_cache(resultado)
 
 
 def conectar_somente_leitura():
@@ -9173,14 +9235,17 @@ def servir_logo_site():
     return redirect("/static/logo.jpg")
 
 
-def listar_fotos_servicos(ids_servicos):
+def listar_fotos_servicos(ids_servicos, conn=None, cursor=None):
     ids = [int(item) for item in (ids_servicos or []) if item]
 
     if not ids:
         return {}
 
-    conn = conectar()
-    c = conn.cursor()
+    conn_local = None
+    c = cursor
+    if c is None:
+        conn_local = conn or conectar()
+        c = conn_local.cursor()
     empresa_id = empresa_atual_id()
     placeholders = ",".join(["?"] * len(ids))
     c.execute(f"""
@@ -9230,7 +9295,8 @@ def listar_fotos_servicos(ids_servicos):
         grupos = fotos_por_servico.setdefault(foto["servico_id"], {})
         grupos.setdefault(foto["tipo"], []).append(foto)
 
-    conn.close()
+    if conn_local:
+        conn_local.close()
     return fotos_por_servico
 
 def contar_fotos_validas(fotos):
@@ -9240,14 +9306,17 @@ def contar_fotos_validas(fotos):
         if foto and foto.filename and arquivo_permitido(foto.filename)
     )
 
-def listar_cobrancas_extras_servicos(ids_servicos):
+def listar_cobrancas_extras_servicos(ids_servicos, conn=None, cursor=None):
     ids = [int(item) for item in (ids_servicos or []) if item]
 
     if not ids:
         return {}
 
-    conn = conectar()
-    c = conn.cursor()
+    conn_local = None
+    c = cursor
+    if c is None:
+        conn_local = conn or conectar()
+        c = conn_local.cursor()
     placeholders = ",".join(["?"] * len(ids))
     c.execute(f"""
         SELECT
@@ -9282,7 +9351,8 @@ def listar_cobrancas_extras_servicos(ids_servicos):
         grupo["itens"].append(extra)
         grupo["total"] += converter_valor_numerico(extra.get("valor"))
 
-    conn.close()
+    if conn_local:
+        conn_local.close()
 
     for grupo in extras_por_servico.values():
         grupo["total_exibicao"] = formatar_valor_monetario(grupo["total"])
@@ -9441,33 +9511,35 @@ def formatar_item_historico_servico(servico, checklist_itens=None, fotos_por_ser
         "tempo_str": tempo_str,
     }
 
-def listar_historico_servicos(placa=None, busca="", limite=None):
-    conn = conectar()
-    c = conn.cursor()
-    servicos_db = consultar_historico_servicos_domain(
-        c,
-        empresa_atual_id(),
-        placa=placa,
-        busca=busca,
-        limite=limite,
-    )
-
-    ids_servicos = [row["id"] for row in servicos_db]
-    checklist_por_servico = listar_nomes_checklist_por_servicos_domain(c, ids_servicos)
-
-    conn.close()
-
-    fotos_por_servico = listar_fotos_servicos(ids_servicos)
-    extras_por_servico = listar_cobrancas_extras_servicos(ids_servicos)
-    return [
-        formatar_item_historico_servico(
-            row,
-            checklist_itens=checklist_por_servico.get(row["id"], []),
-            fotos_por_servico=fotos_por_servico,
-            extras_por_servico=extras_por_servico,
+def listar_historico_servicos(placa=None, busca="", limite=None, conn=None):
+    conn_local = None
+    try:
+        conn_local = conn or conectar()
+        c = conn_local.cursor()
+        servicos_db = consultar_historico_servicos_domain(
+            c,
+            empresa_atual_id(),
+            placa=placa,
+            busca=busca,
+            limite=limite,
         )
-        for row in servicos_db
-    ]
+
+        ids_servicos = [row["id"] for row in servicos_db]
+        checklist_por_servico = listar_nomes_checklist_por_servicos_domain(c, ids_servicos)
+        fotos_por_servico = listar_fotos_servicos(ids_servicos, cursor=c)
+        extras_por_servico = listar_cobrancas_extras_servicos(ids_servicos, cursor=c)
+        return [
+            formatar_item_historico_servico(
+                row,
+                checklist_itens=checklist_por_servico.get(row["id"], []),
+                fotos_por_servico=fotos_por_servico,
+                extras_por_servico=extras_por_servico,
+            )
+            for row in servicos_db
+        ]
+    finally:
+        if conn is None and conn_local:
+            conn_local.close()
 
 def detectar_novas_colunas(colunas_atuais, colunas_antigas_str):
     if not colunas_antigas_str:
@@ -10746,37 +10818,44 @@ def importar_planilha_local():
         salvar_notificacao(mensagem, "erro")
         return False, mensagem
 
-def listar_registros_clientes(busca=""):
-    def executar_listagem(conn):
-        c = conn.cursor()
-        registros_db = consultar_registros_clientes_domain(c, empresa_atual_id(), busca=busca)
-        registros = []
-        for item in registros_db:
-            item["nome"] = item.get("nome") or ""
-            item["telefone"] = item.get("telefone") or ""
-            item["modelo"] = item.get("modelo") or ""
-            item["cor"] = item.get("cor") or ""
-            item["placa_original"] = item.get("placa") or ""
-            item["placa_principal"] = item.get("placa_principal") or item["placa_original"]
-            registros.append(item)
-        return registros
+def _formatar_registros_clientes(registros_db):
+    registros = []
+    for item in registros_db:
+        item["nome"] = item.get("nome") or ""
+        item["telefone"] = item.get("telefone") or ""
+        item["modelo"] = item.get("modelo") or ""
+        item["cor"] = item.get("cor") or ""
+        item["placa_original"] = item.get("placa") or ""
+        item["placa_principal"] = item.get("placa_principal") or item["placa_original"]
+        registros.append(item)
+    return registros
 
-    conn = None
-    try:
-        conn = conectar_somente_leitura()
+
+def listar_registros_clientes(busca="", conn=None):
+    def executar_listagem(conn_atual):
+        c = conn_atual.cursor()
+        registros_db = consultar_registros_clientes_domain(c, empresa_atual_id(), busca=busca)
+        return _formatar_registros_clientes(registros_db)
+
+    if conn is not None:
         return executar_listagem(conn)
+
+    conn_local = None
+    try:
+        conn_local = conectar_somente_leitura()
+        return executar_listagem(conn_local)
     except Exception as e:
         print("AVISO CLIENTES LISTA:", e)
         try:
             garantir_schema_sqlite_local_minima(force=True)
-            conn = conectar_banco_local_forcado()
-            return executar_listagem(conn)
+            conn_local = conectar_banco_local_forcado()
+            return executar_listagem(conn_local)
         except Exception:
             raise
     finally:
         try:
-            if conn:
-                conn.close()
+            if conn_local:
+                conn_local.close()
         except Exception:
             pass
 
@@ -11278,13 +11357,30 @@ def loop_importacao():
 
 def carregar_contexto_clientes(busca="", limpar=False):
     busca_aplicada = "" if limpar else busca
-    clientes = listar_registros_clientes(busca_aplicada)
+    usuario_cache = str(session.get("usuario") or "")
     empresa_id = empresa_atual_id()
-    sincronizacoes_raw = executar_leitura_resiliente(
-        lambda conn: consultar_sincronizacoes_clientes_domain(conn.cursor(), empresa_id),
+    chave_cache = f"{usuario_cache}|{empresa_id}|{busca_aplicada}"
+    contexto_cache = obter_cache_consulta(
+        CLIENTES_CONTEXT_CACHE,
+        chave_cache,
+        CLIENTES_CONTEXT_CACHE_TTL,
+    )
+    if contexto_cache is not None:
+        return (
+            contexto_cache.get("clientes", []),
+            contexto_cache.get("sincronizacoes", []),
+        )
+
+    contexto_lido = executar_leitura_resiliente(
+        lambda conn: {
+            "clientes": listar_registros_clientes(busca_aplicada, conn=conn),
+            "sincronizacoes_raw": consultar_sincronizacoes_clientes_domain(conn.cursor(), empresa_id),
+        },
         descricao="CONTEXTO CLIENTES",
-        padrao=[],
-    ) or []
+        padrao={"clientes": [], "sincronizacoes_raw": []},
+    ) or {"clientes": [], "sincronizacoes_raw": []}
+    clientes = contexto_lido.get("clientes", [])
+    sincronizacoes_raw = contexto_lido.get("sincronizacoes_raw", []) or []
 
     sincronizacoes = []
 
@@ -11298,6 +11394,11 @@ def carregar_contexto_clientes(busca="", limpar=False):
         item["campos"] = descrever_campos_sincronizados(item)
         sincronizacoes.append(item)
 
+    salvar_cache_consulta(
+        CLIENTES_CONTEXT_CACHE,
+        chave_cache,
+        {"clientes": clientes, "sincronizacoes": sincronizacoes},
+    )
     return clientes, sincronizacoes
 
 
@@ -15420,12 +15521,24 @@ def api_operacional_voz():
 
 def _carregar_dados_painel(conn):
     c = conn.cursor()
-    servicos_db = consultar_servicos_em_andamento_domain(c, empresa_atual_id())
-    c.execute("SELECT nome FROM produtos_pneu ORDER BY nome")
-    produtos_pneu = [row[0] for row in c.fetchall()]
+    servicos_db = [dict(row) for row in consultar_servicos_em_andamento_domain(c, empresa_atual_id())]
+    agora_cache_ts = time.time()
+    produtos_cache = PRODUTOS_PNEU_CACHE.get("resultado")
+    if produtos_cache is not None and (
+        agora_cache_ts - float(PRODUTOS_PNEU_CACHE.get("testado_em") or 0.0) < PRODUTOS_PNEU_CACHE_TTL
+    ):
+        produtos_pneu = list(produtos_cache)
+    else:
+        c.execute("SELECT nome FROM produtos_pneu ORDER BY nome")
+        produtos_pneu = [row[0] for row in c.fetchall()]
+        PRODUTOS_PNEU_CACHE["testado_em"] = agora_cache_ts
+        PRODUTOS_PNEU_CACHE["resultado"] = list(produtos_pneu)
+    ids_servicos = [row["id"] for row in servicos_db]
     return {
         "servicos_db": servicos_db,
         "produtos_pneu": produtos_pneu,
+        "fotos_por_servico": listar_fotos_servicos(ids_servicos, cursor=c),
+        "extras_por_servico": listar_cobrancas_extras_servicos(ids_servicos, cursor=c),
     }
 
 
@@ -15435,17 +15548,36 @@ def painel():
         return redirect("/login")
 
     preparar_rotinas_interface_logada()
-    leitura_painel = executar_leitura_resiliente(
-        lambda conn: _carregar_dados_painel(conn),
-        descricao="PAINEL",
-        padrao={"servicos_db": [], "produtos_pneu": []},
-    ) or {"servicos_db": [], "produtos_pneu": []}
+    usuario_cache = str(session.get("usuario") or "")
+    empresa_id = empresa_atual_id()
+    chave_cache = f"{usuario_cache}|{empresa_id}"
+    leitura_painel = obter_cache_consulta(
+        PAINEL_CONTEXT_CACHE,
+        chave_cache,
+        PAINEL_CONTEXT_CACHE_TTL,
+    )
+    if leitura_painel is None:
+        leitura_painel = executar_leitura_resiliente(
+            lambda conn: _carregar_dados_painel(conn),
+            descricao="PAINEL",
+            padrao={
+                "servicos_db": [],
+                "produtos_pneu": [],
+                "fotos_por_servico": {},
+                "extras_por_servico": {},
+            },
+        ) or {
+            "servicos_db": [],
+            "produtos_pneu": [],
+            "fotos_por_servico": {},
+            "extras_por_servico": {},
+        }
+        salvar_cache_consulta(PAINEL_CONTEXT_CACHE, chave_cache, leitura_painel)
 
     servicos_db = leitura_painel["servicos_db"]
     produtos_pneu = leitura_painel["produtos_pneu"]
-    ids_servicos = [row["id"] for row in servicos_db]
-    fotos_por_servico = listar_fotos_servicos(ids_servicos)
-    extras_por_servico = listar_cobrancas_extras_servicos(ids_servicos)
+    fotos_por_servico = leitura_painel.get("fotos_por_servico", {})
+    extras_por_servico = leitura_painel.get("extras_por_servico", {})
 
     servicos = []
 
@@ -15531,7 +15663,17 @@ def pagina_historico():
 
     preparar_rotinas_interface_logada()
     busca = (request.form.get("busca") or request.args.get("busca") or "").strip()
-    historico = listar_historico_servicos(busca=busca)
+    usuario_cache = str(session.get("usuario") or "")
+    empresa_id = empresa_atual_id()
+    chave_cache = f"{usuario_cache}|{empresa_id}|{busca}"
+    historico = obter_cache_consulta(
+        HISTORICO_CONTEXT_CACHE,
+        chave_cache,
+        HISTORICO_CONTEXT_CACHE_TTL,
+    )
+    if historico is None:
+        historico = listar_historico_servicos(busca=busca)
+        salvar_cache_consulta(HISTORICO_CONTEXT_CACHE, chave_cache, historico)
     return render_template(
         "historico.html",
         historico=historico,

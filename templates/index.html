@@ -1732,8 +1732,8 @@ let agendaRetornoData = {
     restantes: 0
 };
 const AGENDA_RETORNO_STORAGE_KEY = "wagen_agenda_retorno_dispensada_v2";
-const NOTIFICACOES_REFRESH_MS = 30000;
-const AGENDA_REFRESH_MS = 180000;
+const NOTIFICACOES_REFRESH_MS = 45000;
+const AGENDA_REFRESH_MS = 240000;
 let notificacoesCarregadasEm = 0;
 let agendaRetornoCarregadaEm = 0;
 
@@ -2129,7 +2129,7 @@ garantirAgendaRetornoUI();
 
 <script>
 const APP_VERSION = "{{ app_version }}";
-const HOME_SNAPSHOT_REFRESH_MS = 30000;
+const HOME_SNAPSHOT_REFRESH_MS = 45000;
 let climaTexto = "🌤️ Carregando...";
 let sugestaoTexto = "";
 
@@ -2565,7 +2565,7 @@ function atualizarRelogio() {
 } // FECHAMENTO CORRETO DA FUNCAO
 function agendarPrimeiroSnapshotHome() {
     const disparar = () => {
-        setTimeout(atualizarHomeSnapshot, 1200);
+        setTimeout(atualizarHomeSnapshot, 1800);
     };
 
     if ("requestIdleCallback" in window) {

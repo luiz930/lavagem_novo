@@ -476,7 +476,7 @@ function toggleSidebar() {
 let baseSyncToken = "";
 let baseSyncExecutando = false;
 let baseSyncIntervalHandle = null;
-const baseSyncIntervalPadrao = 60;
+const baseSyncIntervalPadrao = 90;
 const baseSyncIntervalChave = "wagen_sync_interval_seconds";
 const baseUsaSnapshotHome = window.location.pathname === "/";
 
@@ -486,7 +486,7 @@ function baseObterIntervaloSincronia() {
         return baseSyncIntervalPadrao;
     }
 
-    return Math.max(20, Math.min(180, Math.round(valorArmazenado)));
+    return Math.max(30, Math.min(240, Math.round(valorArmazenado)));
 }
 
 function baseReiniciarAgendamentoSincronia() {
@@ -545,7 +545,7 @@ window.reiniciarSincroniaBancoBase = baseReiniciarAgendamentoSincronia;
 {% if session.get("usuario") %}
 if (!baseUsaSnapshotHome) {
 baseReiniciarAgendamentoSincronia();
-setTimeout(verificarSincroniaBancoBase, 12000);
+setTimeout(verificarSincroniaBancoBase, 20000);
 
 document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
