@@ -2,6 +2,7 @@ import sqlite3
 import unittest
 
 from core.product_foundation import (
+    apply_admin_settings_scope,
     apply_empresa_indexes,
     apply_extended_empresa_scope,
     build_brand_context,
@@ -33,6 +34,9 @@ class ProductFoundationMigrationsTests(unittest.TestCase):
         c.execute("CREATE TABLE orcamentos (id INTEGER PRIMARY KEY AUTOINCREMENT, numero INTEGER)")
         c.execute("CREATE TABLE notas_fiscais (id INTEGER PRIMARY KEY AUTOINCREMENT, numero_nota TEXT)")
         c.execute("CREATE TABLE configuracao_empresa (id INTEGER PRIMARY KEY, nome_fantasia TEXT)")
+        c.execute("CREATE TABLE configuracao_backup (id INTEGER PRIMARY KEY CHECK (id = 1), frequencia TEXT)")
+        c.execute("CREATE TABLE manutencao_arquivos (id INTEGER PRIMARY KEY CHECK (id = 1), ultima_mensagem TEXT)")
+        c.execute("CREATE TABLE integracao_fiscal (id INTEGER PRIMARY KEY CHECK (id = 1), tipo_integracao TEXT)")
         self.conn.commit()
 
     def tearDown(self):
@@ -50,6 +54,7 @@ class ProductFoundationMigrationsTests(unittest.TestCase):
         migrations = {row[0] for row in c.fetchall()}
         self.assertIn("foundation_enterprises", migrations)
         self.assertIn("foundation_branding_storage", migrations)
+        self.assertIn("foundation_admin_settings_scope", migrations)
 
         c.execute("SELECT id, slug FROM empresas WHERE id=1")
         empresa = c.fetchone()
@@ -134,6 +139,43 @@ class ProductFoundationMigrationsTests(unittest.TestCase):
                 unico_global_veiculos.append(nome)
         self.assertEqual(unico_global_veiculos, [])
 
+    def test_migration_converts_admin_singleton_tables_to_empresa_scope(self):
+        c = self.conn.cursor()
+        c.execute("INSERT INTO configuracao_backup (id, frequencia) VALUES (1, 'diario')")
+        c.execute("INSERT INTO manutencao_arquivos (id, ultima_mensagem) VALUES (1, 'ok')")
+        c.execute("INSERT INTO integracao_fiscal (id, tipo_integracao) VALUES (1, 'manual')")
+        self.conn.commit()
+
+        run_product_foundation_migrations(
+            self.conn,
+            add_column_if_needed,
+            lambda: "2026-05-01T00:00:00",
+            print_func=lambda *_args, **_kwargs: None,
+        )
+
+        c.execute("PRAGMA table_info(configuracao_backup)")
+        colunas_backup = {row[1] for row in c.fetchall()}
+        self.assertIn("empresa_id", colunas_backup)
+
+        c.execute("PRAGMA table_info(manutencao_arquivos)")
+        colunas_manutencao = {row[1] for row in c.fetchall()}
+        self.assertIn("empresa_id", colunas_manutencao)
+
+        c.execute("PRAGMA table_info(integracao_fiscal)")
+        colunas_fiscal = {row[1] for row in c.fetchall()}
+        self.assertIn("empresa_id", colunas_fiscal)
+
+        c.execute("SELECT empresa_id, frequencia FROM configuracao_backup WHERE id=1")
+        self.assertEqual(tuple(c.fetchone()), (1, "diario"))
+
+        c.execute("INSERT INTO configuracao_backup (empresa_id, frequencia) VALUES (?, ?)", (2, "semanal"))
+        c.execute("INSERT INTO manutencao_arquivos (empresa_id, ultima_mensagem) VALUES (?, ?)", (2, "empresa-2"))
+        c.execute("INSERT INTO integracao_fiscal (empresa_id, tipo_integracao) VALUES (?, ?)", (2, "api"))
+        self.conn.commit()
+
+        c.execute("SELECT COUNT(*) FROM configuracao_backup WHERE empresa_id IN (1, 2)")
+        self.assertEqual(c.fetchone()[0], 2)
+
     def test_postgres_helpers_do_not_use_sqlite_metadata(self):
         class FakeCursor:
             backend = "postgres"
@@ -169,6 +211,9 @@ class ProductFoundationMigrationsTests(unittest.TestCase):
                         "retornos_clientes": [("empresa_id",), ("placa",)],
                         "historico_lavagens_sync": [("empresa_id",), ("placa",)],
                         "sincronizacoes_clientes": [("empresa_id",), ("ativo",), ("proximo_sync_em",)],
+                        "configuracao_backup": [("empresa_id",), ("frequencia",)],
+                        "manutencao_arquivos": [("empresa_id",), ("ultima_mensagem",)],
+                        "integracao_fiscal": [("empresa_id",), ("tipo_integracao",)],
                     }
                     return colunas_por_tabela.get(tabela, [])
                 return []
@@ -179,6 +224,7 @@ class ProductFoundationMigrationsTests(unittest.TestCase):
             return None
 
         apply_extended_empresa_scope(cursor, add_column_fake)
+        apply_admin_settings_scope(cursor, add_column_fake)
         apply_empresa_indexes(cursor)
 
         comandos = "\n".join(sql for sql, _ in cursor.commands)

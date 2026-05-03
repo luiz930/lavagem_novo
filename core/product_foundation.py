@@ -12,6 +12,7 @@ FOUNDATION_MIGRATIONS = (
     "foundation_branding_storage",
     "foundation_site_customization",
     "foundation_empresa_scope_extended",
+    "foundation_admin_settings_scope",
     "foundation_empresa_indexes",
     "foundation_legacy_plate_uniqueness",
 )
@@ -214,6 +215,14 @@ def apply_extended_empresa_scope(cursor, add_column):
     )
 
 
+def _singleton_admin_tables():
+    return (
+        "configuracao_backup",
+        "manutencao_arquivos",
+        "integracao_fiscal",
+    )
+
+
 def apply_branding_and_storage(cursor, add_column):
     add_column(cursor, "configuracao_empresa", "atualizado_em TEXT")
     add_column(cursor, "configuracao_empresa", "marca_nome TEXT")
@@ -301,7 +310,158 @@ def apply_site_customization(cursor, add_column):
             marca_cor_texto = COALESCE(NULLIF(marca_cor_texto, ''), '#f9fafb')
         WHERE id = 1
         """
+        )
+
+
+def _sqlite_table_create_sql(cursor, tabela):
+    cursor.execute(
+        """
+        SELECT sql
+        FROM sqlite_master
+        WHERE type='table' AND name=?
+        LIMIT 1
+        """,
+        (tabela,),
     )
+    row = cursor.fetchone()
+    if not row:
+        return ""
+    if hasattr(row, "keys"):
+        return str(row["sql"] or "")
+    return str(row[0] or "")
+
+
+def _has_singleton_id_check_sql(sql):
+    return bool(re.search(r"CHECK\s*\(\s*\"?id\"?\s*=\s*1\s*\)", str(sql or ""), re.IGNORECASE))
+
+
+def rebuild_sqlite_table_with_empresa_scope(cursor, tabela):
+    if not _sqlite_table_exists(cursor, tabela):
+        return
+
+    sql_origem = _sqlite_table_create_sql(cursor, tabela)
+    cursor.execute(f"PRAGMA table_info({_quote_ident(tabela)})")
+    colunas = cursor.fetchall()
+    if not colunas:
+        return
+
+    nomes_colunas = [coluna[1] for coluna in colunas]
+    precisa_empresa_id = "empresa_id" not in nomes_colunas
+    precisa_rebuild = precisa_empresa_id or _has_singleton_id_check_sql(sql_origem)
+    if not precisa_rebuild:
+        cursor.execute(
+            f"UPDATE {_quote_ident(tabela)} SET empresa_id=1 WHERE empresa_id IS NULL"
+        )
+        cursor.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {_quote_ident(f'idx_{tabela}_empresa_unique')} "
+            f"ON {_quote_ident(tabela)}(empresa_id)"
+        )
+        return
+
+    total_pk_colunas = sum(1 for coluna in colunas if int(coluna[5] or 0))
+    foreign_keys = _sqlite_foreign_key_sqls(cursor, tabela)
+    index_sqls = _sqlite_index_sqls(cursor, tabela)
+
+    definicoes_colunas = []
+    insert_colunas = []
+    select_colunas = []
+    empresa_inserida = False
+
+    for coluna in colunas:
+        nome_coluna = coluna[1]
+        definicoes_colunas.append(_sqlite_column_sql(coluna, total_pk_colunas))
+        insert_colunas.append(_quote_ident(nome_coluna))
+        select_colunas.append(_quote_ident(nome_coluna))
+
+        if nome_coluna == "id" and precisa_empresa_id:
+            definicoes_colunas.append('"empresa_id" INTEGER NOT NULL DEFAULT 1')
+            insert_colunas.append('"empresa_id"')
+            select_colunas.append("1 AS empresa_id")
+            empresa_inserida = True
+
+    if precisa_empresa_id and not empresa_inserida:
+        definicoes_colunas.append('"empresa_id" INTEGER NOT NULL DEFAULT 1')
+        insert_colunas.append('"empresa_id"')
+        select_colunas.append("1 AS empresa_id")
+
+    tabela_legado = f"{tabela}__legacy_empresa_scope"
+    definicoes = definicoes_colunas + foreign_keys
+    sql_create = f"CREATE TABLE {_quote_ident(tabela)} ({', '.join(definicoes)})"
+    insert_sql = ", ".join(insert_colunas)
+    select_sql = ", ".join(select_colunas)
+
+    cursor.execute("PRAGMA foreign_keys=OFF")
+    cursor.execute(
+        f"ALTER TABLE {_quote_ident(tabela)} RENAME TO {_quote_ident(tabela_legado)}"
+    )
+    cursor.execute(sql_create)
+    cursor.execute(
+        f"""
+        INSERT INTO {_quote_ident(tabela)} ({insert_sql})
+        SELECT {select_sql}
+        FROM {_quote_ident(tabela_legado)}
+        """
+    )
+    cursor.execute(f"DROP TABLE {_quote_ident(tabela_legado)}")
+
+    for _, sql_indice in index_sqls:
+        if not sql_indice:
+            continue
+        cursor.execute(sql_indice)
+
+    cursor.execute(
+        f"UPDATE {_quote_ident(tabela)} SET empresa_id=1 WHERE empresa_id IS NULL"
+    )
+    cursor.execute(
+        f"CREATE UNIQUE INDEX IF NOT EXISTS {_quote_ident(f'idx_{tabela}_empresa_unique')} "
+        f"ON {_quote_ident(tabela)}(empresa_id)"
+    )
+    cursor.execute("PRAGMA foreign_keys=ON")
+
+
+def drop_postgres_singleton_id_checks(cursor, tabela):
+    cursor.execute(
+        """
+        SELECT con.conname, pg_get_constraintdef(con.oid) AS definicao
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = ?
+          AND con.contype = 'c'
+        """,
+        (tabela,),
+    )
+    for row in cursor.fetchall():
+        nome = row[0] if not hasattr(row, "keys") else row["conname"]
+        definicao = row[1] if not hasattr(row, "keys") else row["definicao"]
+        if not re.search(r"\bid\s*=\s*1\b", str(definicao or ""), re.IGNORECASE):
+            continue
+        cursor.execute(
+            f"ALTER TABLE {_quote_ident(tabela)} DROP CONSTRAINT IF EXISTS {_quote_ident(nome)}"
+        )
+
+
+def apply_admin_settings_scope(cursor, _add_column):
+    backend = _backend_name(cursor)
+    for tabela in _singleton_admin_tables():
+        if not _table_exists(cursor, tabela):
+            continue
+        if backend == "postgres":
+            cursor.execute(
+                f"ALTER TABLE {_quote_ident(tabela)} ADD COLUMN IF NOT EXISTS empresa_id INTEGER DEFAULT 1"
+            )
+            cursor.execute(
+                f"UPDATE {_quote_ident(tabela)} SET empresa_id=1 WHERE empresa_id IS NULL"
+            )
+            drop_postgres_singleton_id_checks(cursor, tabela)
+            cursor.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {_quote_ident(f'idx_{tabela}_empresa_unique')} "
+                f"ON {_quote_ident(tabela)}(empresa_id)"
+            )
+            continue
+
+        rebuild_sqlite_table_with_empresa_scope(cursor, tabela)
 
 
 def apply_empresa_indexes(cursor):
@@ -645,6 +805,10 @@ def run_product_foundation_migrations(conn, add_column, now_iso, print_func=prin
     if "foundation_empresa_scope_extended" not in applied:
         apply_extended_empresa_scope(cursor, add_column)
         mark_migration_applied(cursor, "foundation_empresa_scope_extended", now_iso())
+
+    if "foundation_admin_settings_scope" not in applied:
+        apply_admin_settings_scope(cursor, add_column)
+        mark_migration_applied(cursor, "foundation_admin_settings_scope", now_iso())
 
     if "foundation_empresa_indexes" not in applied:
         apply_empresa_indexes(cursor)

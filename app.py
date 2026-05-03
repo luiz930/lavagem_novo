@@ -769,6 +769,7 @@ def nome_arquivo_backup_banco(datahora=None):
 def configuracao_backup_padrao():
     return {
         "id": 1,
+        "empresa_id": 1,
         "frequencia": "diario",
         "tipo_backup": BACKUP_TIPO_PADRAO,
         "retencao_arquivos": BACKUP_RETENCAO_PADRAO,
@@ -782,9 +783,11 @@ def configuracao_backup_padrao():
 def obter_configuracao_backup():
     def carregar(conn):
         c = conn.cursor()
-        c.execute("SELECT * FROM configuracao_backup WHERE id=1")
-        row = c.fetchone()
-        return dict(row) if row else None
+        return selecionar_registro_administrativo_empresa_cursor(
+            c,
+            "configuracao_backup",
+            empresa_atual_id(),
+        )
 
     row = executar_leitura_resiliente(
         carregar,
@@ -849,36 +852,19 @@ def salvar_configuracao_backup_form(form):
 
     retencao = max(1, min(120, retencao))
 
-    conn = conectar()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO configuracao_backup (
-            id, frequencia, tipo_backup, retencao_arquivos,
-            destino_externo_ativo, destino_externo_tipo,
-            destino_externo_pasta, destino_externo_drive_folder_id, atualizado_em
-        )
-        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            frequencia=excluded.frequencia,
-            tipo_backup=excluded.tipo_backup,
-            retencao_arquivos=excluded.retencao_arquivos,
-            destino_externo_ativo=excluded.destino_externo_ativo,
-            destino_externo_tipo=excluded.destino_externo_tipo,
-            destino_externo_pasta=excluded.destino_externo_pasta,
-            destino_externo_drive_folder_id=excluded.destino_externo_drive_folder_id,
-            atualizado_em=excluded.atualizado_em
-    """, (
-        frequencia,
-        tipo_backup,
-        retencao,
-        destino_externo_ativo,
-        destino_externo_tipo,
-        destino_externo_pasta,
-        destino_externo_drive_folder_id,
-        agora_iso(),
-    ))
-    conn.commit()
-    conn.close()
+    salvar_campos_registro_administrativo_empresa(
+        "configuracao_backup",
+        {
+            "frequencia": frequencia,
+            "tipo_backup": tipo_backup,
+            "retencao_arquivos": retencao,
+            "destino_externo_ativo": destino_externo_ativo,
+            "destino_externo_tipo": destino_externo_tipo,
+            "destino_externo_pasta": destino_externo_pasta,
+            "destino_externo_drive_folder_id": destino_externo_drive_folder_id,
+            "atualizado_em": agora_iso(),
+        },
+    )
     return obter_configuracao_backup()
 
 def periodo_backup_coberto(frequencia, ultimo_dt, agora_atual):
@@ -2335,6 +2321,7 @@ def remover_diretorios_vazios(base, preservar=None):
 def obter_status_manutencao_arquivos_db():
     padrao = {
         "id": 1,
+        "empresa_id": 1,
         "ultimo_executado_em": "",
         "ultima_mensagem": "",
         "ultimo_resultado_json": "",
@@ -2342,9 +2329,12 @@ def obter_status_manutencao_arquivos_db():
 
     def carregar(conn):
         c = conn.cursor()
-        c.execute("SELECT * FROM manutencao_arquivos WHERE id=1")
-        row = c.fetchone()
-        return dict(row) if row else dict(padrao)
+        row = selecionar_registro_administrativo_empresa_cursor(
+            c,
+            "manutencao_arquivos",
+            empresa_atual_id(),
+        )
+        return row if row else dict(padrao)
 
     return executar_leitura_resiliente(
         carregar,
@@ -2353,22 +2343,18 @@ def obter_status_manutencao_arquivos_db():
     )
 
 def salvar_status_manutencao_arquivos(resultado, mensagem):
-    conn = conectar()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO manutencao_arquivos (id, ultimo_executado_em, ultima_mensagem, ultimo_resultado_json)
-        VALUES (1, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            ultimo_executado_em=excluded.ultimo_executado_em,
-            ultima_mensagem=excluded.ultima_mensagem,
-            ultimo_resultado_json=excluded.ultimo_resultado_json
-    """, (
-        agora_iso(),
-        mensagem,
-        json.dumps(resultado or {}, ensure_ascii=False, default=sanitizar_para_json),
-    ))
-    conn.commit()
-    conn.close()
+    salvar_campos_registro_administrativo_empresa(
+        "manutencao_arquivos",
+        {
+            "ultimo_executado_em": agora_iso(),
+            "ultima_mensagem": mensagem,
+            "ultimo_resultado_json": json.dumps(
+                resultado or {},
+                ensure_ascii=False,
+                default=sanitizar_para_json,
+            ),
+        },
+    )
 
 def obter_estatisticas_armazenamento():
     uploads_base = caminho_uploads_absoluto()
@@ -2878,11 +2864,12 @@ app.config.update(
 app.config["SESSION_TYPE"] = "filesystem"
 app.secret_key = app.config["SECRET_KEY"]
 
-VERSAO_SISTEMA_PADRAO = "0.10.0-beta"
+VERSAO_SISTEMA_PADRAO = "0.11.0"
 APP_VERSION = f"Versao: {VERSAO_SISTEMA_PADRAO}"
 VERSOES_SISTEMA_LEGADAS = {
     "0.7.5-alpha (Em Desenvolvimento)",
     "0.9.5-beta (Em Desenvolvimento)",
+    "0.10.0-beta",
 }
 MESES_CURTOS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 PERIODOS_FINANCEIRO = [
@@ -3059,7 +3046,10 @@ def selecionar_configuracao_empresa_cursor(cursor, empresa_id=None):
             cursor.execute("SELECT * FROM configuracao_empresa WHERE id=1")
             row = cursor.fetchone()
             if row:
-                return row_para_dict(row)
+                dados = row_para_dict(row)
+                empresa_row = normalize_empresa_id(dados.get("empresa_id") or 1)
+                if empresa_row == 1:
+                    return dados
         except Exception:
             pass
 
@@ -3090,6 +3080,70 @@ def salvar_campos_configuracao_empresa(campos, empresa_id=None):
         valores = [payload[coluna] for coluna in colunas]
         sql = (
             "INSERT INTO configuracao_empresa ("
+            + ", ".join(colunas)
+            + ") VALUES ("
+            + ", ".join(["?"] * len(colunas))
+            + ")"
+        )
+        c.execute(sql, tuple(valores))
+
+    conn.commit()
+    conn.close()
+    return payload
+
+
+def selecionar_registro_administrativo_empresa_cursor(cursor, tabela, empresa_id=None):
+    empresa_id = normalize_empresa_id(empresa_id or empresa_atual_id())
+
+    try:
+        cursor.execute(
+            f"SELECT * FROM {tabela} WHERE empresa_id=? ORDER BY id LIMIT 1",
+            (empresa_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            return row_para_dict(row)
+    except Exception:
+        pass
+
+    if empresa_id == 1:
+        try:
+            cursor.execute(f"SELECT * FROM {tabela} WHERE id=1")
+            row = cursor.fetchone()
+            if row:
+                dados = row_para_dict(row)
+                empresa_row = normalize_empresa_id(dados.get("empresa_id") or 1)
+                if empresa_row == 1:
+                    return dados
+        except Exception:
+            pass
+
+    return None
+
+
+def salvar_campos_registro_administrativo_empresa(tabela, campos, empresa_id=None):
+    empresa_id = normalize_empresa_id(empresa_id or empresa_atual_id())
+    payload = dict(campos or {})
+    payload["empresa_id"] = empresa_id
+
+    conn = conectar()
+    c = conn.cursor()
+    atual = selecionar_registro_administrativo_empresa_cursor(c, tabela, empresa_id)
+
+    if atual and atual.get("id"):
+        colunas = list(payload.keys())
+        valores = [payload[coluna] for coluna in colunas]
+        sql = (
+            f"UPDATE {tabela} SET "
+            + ", ".join(f"{coluna}=?" for coluna in colunas)
+            + " WHERE id=?"
+        )
+        c.execute(sql, tuple(valores + [atual["id"]]))
+    else:
+        colunas = list(payload.keys())
+        valores = [payload[coluna] for coluna in colunas]
+        sql = (
+            f"INSERT INTO {tabela} ("
             + ", ".join(colunas)
             + ") VALUES ("
             + ", ".join(["?"] * len(colunas))
@@ -3370,6 +3424,8 @@ CLIMA_CACHE = {
 CLIMA_CACHE_TTL = 600
 ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS = 0.0
 SYNC_FONTES_SOB_DEMANDA_INTERVALO = 90
+ULTIMA_PREPARACAO_INTERFACE_TS = 0.0
+PREPARACAO_INTERFACE_INTERVALO = 45
 USUARIO_SESSAO_SYNC_TTL = 60
 BANCO_ONLINE_STATUS_CACHE = {
     "testado_em": 0.0,
@@ -3953,7 +4009,7 @@ def salvar_configuracao_banco_form(form):
     database = normalizar_texto_campo(form.get("database_name")) or configuracao_atual.get("database") or "postgres"
     usuario = normalizar_texto_campo(form.get("database_user")) or configuracao_atual.get("usuario") or "postgres"
     senha = form.get("database_password") or SUPABASE_DB_PASSWORD
-    auto_migrar = bool_config_ativo(form.get("migrar_automaticamente"))
+    auto_migrar = bool_config_ativo(form.get("migrar_automaticamente", "1"))
 
     url_atual = DATABASE_URL_RAW
     senha_atual = SUPABASE_DB_PASSWORD
@@ -6099,7 +6155,8 @@ def criar_todas_tabelas():
     """)
     c.execute("""
     CREATE TABLE IF NOT EXISTS integracao_fiscal (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        empresa_id INTEGER NOT NULL DEFAULT 1,
         tipo_integracao TEXT DEFAULT 'manual',
         provedor_nome TEXT,
         ambiente TEXT DEFAULT 'homologacao',
@@ -6129,7 +6186,8 @@ def criar_todas_tabelas():
     """)
     c.execute("""
     CREATE TABLE IF NOT EXISTS configuracao_backup (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        empresa_id INTEGER NOT NULL DEFAULT 1,
         frequencia TEXT DEFAULT 'diario',
         tipo_backup TEXT DEFAULT 'completo',
         retencao_arquivos INTEGER DEFAULT 15,
@@ -6142,7 +6200,8 @@ def criar_todas_tabelas():
     """)
     c.execute("""
     CREATE TABLE IF NOT EXISTS manutencao_arquivos (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        empresa_id INTEGER NOT NULL DEFAULT 1,
         ultimo_executado_em TEXT,
         ultima_mensagem TEXT,
         ultimo_resultado_json TEXT
@@ -7526,6 +7585,8 @@ def salvar_configuracao_empresa_form(form):
 
 def integracao_fiscal_padrao():
     return {
+        "id": 1,
+        "empresa_id": 1,
         "tipo_integracao": "manual",
         "provedor_nome": "",
         "ambiente": "homologacao",
@@ -7554,11 +7615,19 @@ def integracao_fiscal_padrao():
     }
 
 def obter_configuracao_integracao_fiscal():
-    conn = conectar()
-    c = conn.cursor()
-    c.execute("SELECT * FROM integracao_fiscal WHERE id=1")
-    item = c.fetchone()
-    conn.close()
+    def carregar(conn):
+        c = conn.cursor()
+        return selecionar_registro_administrativo_empresa_cursor(
+            c,
+            "integracao_fiscal",
+            empresa_atual_id(),
+        )
+
+    item = executar_leitura_resiliente(
+        carregar,
+        descricao="CONFIG INTEGRACAO FISCAL",
+        padrao=None,
+    )
 
     dados = integracao_fiscal_padrao()
 
@@ -7581,74 +7650,36 @@ def obter_configuracao_integracao_fiscal():
     return dados
 
 def salvar_configuracao_integracao_fiscal_form(form):
-    conn = conectar()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO integracao_fiscal (
-            id, tipo_integracao, provedor_nome, ambiente, municipio_codigo_ibge, municipio_nome, uf,
-            endpoint_emissao, endpoint_consulta, endpoint_cancelamento, autenticacao_tipo, usuario_api,
-            senha_api, client_id, client_secret, token_api, token_url, certificado_tipo,
-            certificado_arquivo, certificado_senha, serie_rps, serie_nfe, ativo, ultimo_status,
-            ultima_mensagem, atualizado_em
-        )
-        VALUES (
-            1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        )
-        ON CONFLICT(id) DO UPDATE SET
-            tipo_integracao=excluded.tipo_integracao,
-            provedor_nome=excluded.provedor_nome,
-            ambiente=excluded.ambiente,
-            municipio_codigo_ibge=excluded.municipio_codigo_ibge,
-            municipio_nome=excluded.municipio_nome,
-            uf=excluded.uf,
-            endpoint_emissao=excluded.endpoint_emissao,
-            endpoint_consulta=excluded.endpoint_consulta,
-            endpoint_cancelamento=excluded.endpoint_cancelamento,
-            autenticacao_tipo=excluded.autenticacao_tipo,
-            usuario_api=excluded.usuario_api,
-            senha_api=excluded.senha_api,
-            client_id=excluded.client_id,
-            client_secret=excluded.client_secret,
-            token_api=excluded.token_api,
-            token_url=excluded.token_url,
-            certificado_tipo=excluded.certificado_tipo,
-            certificado_arquivo=excluded.certificado_arquivo,
-            certificado_senha=excluded.certificado_senha,
-            serie_rps=excluded.serie_rps,
-            serie_nfe=excluded.serie_nfe,
-            ativo=excluded.ativo,
-            ultimo_status=excluded.ultimo_status,
-            ultima_mensagem=excluded.ultima_mensagem,
-            atualizado_em=excluded.atualizado_em
-    """, (
-        normalizar_texto_campo(form.get("tipo_integracao")) or "manual",
-        normalizar_texto_campo(form.get("provedor_nome")),
-        normalizar_texto_campo(form.get("ambiente")) or "homologacao",
-        re.sub(r"\D", "", str(form.get("municipio_codigo_ibge") or "")),
-        normalizar_texto_campo(form.get("municipio_nome")),
-        normalizar_texto_campo(form.get("uf")).upper()[:2],
-        normalizar_texto_campo(form.get("endpoint_emissao")),
-        normalizar_texto_campo(form.get("endpoint_consulta")),
-        normalizar_texto_campo(form.get("endpoint_cancelamento")),
-        normalizar_texto_campo(form.get("autenticacao_tipo")) or "nenhuma",
-        normalizar_texto_campo(form.get("usuario_api")),
-        normalizar_texto_campo(form.get("senha_api")),
-        normalizar_texto_campo(form.get("client_id")),
-        normalizar_texto_campo(form.get("client_secret")),
-        normalizar_texto_campo(form.get("token_api")),
-        normalizar_texto_campo(form.get("token_url")),
-        normalizar_texto_campo(form.get("certificado_tipo")) or "nenhum",
-        normalizar_texto_campo(form.get("certificado_arquivo")),
-        normalizar_texto_campo(form.get("certificado_senha")),
-        normalizar_texto_campo(form.get("serie_rps")),
-        normalizar_texto_campo(form.get("serie_nfe")),
-        1 if form.get("ativo") else 0,
-        normalizar_texto_campo(form.get("ultimo_status")),
-        normalizar_texto_campo(form.get("ultima_mensagem")),
-        agora_iso(),
-    ))
-    conn.commit()
-    conn.close()
+    salvar_campos_registro_administrativo_empresa(
+        "integracao_fiscal",
+        {
+            "tipo_integracao": normalizar_texto_campo(form.get("tipo_integracao")) or "manual",
+            "provedor_nome": normalizar_texto_campo(form.get("provedor_nome")),
+            "ambiente": normalizar_texto_campo(form.get("ambiente")) or "homologacao",
+            "municipio_codigo_ibge": re.sub(r"\D", "", str(form.get("municipio_codigo_ibge") or "")),
+            "municipio_nome": normalizar_texto_campo(form.get("municipio_nome")),
+            "uf": normalizar_texto_campo(form.get("uf")).upper()[:2],
+            "endpoint_emissao": normalizar_texto_campo(form.get("endpoint_emissao")),
+            "endpoint_consulta": normalizar_texto_campo(form.get("endpoint_consulta")),
+            "endpoint_cancelamento": normalizar_texto_campo(form.get("endpoint_cancelamento")),
+            "autenticacao_tipo": normalizar_texto_campo(form.get("autenticacao_tipo")) or "nenhuma",
+            "usuario_api": normalizar_texto_campo(form.get("usuario_api")),
+            "senha_api": normalizar_texto_campo(form.get("senha_api")),
+            "client_id": normalizar_texto_campo(form.get("client_id")),
+            "client_secret": normalizar_texto_campo(form.get("client_secret")),
+            "token_api": normalizar_texto_campo(form.get("token_api")),
+            "token_url": normalizar_texto_campo(form.get("token_url")),
+            "certificado_tipo": normalizar_texto_campo(form.get("certificado_tipo")) or "nenhum",
+            "certificado_arquivo": normalizar_texto_campo(form.get("certificado_arquivo")),
+            "certificado_senha": normalizar_texto_campo(form.get("certificado_senha")),
+            "serie_rps": normalizar_texto_campo(form.get("serie_rps")),
+            "serie_nfe": normalizar_texto_campo(form.get("serie_nfe")),
+            "ativo": 1 if form.get("ativo") else 0,
+            "ultimo_status": normalizar_texto_campo(form.get("ultimo_status")),
+            "ultima_mensagem": normalizar_texto_campo(form.get("ultima_mensagem")),
+            "atualizado_em": agora_iso(),
+        },
+    )
 
 def avaliar_prontidao_integracao_fiscal(empresa, integracao):
     empresa = empresa or empresa_snapshot_padrao()
@@ -11239,6 +11270,31 @@ def carregar_contexto_clientes(busca="", limpar=False):
 
     return clientes, sincronizacoes
 
+
+def preparar_rotinas_interface_logada():
+    if not session.get("usuario"):
+        return
+
+    global ULTIMA_PREPARACAO_INTERFACE_TS
+    global ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS
+
+    agora_ts = time.time()
+
+    if agora_ts - ULTIMA_PREPARACAO_INTERFACE_TS >= PREPARACAO_INTERFACE_INTERVALO:
+        ULTIMA_PREPARACAO_INTERFACE_TS = agora_ts
+        iniciar_bootstrap_init_db()
+        iniciar_worker_backup_banco()
+        iniciar_worker_manutencao_arquivos()
+        iniciar_worker_sincronizacao()
+        iniciar_worker_sincronizacao_bancos()
+        if modo_banco_preferido() == "postgres" and not SCHEMA_BANCO_ONLINE_GARANTIDO:
+            iniciar_bootstrap_schema_online()
+
+    if agora_ts - ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS >= SYNC_FONTES_SOB_DEMANDA_INTERVALO:
+        ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS = agora_ts
+        Thread(target=sincronizar_fontes_pendentes, daemon=True).start()
+
+
 @app.route("/healthz")
 def healthz():
     return {
@@ -11289,42 +11345,6 @@ def preparar_sincronizacoes():
             return
 
         garantir_init_db()
-
-    pode_inicializar_servicos_pesados = (
-        sessao_ativa
-        and request.method == "GET"
-        and not endpoint.startswith("api_")
-        and endpoint not in {"login", "logout", "healthz", "status_sync"}
-    )
-
-    if pode_inicializar_servicos_pesados:
-        iniciar_worker_backup_banco()
-        iniciar_worker_manutencao_arquivos()
-        iniciar_worker_sincronizacao()
-        iniciar_worker_sincronizacao_bancos()
-        if modo_banco_preferido() == "postgres" and not SCHEMA_BANCO_ONLINE_GARANTIDO:
-            iniciar_bootstrap_schema_online()
-
-    global ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS
-
-    pode_tentar_sync_sob_demanda = (
-        sessao_ativa
-        and request.method == "GET"
-        and not endpoint.startswith("api_")
-        and endpoint not in {"login", "logout"}
-    )
-
-    if pode_tentar_sync_sob_demanda:
-        try:
-            agora_ts = time.time()
-            if (
-                agora_ts - ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS
-                >= SYNC_FONTES_SOB_DEMANDA_INTERVALO
-            ):
-                ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS = agora_ts
-                Thread(target=sincronizar_fontes_pendentes, daemon=True).start()
-        except Exception as e:
-            print("AVISO SYNC PENDENTE:", e)
 
 @app.before_request
 def exigir_troca_senha_obrigatoria():
@@ -11465,6 +11485,7 @@ def pagina_nota_fiscal():
     if not session.get("usuario"):
         return redirect("/login")
 
+    preparar_rotinas_interface_logada()
     empresa = obter_configuracao_empresa()
     integracao = obter_configuracao_integracao_fiscal()
     conn = conectar()
@@ -12613,6 +12634,7 @@ def configuracoes():
     if not session.get("usuario"):
         return redirect("/login")
 
+    preparar_rotinas_interface_logada()
     sincronizar_sessao_usuario(force=True)
     senha_pendente = bool(session.get("senha_alteracao_obrigatoria"))
     perfil_logado = normalizar_perfil_usuario(
@@ -12816,6 +12838,8 @@ def configuracoes_site():
     if not session.get("usuario"):
         return redirect("/login")
 
+    if request.method == "GET":
+        preparar_rotinas_interface_logada()
     sincronizar_sessao_usuario(force=request.method == "GET")
     if not usuario_gerencia_configuracao_sistema() or session.get("senha_alteracao_obrigatoria"):
         definir_feedback_configuracoes(
@@ -14018,6 +14042,11 @@ def index():
     if not session.get("usuario"):
         return redirect("/login")
 
+    if request.method == "POST":
+        placa = request.form.get("placa", "").upper()
+        return redirect(f"/?placa={placa}")
+
+    preparar_rotinas_interface_logada()
     dados = None
     historico = []
     buscou = False
@@ -14033,11 +14062,6 @@ def index():
 
     c.execute("SELECT * FROM produtos_pneu")
     produtos_pneu = c.fetchall()
-
-    # ðŸ”¥ POST â†’ REDIRECT
-    if request.method == "POST":
-        placa = request.form.get("placa", "").upper()
-        return redirect(f"/?placa={placa}")
 
     # ðŸ”¥ GET (AQUI ESTÃ O SEGREDO)
     placa = request.args.get("placa", "").upper()
@@ -15067,6 +15091,8 @@ def cadastrar_servico():
     if not session.get("usuario"):
         return redirect("/login")
 
+    if request.method == "GET":
+        preparar_rotinas_interface_logada()
     conn = conectar()
     c = conn.cursor()
 
@@ -15378,6 +15404,7 @@ def painel():
     if not session.get("usuario"):
         return redirect("/login")
 
+    preparar_rotinas_interface_logada()
     leitura_painel = executar_leitura_resiliente(
         lambda conn: _carregar_dados_painel(conn),
         descricao="PAINEL",
@@ -15472,6 +15499,7 @@ def pagina_historico():
     if not session.get("usuario"):
         return redirect("/login")
 
+    preparar_rotinas_interface_logada()
     busca = (request.form.get("busca") or request.args.get("busca") or "").strip()
     historico = listar_historico_servicos(busca=busca)
     return render_template(
@@ -15753,6 +15781,7 @@ def clientes():
     if not session.get("usuario"):
         return redirect("/login")
 
+    preparar_rotinas_interface_logada()
     limpar = bool(request.args.get("limpar"))
     busca = (request.form.get("busca") or request.args.get("busca") or "").strip()
 
