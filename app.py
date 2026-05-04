@@ -2865,7 +2865,7 @@ app.config.update(
 app.config["SESSION_TYPE"] = "filesystem"
 app.secret_key = app.config["SECRET_KEY"]
 
-VERSAO_SISTEMA_PADRAO = "0.11.3"
+VERSAO_SISTEMA_PADRAO = "0.11.4"
 APP_VERSION = f"Versao: {VERSAO_SISTEMA_PADRAO}"
 VERSOES_SISTEMA_LEGADAS = {
     "0.7.5-alpha (Em Desenvolvimento)",
@@ -2874,6 +2874,7 @@ VERSOES_SISTEMA_LEGADAS = {
     "0.11.0",
     "0.11.1",
     "0.11.2",
+    "0.11.3",
 }
 MESES_CURTOS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 PERIODOS_FINANCEIRO = [
@@ -9214,6 +9215,18 @@ def foto_local_disponivel(caminho):
     return bool(caminho_abs and os.path.isfile(caminho_abs))
 
 
+def remover_foto_servico_local(caminho):
+    caminho_abs = caminho_absoluto_foto_servico(caminho)
+    if not caminho_abs or not os.path.isfile(caminho_abs):
+        return
+
+    pasta_uploads = caminho_uploads_servicos_diretorio()
+    if not arquivo_dentro_da_pasta(caminho_abs, pasta_uploads):
+        return
+
+    remover_arquivo_se_existir(caminho_abs)
+
+
 @app.route("/fotos/<int:foto_id>/arquivo")
 def servir_foto_banco(foto_id):
     if not session.get("usuario"):
@@ -9221,13 +9234,14 @@ def servir_foto_banco(foto_id):
 
     conn = conectar()
     c = conn.cursor()
+    empresa_id = empresa_atual_id()
     c.execute(
         """
         SELECT id, caminho, arquivo_blob, mime_type, arquivo_nome
         FROM fotos
-        WHERE id=?
+        WHERE empresa_id=? AND id=?
         """,
-        (foto_id,),
+        (empresa_id, foto_id),
     )
     foto = c.fetchone()
     conn.close()
@@ -9235,22 +9249,22 @@ def servir_foto_banco(foto_id):
     if not foto:
         return ("Foto nao encontrada.", 404)
 
+    blob = foto["arquivo_blob"]
+    if blob:
+        nome_arquivo = str(foto["arquivo_nome"] or "").strip() or os.path.basename(str(foto["caminho"] or "").replace("\\", "/")) or f"foto_{foto_id}.jpg"
+        mime_type = str(foto["mime_type"] or "").strip() or detectar_mime_type_arquivo(nome_arquivo)
+        return send_file(
+            BytesIO(bytes(blob)),
+            mimetype=mime_type,
+            download_name=nome_arquivo,
+            max_age=86400,
+        )
+
     caminho = foto["caminho"]
     if foto_local_disponivel(caminho):
         return redirect(caminho_foto_para_url(caminho))
 
-    blob = foto["arquivo_blob"]
-    if not blob:
-        return ("Foto nao encontrada.", 404)
-
-    nome_arquivo = str(foto["arquivo_nome"] or "").strip() or os.path.basename(str(caminho or "").replace("\\", "/")) or f"foto_{foto_id}.jpg"
-    mime_type = str(foto["mime_type"] or "").strip() or detectar_mime_type_arquivo(nome_arquivo)
-    return send_file(
-        BytesIO(bytes(blob)),
-        mimetype=mime_type,
-        download_name=nome_arquivo,
-        max_age=86400,
-    )
+    return ("Foto nao encontrada.", 404)
 
 
 @app.route("/usuarios/<int:usuario_id>/foto")
@@ -9372,9 +9386,8 @@ def listar_fotos_servicos(ids_servicos, conn=None, cursor=None):
 
     for row in c.fetchall():
         foto = dict(row)
-        foto["url"] = caminho_foto_para_url(foto.get("caminho"))
-        if not foto_local_disponivel(foto.get("caminho")) and bool(int(foto.get("possui_blob") or 0)):
-            foto["url"] = f"/fotos/{foto['id']}/arquivo"
+        possui_blob = bool(int(foto.get("possui_blob") or 0))
+        foto["url"] = f"/fotos/{foto['id']}/arquivo" if possui_blob else caminho_foto_para_url(foto.get("caminho"))
         foto["arquivo_nome"] = (
             str(foto.get("arquivo_nome") or "").strip()
             or os.path.basename(str(foto.get("caminho") or "").replace("\\", "/"))
@@ -9387,6 +9400,7 @@ def listar_fotos_servicos(ids_servicos, conn=None, cursor=None):
             fallback="Nao identificado",
         )
         foto["tamanho_fmt"] = formatar_tamanho_arquivo(foto.get("tamanho_bytes"))
+        foto["fonte_armazenamento"] = "Banco de dados" if possui_blob else "Arquivo local"
 
         if not foto["url"]:
             continue
@@ -9594,6 +9608,8 @@ def formatar_item_historico_servico(servico, checklist_itens=None, fotos_por_ser
     s_dict["fotos_entrada"] = len(s_dict["galeria_fotos"].get("entrada", []))
     s_dict["fotos_detalhe"] = len(s_dict["galeria_fotos"].get("detalhe", []))
     s_dict["fotos_saida"] = len(s_dict["galeria_fotos"].get("saida", []))
+    s_dict["total_fotos"] = s_dict["fotos_entrada"] + s_dict["fotos_detalhe"] + s_dict["fotos_saida"]
+    s_dict["tem_fotos"] = bool(s_dict["total_fotos"])
     s_dict["cobrancas_extras_info"] = (extras_por_servico or {}).get(
         s_dict["id"],
         {
@@ -15960,6 +15976,63 @@ def enviar_fotos_historico(id):
     )
     return redirect(redirect_to)
 
+
+@app.route("/historico/servico/<int:id>/fotos/<int:foto_id>/excluir", methods=["POST"])
+def excluir_foto_historico(id, foto_id):
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    redirect_to = normalizar_texto_campo(request.form.get("redirect_to")) or f"/historico/servico/{id}/editar"
+    servico = buscar_servico_operacional(id)
+    if not servico:
+        definir_feedback_por_destino(redirect_to, "erro", "Atendimento nao encontrado.")
+        return redirect(redirect_to)
+
+    empresa_id = empresa_atual_id()
+    conn = conectar()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT id, servico_id, tipo, caminho, arquivo_nome
+        FROM fotos
+        WHERE empresa_id=? AND servico_id=? AND id=?
+        """,
+        (empresa_id, id, foto_id),
+    )
+    foto = c.fetchone()
+
+    if not foto:
+        conn.close()
+        definir_feedback_por_destino(redirect_to, "erro", "Foto nao encontrada para este atendimento.")
+        return redirect(redirect_to)
+
+    caminho_foto = foto["caminho"]
+    tipo_foto = normalizar_texto_campo(foto["tipo"]) or "foto"
+    nome_arquivo = str(foto["arquivo_nome"] or "").strip() or os.path.basename(str(caminho_foto or "").replace("\\", "/"))
+    c.execute("DELETE FROM fotos WHERE empresa_id=? AND servico_id=? AND id=?", (empresa_id, id, foto_id))
+    conn.commit()
+    conn.close()
+    remover_foto_servico_local(caminho_foto)
+
+    registrar_auditoria(
+        "removeu_foto_atendimento",
+        "foto",
+        entidade_id=foto_id,
+        placa=servico.get("placa"),
+        detalhes={
+            "servico_id": id,
+            "tipo_foto": tipo_foto,
+            "arquivo_nome": nome_arquivo,
+        },
+    )
+    definir_feedback_por_destino(
+        redirect_to,
+        "sucesso",
+        f"Foto de {tipo_foto} removida do atendimento da placa {servico.get('placa') or '-'}."
+    )
+    return redirect(redirect_to)
+
+
 @app.route("/historico/servico/<int:id>/reabrir", methods=["POST"])
 def reabrir_atendimento_historico(id):
     if not session.get("usuario"):
@@ -16026,11 +16099,18 @@ def excluir_atendimento_historico(id):
     empresa_id = empresa_atual_id()
     conn = conectar()
     c = conn.cursor()
+    c.execute(
+        "SELECT caminho FROM fotos WHERE empresa_id=? AND servico_id=?",
+        (empresa_id, id),
+    )
+    caminhos_fotos = [row["caminho"] for row in c.fetchall()]
     excluir_dependencias_historico_servico_domain(c, empresa_id, id)
     c.execute("DELETE FROM servicos WHERE empresa_id=? AND id=?", (empresa_id, id))
     recalcular_resumo_veiculo_por_servicos(c, servico["veiculo_id"])
     conn.commit()
     conn.close()
+    for caminho_foto in caminhos_fotos:
+        remover_foto_servico_local(caminho_foto)
 
     registrar_auditoria(
         "excluiu_atendimento",

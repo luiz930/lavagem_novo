@@ -83,6 +83,7 @@
         <p><b>Tempo de lavagem:</b> <span class="js-cronometro-lavagem">{{ s.lavagem_tempo_exibicao }}</span></p>
         <p><b>Tempo de finalizacao:</b> <span class="js-cronometro-finalizacao">{{ s.finalizacao_tempo_exibicao }}</span></p>
         <form action="/painel/servico/{{ s.id }}/etapa" method="POST" class="top-spacing">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="etapa_destino" value="{{ s.proxima_etapa }}">
             <button type="submit">{{ s.botao_trocar_etapa }}</button>
         </form>
@@ -128,6 +129,7 @@
     </div>
 
     <form action="/painel/servico/{{ s.id }}/operacional" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide top-spacing">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <div class="field-grid">
             <input name="origem" placeholder="Origem" value="{{ s.origem }}">
             <input name="guarita" placeholder="Guarita" value="{{ s.guarita }}">
@@ -189,6 +191,7 @@
         <p class="muted-text">Use este campo quando o cliente pedir um servico adicional durante o atendimento. O valor entra no total do carro e fica no historico.</p>
 
         <form action="/painel/servico/{{ s.id }}/cobranca-extra" method="POST" class="stack-form stack-form--wide">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <div class="field-grid">
                 <input name="descricao_extra" placeholder="Descricao da cobranca extra" required>
                 <input type="number" name="valor_extra" min="0" step="0.01" placeholder="0,00" required>

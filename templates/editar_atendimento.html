@@ -36,11 +36,13 @@
         <div class="actions-row actions-row--left top-spacing">
             {% if servico.status == "FINALIZADO" %}
             <form action="/historico/servico/{{ servico.id }}/reabrir" method="POST" onsubmit="return confirm('Voltar este atendimento para EM ANDAMENTO?');">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
                 <button type="submit">Reabrir atendimento</button>
             </form>
             {% endif %}
             <form action="/historico/servico/{{ servico.id }}/excluir" method="POST" onsubmit="return confirm('Excluir este atendimento e tudo o que foi salvo nele?');">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
                 <button type="submit" class="button-danger">Excluir atendimento</button>
             </form>
@@ -50,6 +52,7 @@
     <div class="page-card">
         <h2 class="section-title">Atualizar atendimento</h2>
         <form action="/historico/servico/{{ servico.id }}/editar" method="POST" class="stack-form stack-form--wide top-spacing">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
 
             <div class="field-grid">
@@ -129,6 +132,7 @@
     <div class="page-card">
         <h2 class="section-title">{{ titulo }}</h2>
         <form action="/historico/servico/{{ servico.id }}/fotos" method="POST" enctype="multipart/form-data" class="stack-form stack-form--wide top-spacing">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="redirect_to" value="/historico/servico/{{ servico.id }}/editar?redirect_to={{ redirect_to }}">
             <input type="hidden" name="tipo_foto" value="{{ tipo }}">
             <input type="file" name="fotos" multiple accept="image/*" required>
@@ -143,9 +147,19 @@
                 <p class="photo-gallery-label">{{ fotos|length }} arquivo(s)</p>
                 <div class="photo-gallery-track">
                     {% for foto in fotos %}
-                    <a href="{{ foto.url }}" target="_blank" rel="noopener" class="photo-thumb-link" title="{{ foto.usuario_nome_exibicao }}">
-                        <img src="{{ foto.url }}" alt="{{ titulo }} {{ loop.index }}" class="photo-thumb-image">
-                    </a>
+                    <div class="page-card page-card--soft">
+                        <a href="{{ foto.url }}" target="_blank" rel="noopener" class="photo-thumb-link" title="{{ foto.usuario_nome_exibicao }}">
+                            <img src="{{ foto.url }}" alt="{{ titulo }} {{ loop.index }}" class="photo-thumb-image">
+                        </a>
+                        <p class="muted-text top-spacing"><b>{{ foto.arquivo_nome or (titulo ~ ' ' ~ loop.index) }}</b></p>
+                        <p class="muted-text">{{ foto.usuario_nome_exibicao }}{% if foto.criado_em_fmt %} | {{ foto.criado_em_fmt }}{% endif %}</p>
+                        <p class="muted-text">{{ foto.fonte_armazenamento }}{% if foto.tamanho_fmt %} | {{ foto.tamanho_fmt }}{% endif %}</p>
+                        <form action="/historico/servico/{{ servico.id }}/fotos/{{ foto.id }}/excluir" method="POST" class="top-spacing" onsubmit="return confirm('Excluir esta foto deste atendimento?');">
+                            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="redirect_to" value="/historico/servico/{{ servico.id }}/editar?redirect_to={{ redirect_to }}">
+                            <button type="submit" class="button-danger">Excluir foto</button>
+                        </form>
+                    </div>
                     {% endfor %}
                 </div>
             </div>

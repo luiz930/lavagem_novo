@@ -135,6 +135,33 @@ class AppRegressionTests(unittest.TestCase):
         conn.commit()
         return conn
 
+    def _criar_banco_fotos_memoria(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute(
+            """
+            CREATE TABLE fotos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empresa_id INTEGER NOT NULL DEFAULT 1,
+                servico_id INTEGER NOT NULL,
+                tipo TEXT,
+                caminho TEXT,
+                criado_em TEXT,
+                usuario TEXT,
+                usuario_nome TEXT,
+                tamanho_bytes INTEGER,
+                largura INTEGER,
+                altura INTEGER,
+                arquivo_blob BLOB,
+                mime_type TEXT,
+                arquivo_nome TEXT
+            )
+            """
+        )
+        conn.commit()
+        return conn
+
     def test_login_missing_fields_returns_error_message(self):
         with patch.object(app_module, "csrf_protection_ativa", return_value=False), \
              patch.object(app_module, "INIT_DB_EXECUTADO", True):
@@ -446,6 +473,77 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(len(kwargs["servicos_lavagem"]), 1)
         self.assertEqual(len(kwargs["servicos_finalizacao"]), 1)
         self.assertEqual(kwargs["resumo_fluxo"]["total"], 2)
+
+    def test_listar_fotos_servicos_prefere_rota_do_banco_quando_ha_blob(self):
+        conn = self._criar_banco_fotos_memoria()
+        c = conn.cursor()
+        c.execute(
+            """
+            INSERT INTO fotos (
+                empresa_id, servico_id, tipo, caminho, criado_em, usuario, usuario_nome,
+                tamanho_bytes, largura, altura, arquivo_blob, mime_type, arquivo_nome
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                10,
+                "entrada",
+                "static/uploads/foto_teste.jpg",
+                "2026-05-03T12:00:00-03:00",
+                "operador",
+                "Operador",
+                128,
+                100,
+                100,
+                b"abc",
+                "image/jpeg",
+                "foto_teste.jpg",
+            ),
+        )
+        conn.commit()
+        wrapper = PersistentCompatConnection(conn)
+
+        with app_module.app.test_request_context("/historico", method="GET"):
+            session["empresa_id"] = 1
+            with patch.object(app_module, "conectar", return_value=wrapper), \
+                 patch.object(app_module, "foto_local_disponivel", return_value=True):
+                fotos = app_module.listar_fotos_servicos([10])
+
+        self.assertEqual(fotos[10]["entrada"][0]["url"], "/fotos/1/arquivo")
+        self.assertEqual(fotos[10]["entrada"][0]["fonte_armazenamento"], "Banco de dados")
+        conn.close()
+
+    def test_excluir_foto_historico_remove_registro_no_escopo_do_servico(self):
+        conn = self._criar_banco_fotos_memoria()
+        c = conn.cursor()
+        c.execute(
+            """
+            INSERT INTO fotos (
+                empresa_id, servico_id, tipo, caminho, arquivo_blob, mime_type, arquivo_nome
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (1, 22, "detalhe", "static/uploads/foto_remover.jpg", b"img", "image/jpeg", "foto_remover.jpg"),
+        )
+        conn.commit()
+        wrapper = PersistentCompatConnection(conn)
+        servico = {"id": 22, "placa": "ABC1234"}
+
+        with app_module.app.test_request_context("/historico/servico/22/fotos/1/excluir", method="POST", data={"redirect_to": "/historico"}):
+            session["usuario"] = "admin"
+            session["empresa_id"] = 1
+            with patch.object(app_module, "conectar", return_value=wrapper), \
+                 patch.object(app_module, "buscar_servico_operacional", return_value=servico), \
+                 patch.object(app_module, "registrar_auditoria"), \
+                 patch.object(app_module, "definir_feedback_por_destino"), \
+                 patch.object(app_module, "remover_foto_servico_local"):
+                response = app_module.excluir_foto_historico(22, 1)
+
+        self.assertEqual(response.status_code, 302)
+        c.execute("SELECT COUNT(*) FROM fotos WHERE empresa_id=? AND servico_id=? AND id=?", (1, 22, 1))
+        self.assertEqual(c.fetchone()[0], 0)
+        conn.close()
 
 
 if __name__ == "__main__":

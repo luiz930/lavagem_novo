@@ -14,6 +14,7 @@
 
 <div class="page-card">
     <form method="POST" class="inline-form">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <input name="busca" placeholder="Buscar por placa, cliente, modelo ou servico" value="{{ busca }}">
         <button>Buscar historico</button>
     </form>
@@ -47,6 +48,7 @@
         {% endif %}
         <p><b>Tempo:</b> {{ item.tempo_str }}</p>
         <p class="muted-text">Entrada por: {{ s.criado_por_nome_exibicao }}{% if s.finalizado_por_nome_exibicao != "Nao finalizado" %} | Finalizado por: {{ s.finalizado_por_nome_exibicao }}{% endif %}</p>
+        <p class="muted-text">Fotos: entrada {{ s.fotos_entrada }} | detalhe {{ s.fotos_detalhe }} | finalizacao {{ s.fotos_saida }}</p>
 
         <div class="actions-row actions-row--left top-spacing">
             <a href="/historico/servico/{{ s.id }}/editar?redirect_to=/historico" class="button-link">
@@ -54,11 +56,13 @@
             </a>
             {% if s.status == "FINALIZADO" %}
             <form action="/historico/servico/{{ s.id }}/reabrir" method="POST" onsubmit="return confirm('Voltar este atendimento para EM ANDAMENTO?');">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="redirect_to" value="/historico">
                 <button type="submit">Reabrir</button>
             </form>
             {% endif %}
             <form action="/historico/servico/{{ s.id }}/excluir" method="POST" onsubmit="return confirm('Excluir este atendimento e tudo o que foi salvo nele?');">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="redirect_to" value="/historico">
                 <button type="submit" class="button-danger">Excluir</button>
             </form>
