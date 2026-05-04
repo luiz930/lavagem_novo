@@ -285,25 +285,13 @@ input, select {
 }
 
 .home-layout {
-    width: min(100%, 1320px);
+    width: min(100%, 1100px);
     margin: 0 auto;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 300px;
-    gap: 28px;
-    align-items: start;
-}
-
-.home-primary {
-    min-width: 0;
-}
-
-.home-status-column {
-    position: sticky;
-    top: 86px;
-    align-self: start;
 }
 
 .hud-shell {
+    width: min(100%, 320px);
+    margin: 0 auto 24px;
     padding: 16px;
     border-radius: 22px;
     border: 1px solid rgba(var(--primary-rgb), 0.18);
@@ -776,14 +764,7 @@ input[type="file"] {
     }
 
     .home-layout {
-        grid-template-columns: 1fr;
-        gap: 18px;
-    }
-
-    .home-status-column {
-        position: static;
-        width: min(100%, 320px);
-        margin: 0 auto;
+        width: min(100%, 100%);
     }
 
     .main h1 {
@@ -1300,7 +1281,6 @@ input[type="file"] {
 </button>
 
 <div class="home-layout">
-<div class="home-primary">
 
 <h1>🚗 {{ brand_name }}</h1>
 
@@ -1310,6 +1290,11 @@ input[type="file"] {
 <input name="placa" placeholder="{{ home_search_placeholder }}" required>
 <button>{{ home_search_button_text }}</button>
 </form>
+</div>
+
+<div class="hud-shell">
+    <p class="hud-shell-label">Central do dia</p>
+    <div id="relogio"></div>
 </div>
 
 <!-- ESTADO INICIAL -->
@@ -1627,15 +1612,6 @@ Hidro vidros {{ "Sim" if s.hidro_vidros == "Sim" else "Nao" }}
 {% endfor %}
  </div>
 {% endif %}
-
-</div>
-
-<aside class="home-status-column">
-    <div class="hud-shell">
-        <p class="hud-shell-label">Central do dia</p>
-        <div id="relogio"></div>
-    </div>
-</aside>
 
 </div>
 
