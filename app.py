@@ -234,6 +234,8 @@ BACKUP_TIPO_PADRAO = "completo"
 BACKUP_ARQUIVO_BANCO_ATUAL = "database_v2_atual.db"
 BACKUP_ARQUIVO_POSTGRES_ATUAL = "database_postgres_atual.json"
 BACKUP_ARQUIVO_POSTGRES_ATUAL_ZIP = "database_postgres_atual.zip"
+BACKUP_ARQUIVO_MANIFESTO = "manifesto_backup.json"
+BACKUP_VALIDACAO_CACHE_TTL = 90
 BANCO_ONLINE_LOCK_FILE = ".database_online.lock"
 AGENDA_RETORNO_MARCOS = (15, 30, 45)
 AGENDA_RETORNO_LIMITE_ITENS = 18
@@ -260,6 +262,13 @@ FREQUENCIAS_BACKUP = [
 TIPOS_BACKUP = [
     {"value": "completo", "label": "Sistema completo"},
     {"value": "banco", "label": "Somente banco"},
+]
+CHECKLIST_RECUPERACAO_BACKUP = [
+    "Validar a integridade do arquivo de backup antes de restaurar.",
+    "Gerar um backup preventivo do ambiente atual antes de qualquer restauracao.",
+    "Confirmar se o backup e do tipo esperado: banco ou sistema completo.",
+    "Reiniciar a aplicacao e revisar login, painel, historico e configuracoes apos a restauracao.",
+    "Conferir se a copia externa foi atualizada no Google Drive ou na pasta sincronizada.",
 ]
 TABELAS_SISTEMA_ORDENADAS = [
     "notificacoes",
@@ -950,6 +959,237 @@ def identificar_tipo_backup_por_nome(nome):
         return "banco"
     return ""
 
+
+def detectar_tipo_backup_por_estrutura(nome, nomes_internos=None):
+    tipo_detectado = identificar_tipo_backup_por_nome(nome)
+    if tipo_detectado:
+        return tipo_detectado
+
+    nomes = set(nomes_internos or [])
+    if not nomes:
+        return ""
+
+    tem_banco = any(
+        item in nomes
+        for item in {
+            BACKUP_ARQUIVO_POSTGRES_ATUAL,
+            BACKUP_ARQUIVO_BANCO_ATUAL,
+            "database_v2.db",
+        }
+    )
+    tem_arquivos_sistema = any(item.startswith("static/uploads/") for item in nomes) or ".env" in nomes or ".flaskenv" in nomes
+
+    if tem_banco and tem_arquivos_sistema:
+        return "completo"
+    if tem_banco:
+        return "banco"
+    return ""
+
+
+def montar_manifesto_backup(tipo_backup, arquivos):
+    tipo = normalizar_tipo_backup(tipo_backup)
+    versao_atual = VERSAO_SISTEMA_PADRAO
+    try:
+        versao_atual = obter_versao_sistema()
+    except Exception:
+        pass
+
+    return {
+        "tipo_backup": tipo,
+        "gerado_em": agora_iso(),
+        "versao_sistema": versao_atual,
+        "backend": "postgres" if banco_online_ativo() else "sqlite",
+        "empresa_id": empresa_atual_id(),
+        "arquivos": sorted({str(item or "").strip() for item in (arquivos or []) if str(item or "").strip()}),
+    }
+
+
+def chave_validacao_backup(caminho):
+    try:
+        stat = os.stat(caminho)
+    except Exception:
+        return ""
+    return f"{normalizar_caminho_arquivo(caminho)}|{int(stat.st_mtime)}|{int(stat.st_size)}"
+
+
+def validar_snapshot_backup_json(snapshot):
+    if not isinstance(snapshot, dict):
+        raise ValueError("Snapshot JSON invalido.")
+
+    tabelas = snapshot.get("tabelas")
+    if not isinstance(tabelas, dict):
+        raise ValueError("Snapshot sem bloco de tabelas.")
+
+    return len(tabelas)
+
+
+def validar_backup_sqlite_arquivo(caminho):
+    conn = sqlite3.connect(f"file:{caminho}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        c = conn.cursor()
+        c.execute("PRAGMA quick_check")
+        quick_check = (c.fetchone() or [""])[0]
+        if str(quick_check or "").lower() != "ok":
+            raise ValueError("PRAGMA quick_check retornou inconsistencias.")
+        c.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
+        total_tabelas = int((c.fetchone() or [0])[0] or 0)
+        if total_tabelas <= 0:
+            raise ValueError("Backup SQLite sem tabelas.")
+        return total_tabelas
+    finally:
+        conn.close()
+
+
+def validar_backup_zip_arquivo(caminho, nome_exibicao=""):
+    with zipfile.ZipFile(caminho, "r") as arquivo_zip:
+        nomes = set(arquivo_zip.namelist())
+        if not nomes:
+            raise ValueError("Arquivo ZIP vazio.")
+
+        tipo_detectado = detectar_tipo_backup_por_estrutura(nome_exibicao or os.path.basename(caminho), nomes)
+        detalhes = []
+        manifesto = None
+        if BACKUP_ARQUIVO_MANIFESTO in nomes:
+            with arquivo_zip.open(BACKUP_ARQUIVO_MANIFESTO, "r") as fh:
+                manifesto = json.loads(fh.read().decode("utf-8"))
+            tipo_manifesto = normalizar_tipo_backup(manifesto.get("tipo_backup"))
+            if tipo_manifesto in {"banco", "completo"}:
+                tipo_detectado = tipo_manifesto
+            detalhes.append("Manifesto encontrado e lido com sucesso.")
+        else:
+            detalhes.append("Manifesto nao encontrado; validacao feita pela estrutura do ZIP.")
+
+        if tipo_detectado not in {"banco", "completo"}:
+            raise ValueError("Nao foi possivel identificar o tipo do backup pelo ZIP.")
+
+        possui_snapshot_json = BACKUP_ARQUIVO_POSTGRES_ATUAL in nomes
+        possui_sqlite = "database_v2.db" in nomes or BACKUP_ARQUIVO_BANCO_ATUAL in nomes
+
+        if possui_snapshot_json:
+            with arquivo_zip.open(BACKUP_ARQUIVO_POSTGRES_ATUAL, "r") as fh:
+                total_tabelas = validar_snapshot_backup_json(json.loads(fh.read().decode("utf-8")))
+            detalhes.append(f"Snapshot JSON valido com {total_tabelas} tabela(s).")
+
+        if possui_sqlite:
+            detalhes.append("Arquivo SQLite de banco encontrado no ZIP.")
+
+        if tipo_detectado == "banco" and not (possui_snapshot_json or possui_sqlite):
+            raise ValueError("Backup de banco sem snapshot JSON nem arquivo SQLite.")
+
+        if tipo_detectado == "completo":
+            possui_uploads = any(item.startswith("static/uploads/") for item in nomes)
+            if not (possui_snapshot_json or possui_sqlite):
+                raise ValueError("Backup completo sem base de dados interna.")
+            if not possui_uploads:
+                detalhes.append("Backup completo sem uploads; restauracao de arquivos pode ser parcial.")
+            else:
+                detalhes.append("Uploads encontrados no pacote completo.")
+
+        return {
+            "ok": True,
+            "tipo_backup": tipo_detectado,
+            "tipo_backup_label": label_tipo_backup(tipo_detectado),
+            "mensagem": "Backup validado com sucesso.",
+            "detalhes": detalhes,
+            "manifesto_encontrado": bool(manifesto),
+            "total_arquivos": len(nomes),
+        }
+
+
+def validar_arquivo_backup_local(caminho, nome_exibicao="", usar_cache=True):
+    caminho = normalizar_caminho_arquivo(caminho)
+    if not caminho or not os.path.isfile(caminho):
+        return {
+            "ok": False,
+            "tipo_backup": "",
+            "tipo_backup_label": "",
+            "mensagem": "Arquivo de backup nao encontrado.",
+            "detalhes": [],
+            "manifesto_encontrado": False,
+            "total_arquivos": 0,
+        }
+
+    chave_cache = chave_validacao_backup(caminho)
+    if usar_cache and cache_consulta_valido(BACKUP_VALIDACAO_CACHE, chave_cache, BACKUP_VALIDACAO_CACHE_TTL):
+        return copiar_estrutura_cache(BACKUP_VALIDACAO_CACHE.get("resultado"))
+
+    nome = nome_exibicao or os.path.basename(caminho)
+    try:
+        if str(caminho).lower().endswith(".zip"):
+            resultado = validar_backup_zip_arquivo(caminho, nome)
+        else:
+            total_tabelas = validar_backup_sqlite_arquivo(caminho)
+            resultado = {
+                "ok": True,
+                "tipo_backup": detectar_tipo_backup_por_estrutura(nome) or "banco",
+                "tipo_backup_label": label_tipo_backup("banco"),
+                "mensagem": "Backup SQLite validado com sucesso.",
+                "detalhes": [f"Arquivo SQLite valido com {total_tabelas} tabela(s)."],
+                "manifesto_encontrado": False,
+                "total_arquivos": 1,
+            }
+    except Exception as erro:
+        resultado = {
+            "ok": False,
+            "tipo_backup": detectar_tipo_backup_por_estrutura(nome),
+            "tipo_backup_label": label_tipo_backup("banco") if str(caminho).lower().endswith(".db") else "",
+            "mensagem": f"Falha na validacao do backup: {erro}",
+            "detalhes": [],
+            "manifesto_encontrado": False,
+            "total_arquivos": 0,
+        }
+
+    resultado["arquivo"] = nome
+    resultado["caminho"] = caminho
+
+    if usar_cache and chave_cache:
+        salvar_cache_consulta(BACKUP_VALIDACAO_CACHE, chave_cache, resultado)
+
+    return resultado
+
+
+def validar_backup_disponivel(item_backup):
+    item = dict(item_backup or {})
+    caminho = str(item.get("caminho") or "").strip()
+    nome = str(item.get("nome") or "").strip()
+
+    if caminho.startswith("drive://"):
+        file_id = caminho.split("drive://", 1)[1].strip()
+        if not file_id:
+            return {
+                "ok": False,
+                "tipo_backup": item.get("tipo_backup") or "",
+                "tipo_backup_label": item.get("tipo_backup_label") or "",
+                "mensagem": "Arquivo do Google Drive sem identificador valido.",
+                "detalhes": [],
+                "manifesto_encontrado": False,
+                "total_arquivos": 0,
+            }
+        arquivo_temp = tempfile.NamedTemporaryFile(
+            prefix="validar_backup_drive_",
+            suffix=os.path.splitext(nome)[1] or ".bak",
+            delete=False,
+        )
+        arquivo_temp.close()
+        try:
+            baixar_arquivo_google_drive(file_id, arquivo_temp.name)
+            return validar_arquivo_backup_local(arquivo_temp.name, nome_exibicao=nome, usar_cache=False)
+        except Exception as erro:
+            return {
+                "ok": False,
+                "tipo_backup": item.get("tipo_backup") or "",
+                "tipo_backup_label": item.get("tipo_backup_label") or "",
+                "mensagem": f"Falha ao baixar ou validar o backup do Google Drive: {erro}",
+                "detalhes": [],
+                "manifesto_encontrado": False,
+                "total_arquivos": 0,
+            }
+        finally:
+            remover_arquivo_se_existir(arquivo_temp.name)
+
+    return validar_arquivo_backup_local(caminho, nome_exibicao=nome, usar_cache=True)
+
 def listar_arquivos_backup_banco(tipo_backup=None):
     configuracao = obter_configuracao_backup()
     if (
@@ -985,6 +1225,7 @@ def listar_arquivos_backup_em_pasta(pasta, tipo_backup=None):
         backups.append({
             "nome": nome,
             "caminho": caminho,
+            "origem": "local",
             "tipo_backup": tipo_item,
             "tipo_backup_label": label_tipo_backup(tipo_item),
             "modificado_em": stat.st_mtime,
@@ -1149,6 +1390,7 @@ def listar_arquivos_backup_google_drive(configuracao=None, tipo_backup=None):
             backups.append({
                 "nome": nome,
                 "caminho": f"drive://{item.get('id')}",
+                "origem": "google_drive",
                 "google_drive_file_id": item.get("id"),
                 "tipo_backup": tipo_item,
                 "tipo_backup_label": label_tipo_backup(tipo_item),
@@ -1414,6 +1656,8 @@ def gravar_snapshot_banco_em_arquivo(destino_path):
     )
     snapshot = exportar_snapshot_banco_atual()
 
+    manifesto = montar_manifesto_backup("banco", [BACKUP_ARQUIVO_POSTGRES_ATUAL])
+
     with zipfile.ZipFile(
         caminho_temp,
         mode="w",
@@ -1425,16 +1669,8 @@ def gravar_snapshot_banco_em_arquivo(destino_path):
             json.dumps(snapshot, ensure_ascii=False, indent=2),
         )
         arquivo_zip.writestr(
-            "manifesto_backup.json",
-            json.dumps(
-                {
-                    "tipo_backup": "banco",
-                    "gerado_em": snapshot["gerado_em"],
-                    "arquivos": [BACKUP_ARQUIVO_POSTGRES_ATUAL],
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
+            BACKUP_ARQUIVO_MANIFESTO,
+            json.dumps(manifesto, ensure_ascii=False, indent=2),
         )
 
     shutil.copy2(caminho_temp, destino_path)
@@ -1566,11 +1802,7 @@ def escrever_zip_backup_completo(destino_path):
     if not fontes:
         raise ValueError("Nenhum dado elegivel foi encontrado para o backup completo.")
 
-    manifesto = {
-        "tipo_backup": "completo",
-        "gerado_em": agora_iso(),
-        "arquivos": [],
-    }
+    arquivos_manifesto = []
 
     with zipfile.ZipFile(
         destino_path,
@@ -1586,18 +1818,20 @@ def escrever_zip_backup_completo(destino_path):
                         rel_interno = os.path.relpath(caminho_arquivo, origem_path).replace("\\", "/")
                         arcname = f"{destino_rel}/{rel_interno}"
                         arquivo_zip.write(caminho_arquivo, arcname)
-                        manifesto["arquivos"].append(arcname)
+                        arquivos_manifesto.append(arcname)
                 continue
 
             arquivo_zip.write(origem_path, destino_rel)
-            manifesto["arquivos"].append(destino_rel)
+            arquivos_manifesto.append(destino_rel)
 
         if banco_online_ativo():
             escrever_snapshot_banco_no_zip(arquivo_zip)
-            manifesto["arquivos"].append(BACKUP_ARQUIVO_POSTGRES_ATUAL)
+            arquivos_manifesto.append(BACKUP_ARQUIVO_POSTGRES_ATUAL)
+
+        manifesto = montar_manifesto_backup("completo", arquivos_manifesto)
 
         arquivo_zip.writestr(
-            "manifesto_backup.json",
+            BACKUP_ARQUIVO_MANIFESTO,
             json.dumps(manifesto, ensure_ascii=False, indent=2),
         )
 
@@ -1669,6 +1903,17 @@ def obter_status_backup_banco():
     destino_externo_drive_folder_id = normalizar_texto_campo(
         configuracao.get("destino_externo_drive_folder_id")
     )
+    validacao_ultimo = {
+        "ok": None,
+        "mensagem": "Validacao sob demanda.",
+        "detalhes": [],
+    }
+    if ultimo and str(ultimo.get("origem") or "") != "google_drive":
+        validacao_ultimo = validar_arquivo_backup_local(
+            ultimo.get("caminho"),
+            nome_exibicao=ultimo.get("nome") or "",
+            usar_cache=True,
+        )
 
     return {
         "ativo": True,
@@ -1712,6 +1957,9 @@ def obter_status_backup_banco():
         "ultimo_destino_externo_em_fmt": (
             ultimo_externo["modificado_em_fmt"] if ultimo_externo else "Nenhum envio externo ainda"
         ),
+        "ultimo_backup_validacao_ok": validacao_ultimo.get("ok"),
+        "ultimo_backup_validacao_mensagem": validacao_ultimo.get("mensagem"),
+        "ultimo_backup_validacao_detalhes": validacao_ultimo.get("detalhes") or [],
     }
 
 def status_backup_banco_padrao():
@@ -1758,6 +2006,9 @@ def status_backup_banco_padrao():
         "destino_externo_quantidade": 0,
         "ultimo_destino_externo_nome": "",
         "ultimo_destino_externo_em_fmt": "Nenhum envio externo ainda",
+        "ultimo_backup_validacao_ok": None,
+        "ultimo_backup_validacao_mensagem": "Validacao sob demanda.",
+        "ultimo_backup_validacao_detalhes": [],
     }
 
 def criar_backup_banco(force=False, tipo_backup=None):
@@ -1869,15 +2120,30 @@ def restaurar_backup_banco(nome_arquivo_backup):
     if str(selecionado.get("caminho") or "").startswith("drive://"):
         file_id = str(selecionado["caminho"]).split("drive://", 1)[1].strip()
         if file_id:
-            backup_drive_temp = tempfile.NamedTemporaryFile(
-                prefix="restore_drive_",
-                suffix=os.path.splitext(selecionado["nome"])[1] or ".bak",
-                delete=False,
-            )
-            backup_drive_temp.close()
-            baixar_arquivo_google_drive(file_id, backup_drive_temp.name)
-            selecionado = dict(selecionado)
-            selecionado["caminho"] = backup_drive_temp.name
+            try:
+                backup_drive_temp = tempfile.NamedTemporaryFile(
+                    prefix="restore_drive_",
+                    suffix=os.path.splitext(selecionado["nome"])[1] or ".bak",
+                    delete=False,
+                )
+                backup_drive_temp.close()
+                baixar_arquivo_google_drive(file_id, backup_drive_temp.name)
+                selecionado = dict(selecionado)
+                selecionado["caminho"] = backup_drive_temp.name
+            except Exception as erro:
+                if backup_drive_temp:
+                    remover_arquivo_se_existir(backup_drive_temp.name)
+                return False, f"Nao foi possivel baixar o backup do Google Drive: {erro}"
+
+    validacao = validar_arquivo_backup_local(
+        selecionado.get("caminho"),
+        nome_exibicao=selecionado.get("nome") or "",
+        usar_cache=False,
+    )
+    if not validacao.get("ok"):
+        if backup_drive_temp:
+            remover_arquivo_se_existir(backup_drive_temp.name)
+        return False, validacao.get("mensagem") or "O backup selecionado falhou na validacao."
 
     if not sync_lock.acquire(blocking=False):
         return False, "Existe uma sincronizacao em andamento. Tente restaurar novamente em alguns segundos."
@@ -2865,7 +3131,7 @@ app.config.update(
 app.config["SESSION_TYPE"] = "filesystem"
 app.secret_key = app.config["SECRET_KEY"]
 
-VERSAO_SISTEMA_PADRAO = "0.11.4"
+VERSAO_SISTEMA_PADRAO = "0.11.5"
 APP_VERSION = f"Versao: {VERSAO_SISTEMA_PADRAO}"
 VERSOES_SISTEMA_LEGADAS = {
     "0.7.5-alpha (Em Desenvolvimento)",
@@ -2875,6 +3141,7 @@ VERSOES_SISTEMA_LEGADAS = {
     "0.11.1",
     "0.11.2",
     "0.11.3",
+    "0.11.4",
 }
 MESES_CURTOS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 PERIODOS_FINANCEIRO = [
@@ -3466,6 +3733,11 @@ BANCO_ONLINE_TABELAS_CACHE = {
     "resultado": None,
 }
 BANCO_ONLINE_TABELAS_CACHE_TTL = 45
+BACKUP_VALIDACAO_CACHE = {
+    "testado_em": 0.0,
+    "chave": "",
+    "resultado": None,
+}
 SCHEMA_BANCO_ONLINE_GARANTIDO = False
 SCHEMA_SQLITE_LOCAL_GARANTIDO = False
 BANCO_ONLINE_BLOQUEADO_ATE_TS = 0.0
@@ -3507,6 +3779,9 @@ def limpar_caches_interface():
     PAINEL_CONTEXT_CACHE["resultado"] = None
     PRODUTOS_PNEU_CACHE["testado_em"] = 0.0
     PRODUTOS_PNEU_CACHE["resultado"] = None
+    BACKUP_VALIDACAO_CACHE["testado_em"] = 0.0
+    BACKUP_VALIDACAO_CACHE["chave"] = ""
+    BACKUP_VALIDACAO_CACHE["resultado"] = None
 
 
 def limpar_cache_banco_online():
@@ -13003,6 +13278,7 @@ def configuracoes():
         frequencias_backup=FREQUENCIAS_BACKUP,
         tipos_backup=TIPOS_BACKUP,
         backups_disponiveis=backups_disponiveis,
+        checklist_recuperacao_backup=CHECKLIST_RECUPERACAO_BACKUP,
         arquivos_status=arquivos_status,
         pastas_sync_sugeridas=pastas_sync_sugeridas,
         banco_online_tabelas=banco_online_tabelas,
@@ -13356,6 +13632,41 @@ def gerar_backup_agora():
         definir_feedback_configuracoes("sucesso", f"{mensagem} {nome}".strip())
     else:
         definir_feedback_configuracoes("erro", mensagem)
+    return redirect("/configuracoes")
+
+
+@app.route("/configuracoes/backup/validar", methods=["POST"])
+def validar_backup_configuracoes():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem validar backups.")
+        return redirect("/configuracoes")
+
+    nome_backup = normalizar_texto_campo(request.form.get("backup_nome"))
+    backups_disponiveis = {item["nome"]: item for item in listar_arquivos_backup_banco()}
+    selecionado = backups_disponiveis.get(nome_backup)
+    if not selecionado:
+        definir_feedback_configuracoes("erro", "Backup selecionado nao foi encontrado.")
+        return redirect("/configuracoes")
+
+    validacao = validar_backup_disponivel(selecionado)
+    registrar_auditoria(
+        "validou_backup",
+        "backup",
+        detalhes={
+            "arquivo": nome_backup,
+            "ok": bool(validacao.get("ok")),
+            "mensagem": validacao.get("mensagem"),
+        },
+    )
+    detalhes = validacao.get("detalhes") or []
+    mensagem = validacao.get("mensagem") or "Validacao concluida."
+    if detalhes:
+        mensagem += " " + " ".join(detalhes[:3])
+    definir_feedback_configuracoes("sucesso" if validacao.get("ok") else "erro", mensagem)
     return redirect("/configuracoes")
 
 @app.route("/configuracoes/backup/restaurar", methods=["POST"])

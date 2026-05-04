@@ -1,6 +1,10 @@
+import json
+import os
 import sqlite3
+import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 from flask import session
 
@@ -544,6 +548,48 @@ class AppRegressionTests(unittest.TestCase):
         c.execute("SELECT COUNT(*) FROM fotos WHERE empresa_id=? AND servico_id=? AND id=?", (1, 22, 1))
         self.assertEqual(c.fetchone()[0], 0)
         conn.close()
+
+    def test_validar_arquivo_backup_local_zip_com_manifesto(self):
+        with tempfile.TemporaryDirectory(prefix="backup_test_") as pasta:
+            caminho_zip = os.path.join(pasta, "sistema_completo_20260503_120000.zip")
+            manifesto = {
+                "tipo_backup": "completo",
+                "gerado_em": "2026-05-03T12:00:00-03:00",
+                "arquivos": [
+                    app_module.BACKUP_ARQUIVO_POSTGRES_ATUAL,
+                    "static/uploads/servicos/teste.jpg",
+                ],
+            }
+            with zipfile.ZipFile(caminho_zip, "w", compression=zipfile.ZIP_DEFLATED) as arquivo_zip:
+                arquivo_zip.writestr(
+                    app_module.BACKUP_ARQUIVO_POSTGRES_ATUAL,
+                    json.dumps({"backend": "postgres", "tabelas": {"usuarios": []}}),
+                )
+                arquivo_zip.writestr("static/uploads/servicos/teste.jpg", b"img")
+                arquivo_zip.writestr(
+                    app_module.BACKUP_ARQUIVO_MANIFESTO,
+                    json.dumps(manifesto),
+                )
+
+            resultado = app_module.validar_arquivo_backup_local(caminho_zip, usar_cache=False)
+
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(resultado["tipo_backup"], "completo")
+        self.assertTrue(resultado["manifesto_encontrado"])
+
+    def test_validar_arquivo_backup_local_sqlite(self):
+        with tempfile.TemporaryDirectory(prefix="backup_sqlite_") as pasta:
+            caminho_db = os.path.join(pasta, "database_v2_20260503_120000.db")
+            conn = sqlite3.connect(caminho_db)
+            c = conn.cursor()
+            c.execute("CREATE TABLE usuarios (id INTEGER PRIMARY KEY, nome TEXT)")
+            conn.commit()
+            conn.close()
+
+            resultado = app_module.validar_arquivo_backup_local(caminho_db, usar_cache=False)
+
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(resultado["tipo_backup"], "banco")
 
 
 if __name__ == "__main__":

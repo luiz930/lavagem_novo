@@ -329,6 +329,23 @@
         <p><b>Retencao:</b> ultimos {{ backup_status.retencao }} backups</p>
         <p><b>Copia externa:</b> {% if backup_status.destino_externo_ativo %}Ativa{% else %}Desativada{% endif %}</p>
         <p><b>Destino externo:</b> {{ backup_status.destino_externo_tipo_label }}</p>
+        <p><b>Validacao do ultimo backup:</b>
+            {% if backup_status.ultimo_backup_validacao_ok is sameas true %}
+            Integro
+            {% elif backup_status.ultimo_backup_validacao_ok is sameas false %}
+            Invalido
+            {% else %}
+            Sob demanda
+            {% endif %}
+        </p>
+        <p class="muted-text">{{ backup_status.ultimo_backup_validacao_mensagem }}</p>
+        {% if backup_status.ultimo_backup_validacao_detalhes %}
+        <div class="top-spacing">
+            {% for detalhe in backup_status.ultimo_backup_validacao_detalhes %}
+            <p class="muted-text">{{ detalhe }}</p>
+            {% endfor %}
+        </div>
+        {% endif %}
         {% if backup_status.destino_externo_tipo == 'google_drive' %}
         <p><b>Drive conectado:</b> {% if backup_status.destino_externo_escrevivel %}Sim{% else %}Nao{% endif %}</p>
         <p><b>ID da pasta do Drive:</b> {{ backup_status.destino_externo_drive_folder_id or 'Nao informado' }}</p>
@@ -466,6 +483,11 @@
             <p class="muted-text">Tamanho: {{ item.tamanho_fmt }}</p>
 
             <div class="actions-row actions-row--left top-spacing">
+                <form action="/configuracoes/backup/validar" method="POST">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="backup_nome" value="{{ item.nome }}">
+                    <button type="submit">Validar backup</button>
+                </form>
                 <form action="/configuracoes/backup/restaurar" method="POST" onsubmit="return confirm('Restaurar este backup agora? O banco atual sera substituido, mas um backup preventivo sera criado antes.');">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="backup_nome" value="{{ item.nome }}">
@@ -477,6 +499,16 @@
         <div class="page-card page-card--soft">
             <p class="muted-text">Nenhum backup encontrado ainda.</p>
         </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <p class="pill-label">Recuperacao</p>
+    <h2 class="section-title top-spacing">Checklist de restauracao</h2>
+    <div class="stack-form stack-form--wide top-spacing">
+        {% for item in checklist_recuperacao_backup %}
+        <p class="muted-text">{{ loop.index }}. {{ item }}</p>
         {% endfor %}
     </div>
 </div>
