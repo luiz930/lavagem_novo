@@ -26,6 +26,7 @@ import bcrypt  # ðŸ‘ˆ se jÃ¡ adicionou
 import pandas as pd
 import requests
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import HTTPException
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from flask import send_file
@@ -3908,8 +3909,8 @@ CLIMA_CACHE = {
     "resultado": None,
 }
 CLIMA_CACHE_TTL = 600
-ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS = 0.0
-SYNC_FONTES_SOB_DEMANDA_INTERVALO = 90
+ULTIMO_SYNC_FONTES_SOB_DEMANDA_TS = time.time()
+SYNC_FONTES_SOB_DEMANDA_INTERVALO = 600
 ULTIMA_PREPARACAO_INTERFACE_TS = 0.0
 PREPARACAO_INTERFACE_INTERVALO = 45
 USUARIO_SESSAO_SYNC_TTL = 60
@@ -4860,6 +4861,40 @@ def mensagem_erro_login_servidor(erro):
     return "Falha interna ao autenticar. Verifique os logs e a configuracao do servidor."
 
 
+def excecao_relacionada_banco(erro):
+    if isinstance(erro, BancoOnlineObrigatorioErro):
+        return True
+    if psycopg2 is not None:
+        try:
+            if isinstance(erro, psycopg2.Error):
+                return True
+        except Exception:
+            pass
+    texto = normalizar_texto_comparacao(str(erro or ""))
+    sinais = (
+        "banco online obrigatorio",
+        "connection string",
+        "falha ao abrir conexao online",
+        "falha ao conectar no banco online",
+        "password authentication failed",
+        "could not connect to server",
+        "connection refused",
+        "timeout expired",
+        "server closed the connection",
+        "connection already closed",
+        "connection timed out",
+        "too many clients",
+        "remaining connection slots",
+        "sslmode",
+        "undefined table",
+        "undefined column",
+        "no such table",
+        "no such column",
+        "does not exist",
+    )
+    return any(sinal in texto for sinal in sinais)
+
+
 def copiar_valor_padrao(padrao):
     if isinstance(padrao, dict):
         return dict(padrao)
@@ -5232,8 +5267,11 @@ def garantir_schema_sqlite_local_minima(force=False):
 def conectar_banco_online_forcado():
     dsn = url_postgres_ajustada()
     if not dsn:
-        raise RuntimeError("Banco online configurado, mas a connection string esta incompleta.")
-    conn = conectar_postgres_com_fallback(dsn)
+        raise BancoOnlineObrigatorioErro("Banco online configurado, mas a connection string esta incompleta.")
+    try:
+        conn = conectar_postgres_com_fallback(dsn)
+    except Exception as erro:
+        raise BancoOnlineObrigatorioErro(f"Falha ao conectar no banco online: {erro}") from erro
     return ConexaoCompat(conn, "postgres")
 
 
@@ -13292,6 +13330,20 @@ def tratar_banco_online_obrigatorio(erro):
     return html, 503
 
 
+@app.errorhandler(Exception)
+def tratar_excecao_global(erro):
+    if isinstance(erro, HTTPException):
+        return erro
+    if excecao_relacionada_banco(erro):
+        registrar_log_banco_online(f"Falha de banco capturada na request {request.path}: {erro}", intervalo_segundos=30)
+        return tratar_banco_online_obrigatorio(
+            BancoOnlineObrigatorioErro(
+                "Falha ao acessar o banco configurado. Verifique a conexao online e rode o diagnostico."
+            )
+        )
+    raise erro
+
+
 @app.before_request
 def validar_csrf_basico():
     if request.endpoint == "static":
@@ -15107,7 +15159,7 @@ def configuracoes():
         return redirect("/login")
 
     preparar_rotinas_interface_logada()
-    sincronizar_sessao_usuario(force=True)
+    sincronizar_sessao_usuario()
     senha_pendente = bool(session.get("senha_alteracao_obrigatoria"))
     perfil_logado = normalizar_perfil_usuario(
         session.get("usuario_perfil") or (
@@ -15156,7 +15208,7 @@ def configuracoes():
             print("ERRO CONFIG EMPRESA:", erro)
             configuracao_empresa = empresa_snapshot_padrao()
 
-    if pode_gerenciar_base:
+    if pode_gerenciar_base and request.args.get("detalhar_banco") == "1":
         try:
             banco_online_tabelas = listar_tabelas_banco_online(banco_status)
         except Exception as erro:
@@ -15170,28 +15222,34 @@ def configuracoes():
                 "quantidade": 0,
             }
 
+    if pode_gerenciar_base:
         try:
             backup_config = obter_configuracao_backup()
         except Exception as erro:
             print("ERRO CONFIG BACKUP:", erro)
             backup_config = configuracao_backup_padrao()
 
-        try:
-            backup_status = obter_status_backup_banco()
-        except Exception as erro:
-            print("ERRO CONFIG BACKUP STATUS:", erro)
+        if request.args.get("detalhar_backup") == "1":
+            try:
+                backup_status = obter_status_backup_banco()
+            except Exception as erro:
+                print("ERRO CONFIG BACKUP STATUS:", erro)
+                backup_status = status_backup_banco_padrao()
+
+            try:
+                arquivos_status = obter_status_arquivos()
+            except Exception as erro:
+                print("ERRO CONFIG ARQUIVOS:", erro)
+                arquivos_status = status_arquivos_padrao()
+
+            try:
+                backups_disponiveis = listar_arquivos_backup_banco()
+            except Exception as erro:
+                print("ERRO CONFIG LISTA BACKUPS:", erro)
+                backups_disponiveis = []
+        else:
             backup_status = status_backup_banco_padrao()
-
-        try:
-            arquivos_status = obter_status_arquivos()
-        except Exception as erro:
-            print("ERRO CONFIG ARQUIVOS:", erro)
             arquivos_status = status_arquivos_padrao()
-
-        try:
-            backups_disponiveis = listar_arquivos_backup_banco()
-        except Exception as erro:
-            print("ERRO CONFIG LISTA BACKUPS:", erro)
             backups_disponiveis = []
 
         try:

@@ -305,6 +305,12 @@
     <div class="page-card">
         <p class="pill-label">Banco online</p>
         <h2 class="section-title top-spacing">Tabelas do PostgreSQL</h2>
+        {% if not request.args.get("detalhar_banco") %}
+        <p class="muted-text">A listagem completa das tabelas fica sob demanda para a tela carregar mais rapido.</p>
+        <a href="/configuracoes?detalhar_banco=1" class="button-link top-spacing">
+            <button type="button">Carregar tabelas agora</button>
+        </a>
+        {% endif %}
         <p><b>Status:</b> {{ banco_online_tabelas.mensagem }}</p>
         <p><b>Banco:</b> {{ banco_online_tabelas.database or "-" }}</p>
         <p><b>Usuario:</b> {{ banco_online_tabelas.usuario or "-" }}</p>
@@ -326,6 +332,12 @@
     <div class="page-card">
         <p class="pill-label">Backup automatico</p>
         <h2 class="section-title top-spacing">Protecao do sistema</h2>
+        {% if not request.args.get("detalhar_backup") %}
+        <p class="muted-text">Os detalhes de arquivos e backups ficam sob demanda para esta pagina abrir mais rapido.</p>
+        <a href="/configuracoes?detalhar_backup=1" class="button-link top-spacing">
+            <button type="button">Carregar detalhes de backup</button>
+        </a>
+        {% endif %}
         <p><b>Status:</b> Ativo</p>
         <p><b>Banco atual:</b> {{ backup_status.backend_label }}</p>
         <p><b>Modo atual:</b> {{ backup_status.tipo_backup_label }}</p>
