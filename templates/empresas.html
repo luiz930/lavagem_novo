@@ -23,33 +23,89 @@
         <h2 class="section-title top-spacing">Cadastro comercial</h2>
         <form action="/empresas/salvar" method="POST" class="stack-form stack-form--wide top-spacing">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-            <input name="nome_fantasia" placeholder="Nome fantasia" required>
-            <input name="razao_social" placeholder="Razao social">
+            <label class="field-label">
+                Nome fantasia
+                <input name="nome_fantasia" placeholder="Nome fantasia" required>
+                <span class="field-help">Nome comercial que aparece para identificar a empresa no sistema.</span>
+            </label>
+            <label class="field-label">
+                Razao social
+                <input name="razao_social" placeholder="Razao social">
+                <span class="field-help">Nome juridico usado em contrato, financeiro e dados fiscais.</span>
+            </label>
             <div class="field-grid">
-                <input name="documento" placeholder="CNPJ/CPF">
-                <input name="email" type="email" placeholder="E-mail">
-                <input name="telefone" placeholder="Telefone">
-                <input name="slug" placeholder="slug-da-empresa">
+                <label class="field-label">
+                    CNPJ/CPF
+                    <input name="documento" placeholder="CNPJ/CPF">
+                    <span class="field-help">Documento principal do cliente.</span>
+                </label>
+                <label class="field-label">
+                    E-mail
+                    <input name="email" type="email" placeholder="E-mail">
+                    <span class="field-help">Contato administrativo ou financeiro.</span>
+                </label>
+                <label class="field-label">
+                    Telefone
+                    <input name="telefone" placeholder="Telefone">
+                    <span class="field-help">Contato rapido para suporte e cobranca.</span>
+                </label>
+                <label class="field-label">
+                    Slug
+                    <input name="slug" placeholder="slug-da-empresa">
+                    <span class="field-help">Identificador curto sem espacos; pode ser usado em URLs e integracoes.</span>
+                </label>
             </div>
             <div class="field-grid">
-                <select name="plano_codigo">
-                    {% for codigo, plano in planos_licenca.items() %}
-                    <option value="{{ codigo }}">{{ plano.label }}</option>
-                    {% endfor %}
-                </select>
-                <select name="licenca_status">
-                    {% for codigo, label in status_licenca.items() %}
-                    <option value="{{ codigo }}">{{ label }}</option>
-                    {% endfor %}
-                </select>
-                <input name="validade_em" type="date" placeholder="Validade">
-                <input name="dominio_personalizado" placeholder="dominio.com.br">
+                <label class="field-label">
+                    Plano
+                    <select name="plano_codigo">
+                        {% for codigo, plano in planos_licenca.items() %}
+                        <option value="{{ codigo }}">{{ plano.label }}</option>
+                        {% endfor %}
+                    </select>
+                    <span class="field-help">Define recursos e limites comerciais liberados.</span>
+                </label>
+                <label class="field-label">
+                    Status da licenca
+                    <select name="licenca_status">
+                        {% for codigo, label in status_licenca.items() %}
+                        <option value="{{ codigo }}">{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                    <span class="field-help">Controla se a operacao esta trial, ativa, vencida ou bloqueada.</span>
+                </label>
+                <label class="field-label">
+                    Validade
+                    <input name="validade_em" type="date" placeholder="Validade">
+                    <span class="field-help">Data em que a licenca deixa de valer.</span>
+                </label>
+                <label class="field-label">
+                    Dominio personalizado
+                    <input name="dominio_personalizado" placeholder="dominio.com.br">
+                    <span class="field-help">Dominio do cliente quando houver white-label.</span>
+                </label>
             </div>
             <div class="field-grid">
-                <input name="limite_usuarios" type="number" min="1" value="{{ planos_licenca.starter.limite_usuarios }}" placeholder="Usuarios">
-                <input name="limite_atendimentos_mes" type="number" min="1" value="{{ planos_licenca.starter.limite_atendimentos_mes }}" placeholder="Atendimentos/mes">
-                <input name="limite_unidades" type="number" min="1" value="{{ planos_licenca.starter.limite_unidades }}" placeholder="Unidades">
-                <input name="limite_storage_mb" type="number" min="128" value="{{ planos_licenca.starter.limite_storage_mb }}" placeholder="Storage MB">
+                <label class="field-label">
+                    Limite de usuarios
+                    <input name="limite_usuarios" type="number" min="1" value="{{ planos_licenca.starter.limite_usuarios }}" placeholder="Usuarios">
+                    <span class="field-help">Quantidade maxima de acessos ativos.</span>
+                </label>
+                <label class="field-label">
+                    Atendimentos por mes
+                    <input name="limite_atendimentos_mes" type="number" min="1" value="{{ planos_licenca.starter.limite_atendimentos_mes }}" placeholder="Atendimentos/mes">
+                    <span class="field-help">Volume mensal contratado para bloqueio por plano.</span>
+                </label>
+                <label class="field-label">
+                    Unidades
+                    <input name="limite_unidades" type="number" min="1" value="{{ planos_licenca.starter.limite_unidades }}" placeholder="Unidades">
+                    <span class="field-help">Quantidade de empresas/unidades permitidas.</span>
+                </label>
+                <label class="field-label">
+                    Storage MB
+                    <input name="limite_storage_mb" type="number" min="128" value="{{ planos_licenca.starter.limite_storage_mb }}" placeholder="Storage MB">
+                    <span class="field-help">Espaco contratado para arquivos, fotos e backups.</span>
+                </label>
             </div>
             <label class="inline-toggle">
                 <input type="checkbox" name="ativa" value="1" checked>
@@ -94,7 +150,7 @@
             <p><b>Usuarios:</b> {{ empresa.licenca.usuarios_ativos }}/{{ empresa.licenca.limite_usuarios }}</p>
             <p><b>Atendimentos do mes:</b> {{ empresa.licenca.atendimentos_mes }}/{{ empresa.licenca.limite_atendimentos_mes }}</p>
             <p><b>Validade:</b> {{ empresa.licenca.validade_em or "Sem vencimento definido" }}</p>
-            <p><b>Codigo da licenca:</b> {{ empresa.licenca.codigo_licenca or "Nao gerada" }}</p>
+            <p><b>Serial number:</b> {{ empresa.licenca.codigo_licenca or "Nao gerado" }}</p>
             <p><b>Assinatura:</b> {% if empresa.licenca_validacao.ok %}Valida{% else %}{{ empresa.licenca_validacao.mensagem }}{% endif %}</p>
 
             <div class="actions-row actions-row--left top-spacing">
@@ -103,18 +159,22 @@
                     <input type="hidden" name="empresa_id" value="{{ empresa.id }}">
                     <button type="submit">Usar esta empresa</button>
                 </form>
-                <form action="/empresas/{{ empresa.id }}/licenca/gerar" method="POST">
+                <form action="/empresas/{{ empresa.id }}/licenca/gerar" method="POST" class="license-action-form">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="plano_codigo" value="{{ empresa.licenca.codigo_plano }}">
                     <input type="hidden" name="licenca_status" value="{{ empresa.licenca.status }}">
-                    <input type="hidden" name="validade_em" value="{{ empresa.licenca.validade_em[:10] if empresa.licenca.validade_em else '' }}">
                     <input type="hidden" name="limite_usuarios" value="{{ empresa.licenca.limite_usuarios }}">
                     <input type="hidden" name="limite_atendimentos_mes" value="{{ empresa.licenca.limite_atendimentos_mes }}">
                     <input type="hidden" name="limite_unidades" value="{{ empresa.licenca.limite_unidades }}">
                     <input type="hidden" name="limite_storage_mb" value="{{ empresa.licenca.limite_storage_mb }}">
+                    <label class="field-label">
+                        Validade da nova licenca
+                        <input name="validade_em" type="date" value="{{ empresa.licenca.validade_em[:10] if empresa.licenca.validade_em else '' }}" required>
+                        <span class="field-help">Data gravada dentro do serial number assinado.</span>
+                    </label>
                     <button type="submit">Gerar licenca</button>
                 </form>
-                <form action="/empresas/{{ empresa.id }}/licenca/renovar" method="POST">
+                <form action="/empresas/{{ empresa.id }}/licenca/renovar" method="POST" class="license-action-form">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="plano_codigo" value="{{ empresa.licenca.codigo_plano }}">
                     <input type="hidden" name="licenca_status" value="ativa">
@@ -122,6 +182,11 @@
                     <input type="hidden" name="limite_atendimentos_mes" value="{{ empresa.licenca.limite_atendimentos_mes }}">
                     <input type="hidden" name="limite_unidades" value="{{ empresa.licenca.limite_unidades }}">
                     <input type="hidden" name="limite_storage_mb" value="{{ empresa.licenca.limite_storage_mb }}">
+                    <label class="field-label">
+                        Nova validade
+                        <input name="validade_em" type="date" value="{{ empresa.licenca.validade_em[:10] if empresa.licenca.validade_em else '' }}" required>
+                        <span class="field-help">Escolha ate quando a renovacao fica ativa.</span>
+                    </label>
                     <button type="submit">Renovar licenca</button>
                 </form>
             </div>
@@ -131,33 +196,89 @@
                 <form action="/empresas/salvar" method="POST" class="stack-form stack-form--wide top-spacing">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="empresa_id" value="{{ empresa.id }}">
-                    <input name="nome_fantasia" value="{{ empresa.nome_fantasia }}" placeholder="Nome fantasia">
-                    <input name="razao_social" value="{{ empresa.razao_social }}" placeholder="Razao social">
+                    <label class="field-label">
+                        Nome fantasia
+                        <input name="nome_fantasia" value="{{ empresa.nome_fantasia }}" placeholder="Nome fantasia">
+                        <span class="field-help">Nome comercial que aparece na administracao.</span>
+                    </label>
+                    <label class="field-label">
+                        Razao social
+                        <input name="razao_social" value="{{ empresa.razao_social }}" placeholder="Razao social">
+                        <span class="field-help">Nome juridico da empresa cliente.</span>
+                    </label>
                     <div class="field-grid">
-                        <input name="documento" value="{{ empresa.documento }}" placeholder="CNPJ/CPF">
-                        <input name="email" value="{{ empresa.email }}" placeholder="E-mail">
-                        <input name="telefone" value="{{ empresa.telefone }}" placeholder="Telefone">
-                        <input name="slug" value="{{ empresa.slug }}" placeholder="slug-da-empresa">
+                        <label class="field-label">
+                            CNPJ/CPF
+                            <input name="documento" value="{{ empresa.documento }}" placeholder="CNPJ/CPF">
+                            <span class="field-help">Documento principal do contrato.</span>
+                        </label>
+                        <label class="field-label">
+                            E-mail
+                            <input name="email" value="{{ empresa.email }}" placeholder="E-mail">
+                            <span class="field-help">Contato para suporte e financeiro.</span>
+                        </label>
+                        <label class="field-label">
+                            Telefone
+                            <input name="telefone" value="{{ empresa.telefone }}" placeholder="Telefone">
+                            <span class="field-help">Telefone do responsavel pela operacao.</span>
+                        </label>
+                        <label class="field-label">
+                            Slug
+                            <input name="slug" value="{{ empresa.slug }}" placeholder="slug-da-empresa">
+                            <span class="field-help">Identificador curto usado pelo sistema.</span>
+                        </label>
                     </div>
                     <div class="field-grid">
-                        <select name="plano_codigo">
-                            {% for codigo, plano in planos_licenca.items() %}
-                            <option value="{{ codigo }}" {% if empresa.licenca.codigo_plano == codigo %}selected{% endif %}>{{ plano.label }}</option>
-                            {% endfor %}
-                        </select>
-                        <select name="licenca_status">
-                            {% for codigo, label in status_licenca.items() %}
-                            <option value="{{ codigo }}" {% if empresa.licenca.status == codigo %}selected{% endif %}>{{ label }}</option>
-                            {% endfor %}
-                        </select>
-                        <input name="validade_em" type="date" value="{{ empresa.licenca.validade_em[:10] if empresa.licenca.validade_em else '' }}">
-                        <input name="dominio_personalizado" value="{{ empresa.dominio_personalizado }}" placeholder="dominio.com.br">
+                        <label class="field-label">
+                            Plano
+                            <select name="plano_codigo">
+                                {% for codigo, plano in planos_licenca.items() %}
+                                <option value="{{ codigo }}" {% if empresa.licenca.codigo_plano == codigo %}selected{% endif %}>{{ plano.label }}</option>
+                                {% endfor %}
+                            </select>
+                            <span class="field-help">Starter, Pro ou Business; muda recursos e limites.</span>
+                        </label>
+                        <label class="field-label">
+                            Status da licenca
+                            <select name="licenca_status">
+                                {% for codigo, label in status_licenca.items() %}
+                                <option value="{{ codigo }}" {% if empresa.licenca.status == codigo %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                            <span class="field-help">Use bloqueada ou vencida para interromper recursos operacionais.</span>
+                        </label>
+                        <label class="field-label">
+                            Validade
+                            <input name="validade_em" type="date" value="{{ empresa.licenca.validade_em[:10] if empresa.licenca.validade_em else '' }}">
+                            <span class="field-help">Validade administrativa salva no cadastro da licenca.</span>
+                        </label>
+                        <label class="field-label">
+                            Dominio personalizado
+                            <input name="dominio_personalizado" value="{{ empresa.dominio_personalizado }}" placeholder="dominio.com.br">
+                            <span class="field-help">Dominio usado quando o plano liberar white-label.</span>
+                        </label>
                     </div>
                     <div class="field-grid">
-                        <input name="limite_usuarios" type="number" min="1" value="{{ empresa.licenca.limite_usuarios }}">
-                        <input name="limite_atendimentos_mes" type="number" min="1" value="{{ empresa.licenca.limite_atendimentos_mes }}">
-                        <input name="limite_unidades" type="number" min="1" value="{{ empresa.limite_unidades or 1 }}">
-                        <input name="limite_storage_mb" type="number" min="128" value="{{ empresa.limite_storage_mb or 512 }}">
+                        <label class="field-label">
+                            Limite de usuarios
+                            <input name="limite_usuarios" type="number" min="1" value="{{ empresa.licenca.limite_usuarios }}">
+                            <span class="field-help">Maximo de logins ativos.</span>
+                        </label>
+                        <label class="field-label">
+                            Atendimentos por mes
+                            <input name="limite_atendimentos_mes" type="number" min="1" value="{{ empresa.licenca.limite_atendimentos_mes }}">
+                            <span class="field-help">Maximo de atendimentos mensais antes de bloquear.</span>
+                        </label>
+                        <label class="field-label">
+                            Unidades
+                            <input name="limite_unidades" type="number" min="1" value="{{ empresa.licenca.limite_unidades }}">
+                            <span class="field-help">Quantidade de unidades liberadas na licenca.</span>
+                        </label>
+                        <label class="field-label">
+                            Storage MB
+                            <input name="limite_storage_mb" type="number" min="128" value="{{ empresa.licenca.limite_storage_mb }}">
+                            <span class="field-help">Limite de armazenamento contratado.</span>
+                        </label>
                     </div>
                     <label class="inline-toggle">
                         <input type="checkbox" name="ativa" value="1" {% if empresa.ativa %}checked{% endif %}>

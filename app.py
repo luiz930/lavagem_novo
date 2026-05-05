@@ -3769,6 +3769,7 @@ def inject_global_template_context():
         "app_version": obter_versao_sistema(),
         "csrf_token": lambda: issue_csrf_token(session),
         "licenca_atual": licenca_atual,
+        "pode_gerenciar_empresas": usuario_gerencia_empresas() if session.get("usuario") else False,
         **produto,
     }
 
@@ -7307,7 +7308,7 @@ def usuario_gerencia_configuracao_sistema():
 
 
 def usuario_gerencia_empresas():
-    return usuario_admin() or usuario_desenvolvedor()
+    return usuario_desenvolvedor()
 
 
 def normalizar_slug_empresa(valor, fallback="empresa"):
@@ -14689,7 +14690,7 @@ def pagina_empresas():
     if not session.get("usuario"):
         return redirect("/login")
     if not usuario_gerencia_empresas():
-        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem gerenciar empresas.")
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem gerenciar empresas e licencas.")
         return redirect("/configuracoes")
 
     conn = conectar()
@@ -14717,7 +14718,7 @@ def salvar_empresa_admin():
     if not session.get("usuario"):
         return redirect("/login")
     if not usuario_gerencia_empresas():
-        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem salvar empresas.")
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem salvar empresas.")
         return redirect("/configuracoes")
 
     empresa_id = converter_inteiro(request.form.get("empresa_id"), 0)
@@ -14809,7 +14810,7 @@ def gerar_licenca_empresa_admin(empresa_id):
     if not session.get("usuario"):
         return redirect("/login")
     if not usuario_gerencia_empresas():
-        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem gerar licencas.")
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem gerar licencas.")
         return redirect("/configuracoes")
 
     try:
@@ -14831,7 +14832,7 @@ def renovar_licenca_empresa_admin(empresa_id):
     if not session.get("usuario"):
         return redirect("/login")
     if not usuario_gerencia_empresas():
-        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem renovar licencas.")
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem renovar licencas.")
         return redirect("/configuracoes")
 
     try:
@@ -14856,7 +14857,7 @@ def trocar_empresa_ativa():
     if not session.get("usuario"):
         return redirect("/login")
     if not usuario_gerencia_empresas():
-        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem trocar a empresa ativa.")
+        definir_feedback_configuracoes("erro", "Somente desenvolvedores podem trocar a empresa ativa.")
         return redirect("/configuracoes")
 
     empresa_id = converter_inteiro(request.form.get("empresa_id"), 1)
