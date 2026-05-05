@@ -16,6 +16,7 @@ FOUNDATION_MIGRATIONS = (
     "foundation_admin_settings_scope",
     "foundation_empresa_indexes",
     "foundation_legacy_plate_uniqueness",
+    "foundation_licensing_limits",
 )
 
 
@@ -111,6 +112,7 @@ def create_licencas_table(cursor):
             codigo_plano TEXT DEFAULT 'starter',
             status TEXT DEFAULT 'trial',
             limite_usuarios INTEGER DEFAULT 5,
+            limite_atendimentos_mes INTEGER DEFAULT 120,
             limite_unidades INTEGER DEFAULT 1,
             limite_storage_mb INTEGER DEFAULT 512,
             validade_em TEXT,
@@ -799,6 +801,27 @@ def apply_legacy_plate_uniqueness_migration(cursor):
         rebuild_sqlite_table_without_global_unique_placa(cursor, tabela)
 
 
+def apply_licensing_limits(cursor, add_column):
+    add_column(cursor, "licencas", "limite_atendimentos_mes INTEGER DEFAULT 120")
+    add_column(cursor, "licencas", "observacoes TEXT")
+    add_column(cursor, "licencas", "bloquear_em TEXT")
+    add_column(cursor, "empresas", "dominio_personalizado TEXT")
+
+    cursor.execute(
+        """
+        UPDATE licencas
+        SET limite_atendimentos_mes=COALESCE(limite_atendimentos_mes, 120),
+            limite_usuarios=COALESCE(limite_usuarios, 5),
+            limite_unidades=COALESCE(limite_unidades, 1),
+            limite_storage_mb=COALESCE(limite_storage_mb, 512)
+        WHERE limite_atendimentos_mes IS NULL
+           OR limite_usuarios IS NULL
+           OR limite_unidades IS NULL
+           OR limite_storage_mb IS NULL
+        """
+    )
+
+
 def run_product_foundation_migrations(conn, add_column, now_iso, print_func=print):
     cursor = conn.cursor()
     ensure_schema_migrations(cursor)
@@ -850,6 +873,10 @@ def run_product_foundation_migrations(conn, add_column, now_iso, print_func=prin
         apply_legacy_plate_uniqueness_migration(cursor)
         apply_empresa_indexes(cursor)
         mark_migration_applied(cursor, "foundation_legacy_plate_uniqueness", now_iso())
+
+    if "foundation_licensing_limits" not in applied:
+        apply_licensing_limits(cursor, add_column)
+        mark_migration_applied(cursor, "foundation_licensing_limits", now_iso())
 
     conn.commit()
     print_func("FOUNDATION: migrations de produto aplicadas/verificadas.")

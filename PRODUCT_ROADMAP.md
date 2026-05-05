@@ -23,6 +23,13 @@
 - suporte e diagnostico
 - branding e dominios personalizados
 
+## Corte atual entregue
+
+- painel admin de empresas e troca de empresa ativa
+- licenciamento por plano/status com limites de usuarios e atendimentos
+- diagnostico de ambiente com checklist de producao
+- base para bloqueio operacional quando a licenca vence ou excede limites
+
 ## Proximo corte tecnico recomendado
 
 1. separar rotas por blueprint

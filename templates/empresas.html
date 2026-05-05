@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+
+{% block title %}Empresas{% endblock %}
+{% block titulo %}Empresas e licencas{% endblock %}
+{% block subtitulo %}Controle multiempresa, plano ativo e limites comerciais{% endblock %}
+
+{% block actions %}
+<a href="/configuracoes" class="button-link"><button type="button">Configuracoes</button></a>
+<a href="/diagnostico" class="button-link"><button type="button">Diagnostico</button></a>
+{% endblock %}
+
+{% block content %}
+
+{% if feedback %}
+<div class="page-card {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
+</div>
+{% endif %}
+
+<div class="page-grid">
+    <div class="page-card">
+        <p class="pill-label">Nova empresa</p>
+        <h2 class="section-title top-spacing">Cadastro comercial</h2>
+        <form action="/empresas/salvar" method="POST" class="stack-form stack-form--wide top-spacing">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input name="nome_fantasia" placeholder="Nome fantasia" required>
+            <input name="razao_social" placeholder="Razao social">
+            <div class="field-grid">
+                <input name="documento" placeholder="CNPJ/CPF">
+                <input name="email" type="email" placeholder="E-mail">
+                <input name="telefone" placeholder="Telefone">
+                <input name="slug" placeholder="slug-da-empresa">
+            </div>
+            <div class="field-grid">
+                <select name="plano_codigo">
+                    {% for codigo, plano in planos_licenca.items() %}
+                    <option value="{{ codigo }}">{{ plano.label }}</option>
+                    {% endfor %}
+                </select>
+                <select name="licenca_status">
+                    {% for codigo, label in status_licenca.items() %}
+                    <option value="{{ codigo }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <input name="validade_em" type="date" placeholder="Validade">
+                <input name="dominio_personalizado" placeholder="dominio.com.br">
+            </div>
+            <div class="field-grid">
+                <input name="limite_usuarios" type="number" min="1" value="{{ planos_licenca.starter.limite_usuarios }}" placeholder="Usuarios">
+                <input name="limite_atendimentos_mes" type="number" min="1" value="{{ planos_licenca.starter.limite_atendimentos_mes }}" placeholder="Atendimentos/mes">
+                <input name="limite_unidades" type="number" min="1" value="{{ planos_licenca.starter.limite_unidades }}" placeholder="Unidades">
+                <input name="limite_storage_mb" type="number" min="128" value="{{ planos_licenca.starter.limite_storage_mb }}" placeholder="Storage MB">
+            </div>
+            <label class="inline-toggle">
+                <input type="checkbox" name="ativa" value="1" checked>
+                Empresa ativa
+            </label>
+            <input type="hidden" name="storage_provider" value="database">
+            <div class="actions-row actions-row--left">
+                <button type="submit">Cadastrar empresa</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="page-card page-card--soft">
+        <p class="pill-label">Empresa ativa</p>
+        <h2 class="section-title top-spacing">Escopo atual</h2>
+        <p class="muted-text">Todos os cadastros, atendimentos, relatorios e configuracoes administrativas passam a usar a empresa ativa da sessao.</p>
+        <p><b>ID ativo:</b> {{ empresa_atual_id }}</p>
+        <p><b>Plano:</b> {{ licenca_atual.plano_label if licenca_atual else "-" }}</p>
+        <p><b>Status:</b> {{ licenca_atual.status_label if licenca_atual else "-" }}</p>
+        <p><b>Usuarios:</b> {{ licenca_atual.usuarios_ativos if licenca_atual else 0 }}/{{ licenca_atual.limite_usuarios if licenca_atual else 0 }}</p>
+        <p><b>Atendimentos do mes:</b> {{ licenca_atual.atendimentos_mes if licenca_atual else 0 }}/{{ licenca_atual.limite_atendimentos_mes if licenca_atual else 0 }}</p>
+    </div>
+</div>
+
+<div class="top-spacing">
+    <h2 class="section-title">Empresas cadastradas</h2>
+    <div class="list-grid">
+        {% for empresa in empresas %}
+        <div class="page-card">
+            <div class="actions-row actions-row--left">
+                <span class="pill-label">#{{ empresa.id }}</span>
+                <span class="status-badge {% if empresa.id == empresa_atual_id %}status-badge--success{% elif empresa.ativa %}status-badge--warning{% else %}status-badge--muted{% endif %}">
+                    {% if empresa.id == empresa_atual_id %}Ativa na sessao{% elif empresa.ativa %}Disponivel{% else %}Pausada{% endif %}
+                </span>
+                <span class="status-badge {% if empresa.licenca.bloqueada %}status-badge--warning{% else %}status-badge--success{% endif %}">{{ empresa.licenca.status_label }}</span>
+            </div>
+
+            <h3 class="section-title top-spacing">{{ empresa.nome_fantasia or empresa.razao_social or empresa.slug }}</h3>
+            <p class="muted-text">Slug: {{ empresa.slug or "-" }}</p>
+            <p class="muted-text">Documento: {{ empresa.documento or "-" }}</p>
+            <p><b>Plano:</b> {{ empresa.licenca.plano_label }}</p>
+            <p><b>Usuarios:</b> {{ empresa.licenca.usuarios_ativos }}/{{ empresa.licenca.limite_usuarios }}</p>
+            <p><b>Atendimentos do mes:</b> {{ empresa.licenca.atendimentos_mes }}/{{ empresa.licenca.limite_atendimentos_mes }}</p>
+            <p><b>Validade:</b> {{ empresa.licenca.validade_em or "Sem vencimento definido" }}</p>
+
+            <div class="actions-row actions-row--left top-spacing">
+                <form action="/empresas/trocar" method="POST">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="empresa_id" value="{{ empresa.id }}">
+                    <button type="submit">Usar esta empresa</button>
+                </form>
+            </div>
+
+            <details class="top-spacing">
+                <summary>Editar empresa e licenca</summary>
+                <form action="/empresas/salvar" method="POST" class="stack-form stack-form--wide top-spacing">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="empresa_id" value="{{ empresa.id }}">
+                    <input name="nome_fantasia" value="{{ empresa.nome_fantasia }}" placeholder="Nome fantasia">
+                    <input name="razao_social" value="{{ empresa.razao_social }}" placeholder="Razao social">
+                    <div class="field-grid">
+                        <input name="documento" value="{{ empresa.documento }}" placeholder="CNPJ/CPF">
+                        <input name="email" value="{{ empresa.email }}" placeholder="E-mail">
+                        <input name="telefone" value="{{ empresa.telefone }}" placeholder="Telefone">
+                        <input name="slug" value="{{ empresa.slug }}" placeholder="slug-da-empresa">
+                    </div>
+                    <div class="field-grid">
+                        <select name="plano_codigo">
+                            {% for codigo, plano in planos_licenca.items() %}
+                            <option value="{{ codigo }}" {% if empresa.licenca.codigo_plano == codigo %}selected{% endif %}>{{ plano.label }}</option>
+                            {% endfor %}
+                        </select>
+                        <select name="licenca_status">
+                            {% for codigo, label in status_licenca.items() %}
+                            <option value="{{ codigo }}" {% if empresa.licenca.status == codigo %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                        <input name="validade_em" type="date" value="{{ empresa.licenca.validade_em[:10] if empresa.licenca.validade_em else '' }}">
+                        <input name="dominio_personalizado" value="{{ empresa.dominio_personalizado }}" placeholder="dominio.com.br">
+                    </div>
+                    <div class="field-grid">
+                        <input name="limite_usuarios" type="number" min="1" value="{{ empresa.licenca.limite_usuarios }}">
+                        <input name="limite_atendimentos_mes" type="number" min="1" value="{{ empresa.licenca.limite_atendimentos_mes }}">
+                        <input name="limite_unidades" type="number" min="1" value="{{ empresa.limite_unidades or 1 }}">
+                        <input name="limite_storage_mb" type="number" min="128" value="{{ empresa.limite_storage_mb or 512 }}">
+                    </div>
+                    <label class="inline-toggle">
+                        <input type="checkbox" name="ativa" value="1" {% if empresa.ativa %}checked{% endif %}>
+                        Empresa ativa
+                    </label>
+                    <input type="hidden" name="storage_provider" value="{{ empresa.storage_provider or 'database' }}">
+                    <div class="actions-row actions-row--left">
+                        <button type="submit">Salvar alteracoes</button>
+                    </div>
+                </form>
+            </details>
+        </div>
+        {% else %}
+        <div class="page-card page-card--soft">
+            <p class="muted-text">Nenhuma empresa cadastrada ainda.</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+{% endblock %}

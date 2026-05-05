@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Diagnostico{% endblock %}
+{% block titulo %}Diagnostico do sistema{% endblock %}
+{% block subtitulo %}Banco, migrations, backup, Drive, seguranca e checklist de producao{% endblock %}
+
+{% block actions %}
+<form action="/diagnostico/validar" method="POST">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">Validar ambiente</button>
+</form>
+<a href="/empresas" class="button-link"><button type="button">Empresas</button></a>
+{% endblock %}
+
+{% block content %}
+
+{% if feedback %}
+<div class="page-card {% if feedback.tipo == 'sucesso' %}success-banner{% else %}error-banner{% endif %}">
+    <p>{{ feedback.mensagem }}</p>
+</div>
+{% endif %}
+
+<div class="page-grid">
+    <div class="page-card">
+        <p class="pill-label">Banco</p>
+        <h2 class="section-title top-spacing">{{ diagnostico.banco_status.modo_label }}</h2>
+        <p><b>Conexao:</b> {{ diagnostico.banco_status.mensagem }}</p>
+        <p><b>Ativo agora:</b> {{ diagnostico.banco_status.backend_label }}</p>
+        <p><b>Host:</b> {{ diagnostico.banco_status.host or "-" }}</p>
+        <p><b>Banco:</b> {{ diagnostico.banco_status.database or "-" }}</p>
+        <p><b>Migrations/tabelas:</b> {{ diagnostico.banco_online_tabelas.quantidade or 0 }} tabela(s) listada(s)</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Licenca</p>
+        <h2 class="section-title top-spacing">{{ diagnostico.licenca.plano_label }} / {{ diagnostico.licenca.status_label }}</h2>
+        <p><b>Usuarios:</b> {{ diagnostico.licenca.usuarios_ativos }}/{{ diagnostico.licenca.limite_usuarios }}</p>
+        <p><b>Atendimentos do mes:</b> {{ diagnostico.licenca.atendimentos_mes }}/{{ diagnostico.licenca.limite_atendimentos_mes }}</p>
+        <p><b>Validade:</b> {{ diagnostico.licenca.validade_em or "Sem vencimento definido" }}</p>
+        <p><b>Bloqueio:</b> {% if diagnostico.licenca.bloqueada %}Sim{% else %}Nao{% endif %}</p>
+    </div>
+</div>
+
+<div class="page-grid top-spacing">
+    <div class="page-card">
+        <p class="pill-label">Backup e storage</p>
+        <h2 class="section-title top-spacing">{{ diagnostico.backup_status.tipo_backup_label }}</h2>
+        <p><b>Frequencia:</b> {{ diagnostico.backup_status.frequencia_label }}</p>
+        <p><b>Ultimo backup:</b> {{ diagnostico.backup_status.ultimo_backup_em_fmt }}</p>
+        <p><b>Quantidade local:</b> {{ diagnostico.backup_status.quantidade }} arquivo(s)</p>
+        <p><b>Destino externo:</b> {{ diagnostico.backup_status.destino_externo_tipo_label }}</p>
+        <p><b>Google Drive pronto:</b> {% if diagnostico.google_drive_pronto %}Sim{% else %}Nao{% endif %}</p>
+        <p><b>Storage provider:</b> {{ diagnostico.storage_provider }}</p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Seguranca e deploy</p>
+        <h2 class="section-title top-spacing">{{ diagnostico.versao }}</h2>
+        <p><b>CSRF:</b> {% if diagnostico.csrf_ativo %}Ativo{% else %}Desativado{% endif %}</p>
+        <p><b>Cookie seguro:</b> {% if diagnostico.session_cookie_secure %}Ativo{% else %}Desativado{% endif %}</p>
+        <p><b>Modo de banco:</b> {{ diagnostico.modo_banco }}</p>
+        <p><b>Uploads:</b> {{ diagnostico.arquivos_status.armazenamento.uploads.tamanho_fmt }}</p>
+        <p><b>Backups:</b> {{ diagnostico.arquivos_status.armazenamento.backups.tamanho_fmt }}</p>
+    </div>
+</div>
+
+<div class="top-spacing">
+    <h2 class="section-title">Checklist de producao</h2>
+    <div class="list-grid">
+        {% for item in diagnostico.checklist %}
+        <div class="page-card {% if item.ok %}success-banner{% else %}error-banner{% endif %}">
+            <p><b>{{ item.nome }}</b></p>
+            <p>{{ item.detalhe }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <p class="pill-label">Suporte</p>
+    <h2 class="section-title top-spacing">Checklist operacional</h2>
+    <div class="stack-form stack-form--wide top-spacing">
+        <p class="muted-text">1. Validar banco online e migrations antes de ativar cliente novo.</p>
+        <p class="muted-text">2. Confirmar CSRF e cookie seguro em ambiente HTTPS.</p>
+        <p class="muted-text">3. Gerar backup manual antes de migracoes ou importacoes grandes.</p>
+        <p class="muted-text">4. Conferir plano, validade e limites em Empresas.</p>
+        <p class="muted-text">5. Confirmar destino externo do backup quando o cliente contratar backup online.</p>
+    </div>
+</div>
+
+{% endblock %}

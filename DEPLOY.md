@@ -43,3 +43,16 @@ gunicorn app:app --bind 0.0.0.0:5000
 - o projeto espera banco online quando `STRICT_ONLINE_DATABASE=true`
 - o JSON do Google Drive nao deve ir para o Git
 - as migrations de fundacao rodam no boot via `init_db()`
+- a tela `/diagnostico` valida banco, CSRF, cookie seguro, backup e Google Drive
+- a tela `/empresas` controla empresa ativa, plano, status da licenca e limites
+
+## Checklist de producao
+
+- `CSRF_PROTECTION=1`
+- `SESSION_COOKIE_SECURE=1` em HTTPS
+- `DATABASE_BACKEND=postgres`
+- `STRICT_ONLINE_DATABASE=true`
+- `SUPABASE_DATABASE_URL` preenchida com senha real fora do Git
+- backup manual validado antes de migracoes ou importacoes grandes
+- destino externo do backup configurado quando houver backup online contratado
+- empresa, plano, status e validade revisados em `/empresas`

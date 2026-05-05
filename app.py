@@ -58,6 +58,21 @@ from domains.clientes import (
     salvar_cliente_veiculo_cursor as salvar_cliente_veiculo_cursor_domain,
 )
 from domains.changelog import carregar_contexto_changelog as carregar_contexto_changelog_domain
+from domains.empresas import (
+    PLANOS_LICENCA,
+    STATUS_LICENCA,
+    garantir_licenca as garantir_licenca_domain,
+    listar_empresas as listar_empresas_domain,
+    montar_contexto_licenca as montar_contexto_licenca_domain,
+    normalizar_plano as normalizar_plano_licenca_domain,
+    normalizar_status_licenca as normalizar_status_licenca_domain,
+    obter_empresa as obter_empresa_domain,
+    obter_licenca as obter_licenca_domain,
+    obter_uso_licenca as obter_uso_licenca_domain,
+    plano_padrao as plano_padrao_licenca_domain,
+    salvar_empresa as salvar_empresa_domain,
+    salvar_licenca as salvar_licenca_domain,
+)
 from domains.historico import (
     carregar_recursos_edicao_historico as carregar_recursos_edicao_historico_domain,
     excluir_dependencias_historico_servico as excluir_dependencias_historico_servico_domain,
@@ -3747,9 +3762,11 @@ def inject_global_template_context():
     produto["brand_background_rgb"] = cor_hex_para_rgb_css(produto.get("brand_background_color"), "#0b0b0b")
     produto["brand_surface_rgb"] = cor_hex_para_rgb_css(produto.get("brand_surface_color"), "#111827")
     produto["brand_text_rgb"] = cor_hex_para_rgb_css(produto.get("brand_text_color"), "#f9fafb")
+    licenca_atual = carregar_contexto_licenca_empresa_seguro() if session.get("usuario") else {}
     return {
         "app_version": obter_versao_sistema(),
         "csrf_token": lambda: issue_csrf_token(session),
+        "licenca_atual": licenca_atual,
         **produto,
     }
 
@@ -7185,10 +7202,17 @@ def preencher_sessao_usuario(usuario_row, limpar=True):
         usuario_row["foto_perfil"],
         usuario_row["id"],
     )
-    try:
-        session["empresa_id"] = int(usuario_row["empresa_id"] or 1)
-    except Exception:
-        session["empresa_id"] = 1
+    empresa_sessao_atual = session.get("empresa_id") if not limpar else None
+    if empresa_sessao_atual and perfil_usuario in {"admin", "desenvolvedor"}:
+        try:
+            session["empresa_id"] = int(empresa_sessao_atual or 1)
+        except Exception:
+            session["empresa_id"] = 1
+    else:
+        try:
+            session["empresa_id"] = int(usuario_row["empresa_id"] or 1)
+        except Exception:
+            session["empresa_id"] = 1
     session["usuario_perfil"] = perfil_usuario
     session["senha_alteracao_obrigatoria"] = usuario_precisa_trocar_senha(usuario_row)
     session["usuario_sync_em"] = time.time()
@@ -7254,6 +7278,84 @@ def usuario_gerencia_banco_online():
 
 def usuario_gerencia_configuracao_sistema():
     return usuario_admin() or usuario_desenvolvedor()
+
+
+def usuario_gerencia_empresas():
+    return usuario_admin() or usuario_desenvolvedor()
+
+
+def normalizar_slug_empresa(valor, fallback="empresa"):
+    texto = normalizar_texto_comparacao(valor or fallback)
+    texto = re.sub(r"[^a-z0-9]+", "-", texto).strip("-")
+    return texto or "empresa"
+
+
+def carregar_contexto_licenca_empresa(empresa_id=None):
+    empresa_id = normalize_empresa_id(empresa_id or empresa_atual_id())
+    mes_prefixo = agora().strftime("%Y-%m")
+    conn = conectar()
+    c = conn.cursor()
+    licenca = garantir_licenca_domain(c, empresa_id, agora_iso())
+    uso = obter_uso_licenca_domain(c, empresa_id, mes_prefixo)
+    conn.commit()
+    conn.close()
+    return montar_contexto_licenca_domain(licenca, uso, hoje=agora().date())
+
+
+def carregar_contexto_licenca_empresa_seguro(empresa_id=None):
+    try:
+        return carregar_contexto_licenca_empresa(empresa_id)
+    except Exception:
+        plano = plano_padrao_licenca_domain("starter")
+        return {
+            "codigo_plano": "starter",
+            "plano_label": plano["label"],
+            "status": "trial",
+            "status_label": "Trial",
+            "validade_em": "",
+            "dias_restantes": None,
+            "limite_usuarios": plano["limite_usuarios"],
+            "limite_atendimentos_mes": plano["limite_atendimentos_mes"],
+            "usuarios_ativos": 0,
+            "atendimentos_mes": 0,
+            "bloqueada": False,
+            "aviso": False,
+            "excedeu_usuarios": False,
+            "excedeu_atendimentos": False,
+        }
+
+
+def bloquear_criacao_usuario_por_licenca():
+    licenca = carregar_contexto_licenca_empresa_seguro()
+    return licenca.get("bloqueada") or licenca.get("excedeu_usuarios")
+
+
+def bloquear_criacao_atendimento_por_licenca():
+    licenca = carregar_contexto_licenca_empresa_seguro()
+    return licenca.get("bloqueada") or licenca.get("excedeu_atendimentos")
+
+
+def endpoint_liberado_com_licenca_bloqueada(endpoint):
+    if not endpoint:
+        return False
+    if endpoint == "static" or endpoint.startswith("api_sync") or endpoint.startswith("servir_"):
+        return True
+    return endpoint in {
+        "login",
+        "logout",
+        "healthz",
+        "configuracoes",
+        "pagina_empresas",
+        "salvar_empresa_admin",
+        "trocar_empresa_ativa",
+        "pagina_diagnostico",
+        "validar_diagnostico",
+        "atualizar_minha_senha",
+        "salvar_configuracao_banco",
+        "testar_configuracao_banco",
+        "migrar_banco_para_supabase",
+    }
+
 
 def normalizar_periodo_financeiro(valor):
     periodo = str(valor or "mes").strip().lower()
@@ -13092,6 +13194,35 @@ def exigir_troca_senha_obrigatoria():
     )
     return redirect("/configuracoes")
 
+
+@app.before_request
+def exigir_licenca_operacional():
+    endpoint = request.endpoint or ""
+    if endpoint_liberado_com_licenca_bloqueada(endpoint):
+        return
+    if not session.get("usuario"):
+        return
+
+    licenca = carregar_contexto_licenca_empresa_seguro()
+    if not licenca.get("bloqueada"):
+        return
+
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        definir_feedback_configuracoes(
+            "erro",
+            "Licenca bloqueada ou vencida. Regularize a empresa antes de continuar usando os recursos operacionais.",
+        )
+        return redirect("/empresas")
+
+    if (endpoint or "").startswith("api_"):
+        return jsonify({"erro": "licenca_bloqueada"}), 403
+
+    definir_feedback_configuracoes(
+        "erro",
+        "Licenca bloqueada ou vencida. Regularize a empresa antes de continuar usando os recursos operacionais.",
+    )
+    return redirect("/empresas")
+
 @app.route("/api/cliente/<placa>")
 def buscar_cliente_api(placa):
     if not session.get("usuario"):
@@ -14245,6 +14376,7 @@ def carregar_usuarios_configuracao():
                    tentativas_login, bloqueado_ate, ultimo_login_em,
                    senha_alteracao_obrigatoria, foto_perfil
             FROM usuarios
+            WHERE empresa_id=?
             ORDER BY
                 CASE
                     WHEN LOWER(COALESCE(perfil, ''))='desenvolvedor' THEN 0
@@ -14253,7 +14385,7 @@ def carregar_usuarios_configuracao():
                 END,
                 LOWER(COALESCE(nome, usuario, '')),
                 LOWER(COALESCE(usuario, nome, ''))
-        """)
+        """, (empresa_atual_id(),))
         return [dict(row) for row in c.fetchall()]
 
     usuarios = executar_leitura_resiliente(
@@ -14428,6 +14560,221 @@ def login():
 def logout():
     session.clear()
     return redirect("/login")
+
+
+@app.route("/empresas")
+def pagina_empresas():
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_gerencia_empresas():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem gerenciar empresas.")
+        return redirect("/configuracoes")
+
+    conn = conectar()
+    c = conn.cursor()
+    empresas = listar_empresas_domain(c)
+    for empresa in empresas:
+        licenca = obter_licenca_domain(c, empresa["id"])
+        uso = obter_uso_licenca_domain(c, empresa["id"], agora().strftime("%Y-%m"))
+        empresa["licenca"] = montar_contexto_licenca_domain(licenca, uso, hoje=agora().date())
+    conn.close()
+
+    return render_template(
+        "empresas.html",
+        feedback=session.pop("empresas_feedback", None) or session.pop("configuracoes_feedback", None),
+        empresas=empresas,
+        empresa_atual_id=empresa_atual_id(),
+        planos_licenca=PLANOS_LICENCA,
+        status_licenca=STATUS_LICENCA,
+    )
+
+
+@app.route("/empresas/salvar", methods=["POST"])
+def salvar_empresa_admin():
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_gerencia_empresas():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem salvar empresas.")
+        return redirect("/configuracoes")
+
+    empresa_id = converter_inteiro(request.form.get("empresa_id"), 0)
+    nome_fantasia = normalizar_texto_campo(request.form.get("nome_fantasia"))
+    razao_social = normalizar_texto_campo(request.form.get("razao_social"))
+    if not nome_fantasia and not razao_social:
+        session["empresas_feedback"] = {"tipo": "erro", "mensagem": "Informe ao menos o nome fantasia ou razao social."}
+        return redirect("/empresas")
+
+    plano_codigo = normalizar_plano_licenca_domain(request.form.get("plano_codigo"))
+    status = normalizar_status_licenca_domain(request.form.get("licenca_status"))
+    plano = plano_padrao_licenca_domain(plano_codigo)
+    slug = normalizar_slug_empresa(request.form.get("slug") or nome_fantasia or razao_social, fallback=f"empresa-{empresa_id or 'nova'}")
+    ativa = 1 if request.form.get("ativa") else 0
+    validade = normalizar_texto_campo(request.form.get("validade_em"))
+
+    dados_empresa = {
+        "slug": slug,
+        "razao_social": razao_social,
+        "nome_fantasia": nome_fantasia,
+        "documento": normalizar_texto_campo(request.form.get("documento")),
+        "email": normalizar_texto_campo(request.form.get("email")),
+        "telefone": normalizar_texto_campo(request.form.get("telefone")),
+        "ativa": ativa,
+        "storage_provider": normalizar_texto_campo(request.form.get("storage_provider")) or "database",
+        "dominio_personalizado": normalizar_texto_campo(request.form.get("dominio_personalizado")),
+        "plano_codigo": plano_codigo,
+        "licenca_status": status,
+    }
+    dados_licenca = {
+        "codigo_plano": plano_codigo,
+        "status": status,
+        "limite_usuarios": converter_inteiro(request.form.get("limite_usuarios"), plano["limite_usuarios"]),
+        "limite_atendimentos_mes": converter_inteiro(request.form.get("limite_atendimentos_mes"), plano["limite_atendimentos_mes"]),
+        "limite_unidades": converter_inteiro(request.form.get("limite_unidades"), plano["limite_unidades"]),
+        "limite_storage_mb": converter_inteiro(request.form.get("limite_storage_mb"), plano["limite_storage_mb"]),
+        "validade_em": validade,
+        "recursos": plano["recursos"],
+    }
+
+    try:
+        conn = conectar()
+        c = conn.cursor()
+        empresa_salva_id = salvar_empresa_domain(c, dados_empresa, agora_iso(), empresa_id=empresa_id or None)
+        if not empresa_salva_id:
+            empresa_salva_id = empresa_id
+        salvar_licenca_domain(c, empresa_salva_id, dados_licenca, agora_iso())
+        if not selecionar_configuracao_empresa_cursor(c, empresa_salva_id):
+            c.execute(
+                """
+                INSERT INTO configuracao_empresa (
+                    empresa_id, marca_nome, marca_subtitulo,
+                    licenca_plano, licenca_status, atualizado_em
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    empresa_salva_id,
+                    nome_fantasia or razao_social or f"Empresa {empresa_salva_id}",
+                    "Gestao Estetica",
+                    plano_codigo,
+                    status,
+                    agora_iso(),
+                ),
+            )
+        conn.commit()
+        conn.close()
+        session["empresas_feedback"] = {"tipo": "sucesso", "mensagem": "Empresa e licenca salvas com sucesso."}
+    except Exception as erro:
+        session["empresas_feedback"] = {"tipo": "erro", "mensagem": f"Nao foi possivel salvar a empresa: {erro}"}
+
+    return redirect("/empresas")
+
+
+@app.route("/empresas/trocar", methods=["POST"])
+def trocar_empresa_ativa():
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_gerencia_empresas():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem trocar a empresa ativa.")
+        return redirect("/configuracoes")
+
+    empresa_id = converter_inteiro(request.form.get("empresa_id"), 1)
+    conn = conectar()
+    c = conn.cursor()
+    empresa = obter_empresa_domain(c, empresa_id)
+    conn.close()
+    if not empresa:
+        session["empresas_feedback"] = {"tipo": "erro", "mensagem": "Empresa selecionada nao foi encontrada."}
+        return redirect("/empresas")
+
+    session["empresa_id"] = normalize_empresa_id(empresa_id)
+    session["empresas_feedback"] = {
+        "tipo": "sucesso",
+        "mensagem": f"Empresa ativa alterada para {empresa.get('nome_fantasia') or empresa.get('razao_social') or empresa_id}.",
+    }
+    return redirect("/empresas")
+
+
+def montar_checklist_producao():
+    banco_status = obter_status_banco_online()
+    backup_status = obter_status_backup_banco()
+    credenciais_drive, erro_drive = carregar_credenciais_google_drive()
+    itens = [
+        {
+            "nome": "CSRF ativo",
+            "ok": csrf_protection_ativa(),
+            "detalhe": "CSRF_PROTECTION=1" if csrf_protection_ativa() else "Defina CSRF_PROTECTION=1 antes de vender.",
+        },
+        {
+            "nome": "Cookie seguro",
+            "ok": SESSION_COOKIE_SECURE_RAW in {"1", "true", "yes", "on"},
+            "detalhe": "SESSION_COOKIE_SECURE=1 em HTTPS." if SESSION_COOKIE_SECURE_RAW in {"1", "true", "yes", "on"} else "Ative SESSION_COOKIE_SECURE=1 no deploy HTTPS.",
+        },
+        {
+            "nome": "Banco online",
+            "ok": bool(banco_status.get("conectado")),
+            "detalhe": banco_status.get("mensagem") or "Banco online nao validado.",
+        },
+        {
+            "nome": "Backup ativo",
+            "ok": bool(backup_status.get("quantidade", 0) >= 0),
+            "detalhe": f"Modo {backup_status.get('tipo_backup_label', '-')}, frequencia {backup_status.get('frequencia_label', '-')}.",
+        },
+        {
+            "nome": "Google Drive",
+            "ok": bool(credenciais_drive and google_drive_disponivel_para_backup()),
+            "detalhe": "Credencial pronta." if credenciais_drive else (erro_drive or "Credencial nao configurada."),
+        },
+    ]
+    return itens
+
+
+@app.route("/diagnostico")
+def pagina_diagnostico():
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_gerencia_configuracao_sistema():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem acessar o diagnostico.")
+        return redirect("/configuracoes")
+
+    banco_status = obter_status_banco_online()
+    diagnostico = {
+        "banco_status": banco_status,
+        "banco_online_tabelas": listar_tabelas_banco_online(banco_status),
+        "backup_status": obter_status_backup_banco(),
+        "arquivos_status": obter_status_arquivos(),
+        "licenca": carregar_contexto_licenca_empresa_seguro(),
+        "google_drive_pronto": google_drive_pronto_para_backup(),
+        "google_drive_disponivel": google_drive_disponivel_para_backup(),
+        "csrf_ativo": csrf_protection_ativa(),
+        "session_cookie_secure": SESSION_COOKIE_SECURE_RAW in {"1", "true", "yes", "on"},
+        "modo_banco": modo_banco_preferido(),
+        "versao": obter_versao_sistema(),
+        "storage_provider": carregar_contexto_produto().get("storage_provider"),
+        "checklist": montar_checklist_producao(),
+    }
+    return render_template(
+        "diagnostico.html",
+        feedback=session.pop("diagnostico_feedback", None),
+        diagnostico=diagnostico,
+    )
+
+
+@app.route("/diagnostico/validar", methods=["POST"])
+def validar_diagnostico():
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_gerencia_configuracao_sistema():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem validar o ambiente.")
+        return redirect("/configuracoes")
+
+    itens = montar_checklist_producao()
+    falhas = [item["nome"] for item in itens if not item["ok"]]
+    if falhas:
+        session["diagnostico_feedback"] = {"tipo": "erro", "mensagem": "Pendencias de producao: " + ", ".join(falhas)}
+    else:
+        session["diagnostico_feedback"] = {"tipo": "sucesso", "mensagem": "Ambiente validado para producao."}
+    return redirect("/diagnostico")
+
 
 @app.route("/configuracoes")
 def configuracoes():
@@ -15184,6 +15531,14 @@ def criar_usuario_funcionario():
         )
         return redirect("/configuracoes")
 
+    if bloquear_criacao_usuario_por_licenca():
+        licenca = carregar_contexto_licenca_empresa_seguro()
+        definir_feedback_configuracoes(
+            "erro",
+            f"Limite de usuarios do plano atingido ({licenca['usuarios_ativos']}/{licenca['limite_usuarios']}).",
+        )
+        return redirect("/configuracoes")
+
     conn = conectar()
     c = conn.cursor()
     c.execute("SELECT id FROM usuarios WHERE usuario=?", (usuario,))
@@ -15199,12 +15554,13 @@ def criar_usuario_funcionario():
     try:
         c.execute("""
             INSERT INTO usuarios (
-                usuario, senha, nome, perfil, ativo, criado_em,
+                empresa_id, usuario, senha, nome, perfil, ativo, criado_em,
                 tentativas_login, bloqueado_ate, ultimo_login_em,
                 senha_alteracao_obrigatoria, senha_atualizada_em
             )
-            VALUES (?, ?, ?, ?, 1, ?, 0, NULL, NULL, 1, ?)
+            VALUES (?, ?, ?, ?, ?, 1, ?, 0, NULL, NULL, 1, ?)
         """, (
+            empresa_atual_id(),
             usuario,
             senha_hash_bcrypt(senha),
             nome,
@@ -15284,7 +15640,7 @@ def redefinir_senha_usuario(usuario_id):
 
     conn = conectar()
     c = conn.cursor()
-    c.execute("SELECT id, usuario, perfil FROM usuarios WHERE id=?", (usuario_id,))
+    c.execute("SELECT id, usuario, perfil FROM usuarios WHERE empresa_id=? AND id=?", (empresa_atual_id(), usuario_id))
     alvo = c.fetchone()
 
     if not alvo:
@@ -15313,9 +15669,9 @@ def redefinir_senha_usuario(usuario_id):
         """
         UPDATE usuarios
         SET senha=?, senha_alteracao_obrigatoria=1, senha_atualizada_em=?, tentativas_login=0, bloqueado_ate=NULL
-        WHERE id=?
+        WHERE empresa_id=? AND id=?
         """,
-        (senha_hash_bcrypt(nova_senha), agora_iso(), usuario_id)
+        (senha_hash_bcrypt(nova_senha), agora_iso(), empresa_atual_id(), usuario_id)
     )
     conn.commit()
     conn.close()
@@ -15348,7 +15704,7 @@ def atualizar_foto_usuario(usuario_id):
     foto = request.files.get("foto_perfil")
     conn = conectar()
     c = conn.cursor()
-    c.execute("SELECT * FROM usuarios WHERE id=?", (usuario_id,))
+    c.execute("SELECT * FROM usuarios WHERE empresa_id=? AND id=?", (empresa_atual_id(), usuario_id))
     alvo = c.fetchone()
 
     if not alvo:
@@ -15383,18 +15739,19 @@ def atualizar_foto_usuario(usuario_id):
                 foto_perfil_blob=?,
                 foto_perfil_mime_type=?,
                 foto_perfil_arquivo_nome=?
-            WHERE id=?
+            WHERE empresa_id=? AND id=?
             """,
             (
                 nova_foto,
                 foto_info.get("arquivo_blob"),
                 foto_info.get("mime_type"),
                 foto_info.get("arquivo_nome"),
+                empresa_atual_id(),
                 usuario_id,
             ),
         )
         conn.commit()
-        c.execute("SELECT * FROM usuarios WHERE id=?", (usuario_id,))
+        c.execute("SELECT * FROM usuarios WHERE empresa_id=? AND id=?", (empresa_atual_id(), usuario_id))
         alvo_atualizado = c.fetchone()
     except ValueError as erro:
         conn.rollback()
@@ -15441,7 +15798,7 @@ def alternar_status_usuario(usuario_id):
 
     conn = conectar()
     c = conn.cursor()
-    c.execute("SELECT id, usuario, perfil, ativo FROM usuarios WHERE id=?", (usuario_id,))
+    c.execute("SELECT id, usuario, perfil, ativo FROM usuarios WHERE empresa_id=? AND id=?", (empresa_atual_id(), usuario_id))
     alvo = c.fetchone()
 
     if not alvo:
@@ -15466,7 +15823,7 @@ def alternar_status_usuario(usuario_id):
         return redirect("/configuracoes")
 
     novo_status = 0 if int(alvo["ativo"] or 0) else 1
-    c.execute("UPDATE usuarios SET ativo=? WHERE id=?", (novo_status, usuario_id))
+    c.execute("UPDATE usuarios SET ativo=? WHERE empresa_id=? AND id=?", (novo_status, empresa_atual_id(), usuario_id))
     conn.commit()
     conn.close()
 
@@ -16197,6 +16554,14 @@ def editar_cliente():
 def servico():
     if not session.get("usuario"):
         return redirect("/login")
+
+    if bloquear_criacao_atendimento_por_licenca():
+        licenca = carregar_contexto_licenca_empresa_seguro()
+        definir_feedback_painel(
+            "erro",
+            f"Limite de atendimentos do plano atingido ({licenca['atendimentos_mes']}/{licenca['limite_atendimentos_mes']}).",
+        )
+        return redirect("/painel")
 
     data = request.form
     usuario_info = resumo_usuario_logado()

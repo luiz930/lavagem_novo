@@ -399,6 +399,8 @@ body.responsive-page.sidebar-open {
             <a href="{{ url_for('clima') }}"><button><span>&#9729;</span> Clima</button></a>
             <a href="{{ url_for('pagina_auditoria') }}"><button><span>&#128269;</span> Auditoria</button></a>
             <a href="{{ url_for('pagina_changelog') }}"><button><span>&#128221;</span> Changelog</button></a>
+            <a href="{{ url_for('pagina_empresas') }}"><button><span>&#127970;</span> Empresas</button></a>
+            <a href="{{ url_for('pagina_diagnostico') }}"><button><span>&#128736;</span> Diagnostico</button></a>
             <a href="{{ url_for('configuracoes_site') }}"><button><span>&#127912;</span> Configuracoes do site</button></a>
             <a href="{{ url_for('configuracoes') }}"><button><span>&#9881;</span> Configuracoes</button></a>
         </div>
@@ -435,6 +437,22 @@ body.responsive-page.sidebar-open {
             {% block actions %}{% endblock %}
         </div>
     </div>
+
+    {% if session.get("usuario") and licenca_atual %}
+        {% if licenca_atual.bloqueada %}
+        <div class="page-card error-banner">
+            <p>Licenca {{ licenca_atual.status_label }}. Recursos operacionais ficam bloqueados ate regularizar o plano em Empresas.</p>
+        </div>
+        {% elif licenca_atual.aviso %}
+        <div class="page-card warning-banner">
+            <p>Licenca vence em {{ licenca_atual.dias_restantes }} dia(s). Revise a validade em Empresas.</p>
+        </div>
+        {% elif licenca_atual.excedeu_atendimentos or licenca_atual.excedeu_usuarios %}
+        <div class="page-card warning-banner">
+            <p>Limite do plano atingido. Usuarios: {{ licenca_atual.usuarios_ativos }}/{{ licenca_atual.limite_usuarios }}. Atendimentos do mes: {{ licenca_atual.atendimentos_mes }}/{{ licenca_atual.limite_atendimentos_mes }}.</p>
+        </div>
+        {% endif %}
+    {% endif %}
 
     {% block content %}{% endblock %}
 
