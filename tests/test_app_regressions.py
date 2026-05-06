@@ -365,13 +365,50 @@ class AppRegressionTests(unittest.TestCase):
              patch.object(app_module, "build_site_monitor_report", return_value="relatorio ok"), \
              patch.object(app_module, "resolver_chat_id_telegram", return_value="777"), \
              patch.object(app_module, "send_site_monitor_telegram_message") as enviar, \
-             patch.object(app_module, "salvar_resultado_auto_teste") as salvar_resultado:
+             patch.object(app_module, "salvar_resultado_auto_teste_seguro") as salvar_resultado:
             resultado = app_module.executar_auto_teste_site(config, enviar_telegram=True)
 
         self.assertTrue(resultado["ok"])
         self.assertEqual(resultado["chat_id"], "777")
         enviar.assert_called_once_with("123456:token", "777", "relatorio ok", 15)
         salvar_resultado.assert_called_once_with("ok", "relatorio ok", chat_id="777")
+
+    def test_salvar_campos_configuracao_empresa_garante_colunas_auto_teste(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            CREATE TABLE configuracao_empresa (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empresa_id INTEGER DEFAULT 1,
+                atualizado_em TEXT
+            )
+            """
+        )
+        conn.execute("INSERT INTO configuracao_empresa (empresa_id) VALUES (1)")
+        conn.commit()
+        wrapper = PersistentCompatConnection(conn)
+
+        with app_module.app.test_request_context("/configuracoes/auto-teste", method="POST"):
+            session["empresa_id"] = 1
+            with patch.object(app_module, "conectar", return_value=wrapper):
+                app_module.salvar_campos_configuracao_empresa(
+                    {
+                        "auto_teste_ativo": 1,
+                        "auto_teste_site_url": "https://wagenestetica.duckdns.org",
+                    }
+                )
+
+        colunas = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(configuracao_empresa)").fetchall()
+        }
+        row = conn.execute("SELECT auto_teste_ativo, auto_teste_site_url FROM configuracao_empresa WHERE empresa_id=1").fetchone()
+
+        self.assertIn("auto_teste_telegram_bot_token", colunas)
+        self.assertEqual(row["auto_teste_ativo"], 1)
+        self.assertEqual(row["auto_teste_site_url"], "https://wagenestetica.duckdns.org")
+        conn.close()
 
     def test_salvar_configuracao_hud_usuario_isola_por_usuario(self):
         conn = sqlite3.connect(":memory:")

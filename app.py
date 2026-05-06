@@ -3431,6 +3431,8 @@ def salvar_campos_configuracao_empresa(campos, empresa_id=None):
 
     conn = conectar()
     c = conn.cursor()
+    if any(str(chave).startswith("auto_teste_") for chave in payload):
+        garantir_colunas_auto_teste_configuracao_empresa(c)
     atual = selecionar_configuracao_empresa_cursor(c, empresa_id)
 
     if atual and atual.get("id"):
@@ -3458,6 +3460,22 @@ def salvar_campos_configuracao_empresa(campos, empresa_id=None):
     conn.close()
     limpar_cache_configuracao_empresa()
     return payload
+
+
+def garantir_colunas_auto_teste_configuracao_empresa(cursor):
+    colunas = [
+        "auto_teste_ativo INTEGER DEFAULT 0",
+        "auto_teste_site_url TEXT",
+        "auto_teste_intervalo_horas INTEGER DEFAULT 2",
+        "auto_teste_telegram_bot_token TEXT",
+        "auto_teste_telegram_bot_nick TEXT",
+        "auto_teste_telegram_chat_id TEXT",
+        "auto_teste_ultimo_status TEXT",
+        "auto_teste_ultimo_relatorio TEXT",
+        "auto_teste_ultimo_teste_em TEXT",
+    ]
+    for coluna in colunas:
+        adicionar_coluna_se_preciso(cursor, "configuracao_empresa", coluna)
 
 
 def selecionar_registro_administrativo_empresa_cursor(cursor, tabela, empresa_id=None):
@@ -9485,6 +9503,13 @@ def salvar_resultado_auto_teste(status, relatorio, chat_id=None):
     limpar_cache_configuracao_empresa()
 
 
+def salvar_resultado_auto_teste_seguro(status, relatorio, chat_id=None):
+    try:
+        salvar_resultado_auto_teste(status, relatorio, chat_id=chat_id)
+    except Exception as erro:
+        print("ERRO AO SALVAR RESULTADO AUTO TESTE:", erro)
+
+
 def executar_auto_teste_site(configuracao=None, enviar_telegram=True):
     configuracao = configuracao or obter_configuracao_empresa(force=True)
     site_url = configuracao.get("auto_teste_site_url") or "https://wagenestetica.duckdns.org"
@@ -9503,7 +9528,7 @@ def executar_auto_teste_site(configuracao=None, enviar_telegram=True):
             raise ValueError("Nao encontrei o chat_id. Envie /start para o bot no Telegram e teste novamente.")
         send_site_monitor_telegram_message(token, chat_id, relatorio, 15)
 
-    salvar_resultado_auto_teste(status, relatorio, chat_id=chat_id)
+    salvar_resultado_auto_teste_seguro(status, relatorio, chat_id=chat_id)
     return {
         "status": status,
         "ok": status == "ok",
@@ -9545,10 +9570,7 @@ def loop_worker_auto_teste():
                     resultado = executar_auto_teste_site(configuracao, enviar_telegram=True)
                     print(f"AUTO TESTE: {resultado['status']}")
             except Exception as erro:
-                try:
-                    salvar_resultado_auto_teste("erro", f"Erro no auto teste: {erro}")
-                except Exception:
-                    pass
+                salvar_resultado_auto_teste_seguro("erro", f"Erro no auto teste: {erro}")
                 print("ERRO WORKER AUTO TESTE:", erro)
             finally:
                 auto_teste_lock.release()
@@ -16369,7 +16391,7 @@ def testar_configuracao_auto_teste():
         config = salvar_configuracao_auto_teste_form(request.form)
         resultado = executar_auto_teste_site(config, enviar_telegram=True)
     except Exception as erro:
-        salvar_resultado_auto_teste("erro", f"Erro no teste manual: {erro}")
+        salvar_resultado_auto_teste_seguro("erro", f"Erro no teste manual: {erro}")
         definir_feedback_configuracoes("erro", f"Nao foi possivel enviar o teste: {erro}")
         return redirect(destino_configuracoes("auto-teste"))
 
