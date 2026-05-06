@@ -3450,6 +3450,7 @@ def salvar_campos_configuracao_empresa(campos, empresa_id=None):
 
     conn.commit()
     conn.close()
+    limpar_cache_configuracao_empresa()
     return payload
 
 
@@ -3731,10 +3732,18 @@ def obter_versao_sistema():
     if has_request_context() and not session.get("usuario"):
         return APP_VERSION
 
+    empresa_id_atual = normalize_empresa_id(empresa_atual_id())
+    agora_cache_ts = time.time()
+    if (
+        VERSAO_SISTEMA_CACHE.get("resultado")
+        and VERSAO_SISTEMA_CACHE.get("empresa_id") == empresa_id_atual
+        and agora_cache_ts - float(VERSAO_SISTEMA_CACHE.get("testado_em") or 0.0) < VERSAO_SISTEMA_CACHE_TTL
+    ):
+        return VERSAO_SISTEMA_CACHE["resultado"]
+
     try:
         conn = conectar()
         c = conn.cursor()
-        empresa_id_atual = normalize_empresa_id(empresa_atual_id())
         c.execute(
             "SELECT versao_sistema FROM configuracao_empresa WHERE empresa_id=? ORDER BY id LIMIT 1",
             (empresa_id_atual,),
@@ -3750,7 +3759,11 @@ def obter_versao_sistema():
                 valor = item["versao_sistema"]
             except Exception:
                 valor = item[0] if item else ""
-            return formatar_versao_sistema(valor)
+            resultado = formatar_versao_sistema(valor)
+            VERSAO_SISTEMA_CACHE["testado_em"] = agora_cache_ts
+            VERSAO_SISTEMA_CACHE["empresa_id"] = empresa_id_atual
+            VERSAO_SISTEMA_CACHE["resultado"] = resultado
+            return resultado
     except Exception:
         pass
 
@@ -3939,6 +3952,18 @@ TEMPLATE_LICENCA_CACHE = {
     "resultado": None,
 }
 TEMPLATE_LICENCA_CACHE_TTL = 45
+CONFIG_EMPRESA_CACHE = {
+    "testado_em": 0.0,
+    "empresa_id": 0,
+    "resultado": None,
+}
+CONFIG_EMPRESA_CACHE_TTL = 60
+VERSAO_SISTEMA_CACHE = {
+    "testado_em": 0.0,
+    "empresa_id": 0,
+    "resultado": "",
+}
+VERSAO_SISTEMA_CACHE_TTL = 60
 CONFIG_HUD_USUARIO_CACHE = {
     "testado_em": 0.0,
     "usuario_id": 0,
@@ -4016,12 +4041,45 @@ def limpar_caches_interface():
     TEMPLATE_LICENCA_CACHE["testado_em"] = 0.0
     TEMPLATE_LICENCA_CACHE["empresa_id"] = 0
     TEMPLATE_LICENCA_CACHE["resultado"] = None
+    CONFIG_EMPRESA_CACHE["testado_em"] = 0.0
+    CONFIG_EMPRESA_CACHE["empresa_id"] = 0
+    CONFIG_EMPRESA_CACHE["resultado"] = None
+    VERSAO_SISTEMA_CACHE["testado_em"] = 0.0
+    VERSAO_SISTEMA_CACHE["empresa_id"] = 0
+    VERSAO_SISTEMA_CACHE["resultado"] = ""
     CONFIG_HUD_USUARIO_CACHE["testado_em"] = 0.0
     CONFIG_HUD_USUARIO_CACHE["usuario_id"] = 0
     CONFIG_HUD_USUARIO_CACHE["resultado"] = None
     PAGINAS_MENU_CACHE["testado_em"] = 0.0
     PAGINAS_MENU_CACHE["empresa_id"] = 0
     PAGINAS_MENU_CACHE["resultado"] = set()
+
+
+def limpar_cache_configuracao_empresa():
+    CONFIG_EMPRESA_CACHE["testado_em"] = 0.0
+    CONFIG_EMPRESA_CACHE["empresa_id"] = 0
+    CONFIG_EMPRESA_CACHE["resultado"] = None
+    VERSAO_SISTEMA_CACHE["testado_em"] = 0.0
+    VERSAO_SISTEMA_CACHE["empresa_id"] = 0
+    VERSAO_SISTEMA_CACHE["resultado"] = ""
+    PAGINAS_MENU_CACHE["testado_em"] = 0.0
+    PAGINAS_MENU_CACHE["empresa_id"] = 0
+    PAGINAS_MENU_CACHE["resultado"] = set()
+
+
+def limpar_caches_operacionais_leves():
+    HUD_CACHE["testado_em"] = 0.0
+    HUD_CACHE["usuario"] = ""
+    HUD_CACHE["resultado"] = None
+    HOME_SNAPSHOT_CACHE["testado_em"] = 0.0
+    HOME_SNAPSHOT_CACHE["usuario"] = ""
+    HOME_SNAPSHOT_CACHE["resultado"] = None
+    STATUS_SYNC_CACHE["testado_em"] = 0.0
+    STATUS_SYNC_CACHE["usuario"] = ""
+    STATUS_SYNC_CACHE["resultado"] = None
+    SYNC_TOKEN_CACHE["testado_em"] = 0.0
+    SYNC_TOKEN_CACHE["usuario"] = ""
+    SYNC_TOKEN_CACHE["resultado"] = None
 
 
 def limpar_cache_banco_online():
@@ -4532,8 +4590,8 @@ def montar_url_postgres(host, porta, database, usuario, senha):
     return f"postgresql://{quote(usuario)}:{quote(senha)}@{host}:{porta}/{database}"
 
 
-def obter_configuracao_banco_form():
-    status = diagnosticar_banco_online()
+def obter_configuracao_banco_form(status=None):
+    status = dict(status or diagnosticar_banco_online())
     # Preserve exactly what was saved in the environment/config form.
     # The adjusted DSN is only for runtime connection attempts.
     origem = DATABASE_URL_RAW or url_postgres_ajustada()
@@ -4638,8 +4696,7 @@ def salvar_configuracao_banco_form(form):
     status_final = obter_status_banco_online()
     status_final["migracao_automatica"] = migracao_automatica
     status_final["mensagem_migracao"] = mensagem_migracao
-    limpar_cache_banco_online()
-    limpar_caches_interface()
+    limpar_caches_operacionais_leves()
     return status_final
 
 
@@ -7633,8 +7690,11 @@ def pagina_menu_habilitada(pagina_id):
     return pagina_id not in obter_paginas_menu_desabilitadas()
 
 
-def montar_paginas_menu_configuracao():
-    desabilitadas = obter_paginas_menu_desabilitadas(force=True)
+def montar_paginas_menu_configuracao(desabilitadas=None, force=False):
+    if desabilitadas is None:
+        desabilitadas = obter_paginas_menu_desabilitadas(force=force)
+    else:
+        desabilitadas = set(desabilitadas)
     return [
         {
             **item,
@@ -7787,8 +7847,8 @@ def obter_configuracao_hud_usuario(usuario_id=None, force=False):
     return config
 
 
-def montar_itens_hud_configuracao_usuario():
-    config = obter_configuracao_hud_usuario(force=True)
+def montar_itens_hud_configuracao_usuario(config=None, force=False):
+    config = config or obter_configuracao_hud_usuario(force=force)
     habilitados = set(config.get("itens_habilitados") or [])
     return [
         {
@@ -9182,10 +9242,20 @@ def empresa_snapshot_padrao():
         "paginas_menu_desabilitadas_json": "[]",
     }
 
-def obter_configuracao_empresa():
+def obter_configuracao_empresa(force=False):
+    empresa_id_cache = normalize_empresa_id(empresa_atual_id())
+    agora_cache_ts = time.time()
+    if (
+        not force
+        and CONFIG_EMPRESA_CACHE.get("resultado") is not None
+        and CONFIG_EMPRESA_CACHE.get("empresa_id") == empresa_id_cache
+        and agora_cache_ts - float(CONFIG_EMPRESA_CACHE.get("testado_em") or 0.0) < CONFIG_EMPRESA_CACHE_TTL
+    ):
+        return deepcopy(CONFIG_EMPRESA_CACHE["resultado"])
+
     def carregar(conn):
         c = conn.cursor()
-        return selecionar_configuracao_empresa_cursor(c, empresa_atual_id())
+        return selecionar_configuracao_empresa_cursor(c, empresa_id_cache)
 
     item = executar_leitura_resiliente(
         carregar,
@@ -9228,6 +9298,9 @@ def obter_configuracao_empresa():
     dados["home_busca_botao_texto"] = normalizar_texto_campo(dados.get("home_busca_botao_texto")) or "Buscar"
     dados["home_estado_inicial_titulo"] = normalizar_texto_campo(dados.get("home_estado_inicial_titulo")) or "Digite uma placa para comecar"
     dados["paginas_menu_desabilitadas_json"] = normalizar_texto_campo(dados.get("paginas_menu_desabilitadas_json")) or "[]"
+    CONFIG_EMPRESA_CACHE["testado_em"] = agora_cache_ts
+    CONFIG_EMPRESA_CACHE["empresa_id"] = empresa_id_cache
+    CONFIG_EMPRESA_CACHE["resultado"] = deepcopy(dados)
     return dados
 
 def salvar_configuracao_versao_form(form):
@@ -9235,7 +9308,7 @@ def salvar_configuracao_versao_form(form):
     salvar_campos_configuracao_empresa({
         "versao_sistema": versao,
     })
-    limpar_caches_interface()
+    limpar_cache_configuracao_empresa()
 
     return versao
 
@@ -10817,6 +10890,26 @@ def registrar_auditoria(acao, entidade, entidade_id=None, placa=None, detalhes=N
     AUDITORIA_CONTEXT_CACHE["testado_em"] = 0.0
     AUDITORIA_CONTEXT_CACHE["chave"] = ""
     AUDITORIA_CONTEXT_CACHE["resultado"] = None
+
+
+def registrar_auditoria_assincrona(acao, entidade, entidade_id=None, placa=None, detalhes=None):
+    usuario_info = resumo_usuario_logado()
+    detalhes_payload = deepcopy(detalhes or {})
+
+    def executar():
+        try:
+            registrar_auditoria(
+                acao,
+                entidade,
+                entidade_id=entidade_id,
+                placa=placa,
+                detalhes=detalhes_payload,
+                usuario=usuario_info,
+            )
+        except Exception as erro:
+            print("AVISO AUDITORIA ASSINCRONA:", erro)
+
+    Thread(target=executar, daemon=True).start()
 
 def obter_resample_lanczos():
     if not PILLOW_DISPONIVEL:
@@ -15595,7 +15688,7 @@ def configuracoes():
     pastas_sync_sugeridas = []
     banco_online_tabelas = {}
 
-    if pode_gerenciar_usuarios:
+    if pode_gerenciar_usuarios and request.args.get("detalhar_usuarios") == "1":
         try:
             usuarios = carregar_usuarios_configuracao()
         except Exception as erro:
@@ -15610,7 +15703,7 @@ def configuracoes():
             banco_status = {}
 
         try:
-            banco_config = obter_configuracao_banco_form()
+            banco_config = obter_configuracao_banco_form(banco_status)
         except Exception as erro:
             print("ERRO CONFIG BANCO FORM:", erro)
             banco_config = {}
@@ -15621,6 +15714,14 @@ def configuracoes():
         except Exception as erro:
             print("ERRO CONFIG EMPRESA:", erro)
             configuracao_empresa = empresa_snapshot_padrao()
+
+    paginas_desabilitadas_config = normalizar_paginas_menu_desabilitadas(
+        configuracao_empresa.get("paginas_menu_desabilitadas_json")
+    )
+    if configuracao_empresa:
+        PAGINAS_MENU_CACHE["testado_em"] = time.time()
+        PAGINAS_MENU_CACHE["empresa_id"] = normalize_empresa_id(empresa_atual_id())
+        PAGINAS_MENU_CACHE["resultado"] = set(paginas_desabilitadas_config)
 
     if pode_gerenciar_base and request.args.get("detalhar_banco") == "1":
         try:
@@ -15694,7 +15795,7 @@ def configuracoes():
         desenvolvedor_logado=pode_gerenciar_base,
         banco_online_logado=pode_gerenciar_banco_online,
         hud_usuario_logado=pode_configurar_hud_usuario,
-        hud_usuario_config=obter_configuracao_hud_usuario(force=True) if pode_configurar_hud_usuario else configuracao_hud_usuario_padrao(),
+        hud_usuario_config=obter_configuracao_hud_usuario() if pode_configurar_hud_usuario else configuracao_hud_usuario_padrao(),
         hud_usuario_itens=montar_itens_hud_configuracao_usuario() if pode_configurar_hud_usuario else [],
         configuracao_empresa=configuracao_empresa,
         banco_status=banco_status,
@@ -15708,7 +15809,9 @@ def configuracoes():
         arquivos_status=arquivos_status,
         pastas_sync_sugeridas=pastas_sync_sugeridas,
         banco_online_tabelas=banco_online_tabelas,
-        paginas_menu_configuracao=montar_paginas_menu_configuracao() if pode_gerenciar_base else [],
+        paginas_menu_configuracao=montar_paginas_menu_configuracao(
+            paginas_desabilitadas_config
+        ) if pode_gerenciar_base else [],
     )
 
 @app.route("/configuracoes/versao", methods=["POST"])
@@ -15727,7 +15830,7 @@ def salvar_configuracao_versao():
         definir_feedback_configuracoes("erro", f"Nao foi possivel salvar a versao do sistema: {e}")
         return redirect("/configuracoes")
 
-    registrar_auditoria(
+    registrar_auditoria_assincrona(
         "atualizou_versao_sistema",
         "configuracao_empresa",
         detalhes={
@@ -15930,7 +16033,7 @@ def salvar_configuracao_banco():
         )
         return redirect("/configuracoes")
 
-    registrar_auditoria(
+    registrar_auditoria_assincrona(
         "atualizou_banco_online",
         "banco",
         detalhes={

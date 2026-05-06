@@ -712,7 +712,14 @@
 
 <div class="top-spacing">
     <h2 class="section-title">Acessos cadastrados</h2>
+    {% if not request.args.get("detalhar_usuarios") %}
+    <p class="muted-text">A lista completa de acessos fica sob demanda para esta tela abrir mais rapido depois de salvar configuracoes.</p>
+    <a href="/configuracoes?detalhar_usuarios=1" class="button-link top-spacing">
+        <button type="button">Carregar acessos cadastrados</button>
+    </a>
+    {% endif %}
 
+    {% if request.args.get("detalhar_usuarios") %}
     <div class="list-grid">
         {% for item in usuarios %}
         <div class="page-card">
@@ -789,6 +796,7 @@
         </div>
         {% endfor %}
     </div>
+    {% endif %}
 </div>
 {% endif %}
 
