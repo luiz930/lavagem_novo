@@ -13896,7 +13896,7 @@ def exigir_troca_senha_obrigatoria():
         "erro",
         "Por seguranca, troque sua senha antes de continuar usando o sistema."
     )
-    return redirect("/configuracoes")
+    return redirect(destino_configuracoes("banco"))
 
 
 @app.before_request
@@ -13915,7 +13915,7 @@ def bloquear_paginas_menu_desabilitadas():
     )
     if (endpoint or "").startswith("api_"):
         return jsonify({"erro": "pagina_desabilitada"}), 403
-    return redirect("/configuracoes")
+    return redirect(destino_configuracoes("banco"))
 
 
 @app.before_request
@@ -15331,7 +15331,7 @@ def pagina_empresas():
         return redirect("/login")
     if not usuario_gerencia_empresas():
         definir_feedback_configuracoes("erro", "Somente desenvolvedores podem gerenciar empresas e licencas.")
-        return redirect("/configuracoes")
+        return redirect(destino_configuracoes("banco"))
 
     conn = conectar()
     c = conn.cursor()
@@ -15659,11 +15659,33 @@ def gerar_backup_suporte():
     return redirect("/diagnostico")
 
 
+CONFIGURACOES_SECOES = {
+    "meu-acesso": "Meu acesso",
+    "sistema": "Sistema",
+    "banco": "Banco",
+    "backup": "Backup",
+    "usuarios": "Usuarios",
+    "desenvolvedor": "Desenvolvedor",
+}
+
+
+def normalizar_secao_configuracoes(secao):
+    secao = normalizar_texto_campo(secao).lower().replace("_", "-")
+    return secao if secao in CONFIGURACOES_SECOES else "meu-acesso"
+
+
+def destino_configuracoes(secao="meu-acesso", query=""):
+    destino = f"/configuracoes/{normalizar_secao_configuracoes(secao)}"
+    return f"{destino}?{query}" if query else destino
+
+
 @app.route("/configuracoes")
-def configuracoes():
+@app.route("/configuracoes/<secao>")
+def configuracoes(secao="meu-acesso"):
     if not session.get("usuario"):
         return redirect("/login")
 
+    secao = normalizar_secao_configuracoes(secao)
     preparar_rotinas_interface_logada()
     sincronizar_sessao_usuario()
     senha_pendente = bool(session.get("senha_alteracao_obrigatoria"))
@@ -15688,14 +15710,14 @@ def configuracoes():
     pastas_sync_sugeridas = []
     banco_online_tabelas = {}
 
-    if pode_gerenciar_usuarios and request.args.get("detalhar_usuarios") == "1":
+    if pode_gerenciar_usuarios and secao == "usuarios" and request.args.get("detalhar_usuarios") == "1":
         try:
             usuarios = carregar_usuarios_configuracao()
         except Exception as erro:
             print("ERRO CONFIG USUARIOS:", erro)
             usuarios = []
 
-    if pode_gerenciar_banco_online:
+    if pode_gerenciar_banco_online and secao == "banco":
         try:
             banco_status = obter_status_banco_online()
         except Exception as erro:
@@ -15708,7 +15730,7 @@ def configuracoes():
             print("ERRO CONFIG BANCO FORM:", erro)
             banco_config = {}
 
-    if pode_gerenciar_config_sistema:
+    if pode_gerenciar_config_sistema and secao in {"sistema", "desenvolvedor"}:
         try:
             configuracao_empresa = obter_configuracao_empresa()
         except Exception as erro:
@@ -15723,7 +15745,7 @@ def configuracoes():
         PAGINAS_MENU_CACHE["empresa_id"] = normalize_empresa_id(empresa_atual_id())
         PAGINAS_MENU_CACHE["resultado"] = set(paginas_desabilitadas_config)
 
-    if pode_gerenciar_base and request.args.get("detalhar_banco") == "1":
+    if pode_gerenciar_base and secao == "banco" and request.args.get("detalhar_banco") == "1":
         try:
             banco_online_tabelas = listar_tabelas_banco_online(banco_status)
         except Exception as erro:
@@ -15737,7 +15759,7 @@ def configuracoes():
                 "quantidade": 0,
             }
 
-    if pode_gerenciar_base:
+    if pode_gerenciar_base and secao == "backup":
         try:
             backup_config = obter_configuracao_backup()
         except Exception as erro:
@@ -15776,6 +15798,16 @@ def configuracoes():
     return render_template(
         "configuracoes.html",
         feedback=session.pop("configuracoes_feedback", None),
+        secao_configuracoes=secao,
+        secoes_configuracoes=[
+            {"id": chave, "label": label}
+            for chave, label in CONFIGURACOES_SECOES.items()
+            if (
+                chave == "meu-acesso"
+                or (chave in {"sistema", "banco", "usuarios"} and usuario_gerencia_configuracao_sistema())
+                or (chave in {"backup", "desenvolvedor"} and usuario_desenvolvedor())
+            )
+        ],
         usuario_logado={
             "id": session.get("usuario_id"),
             "usuario": session.get("usuario"),
@@ -15795,8 +15827,8 @@ def configuracoes():
         desenvolvedor_logado=pode_gerenciar_base,
         banco_online_logado=pode_gerenciar_banco_online,
         hud_usuario_logado=pode_configurar_hud_usuario,
-        hud_usuario_config=obter_configuracao_hud_usuario() if pode_configurar_hud_usuario else configuracao_hud_usuario_padrao(),
-        hud_usuario_itens=montar_itens_hud_configuracao_usuario() if pode_configurar_hud_usuario else [],
+        hud_usuario_config=obter_configuracao_hud_usuario() if pode_configurar_hud_usuario and secao == "meu-acesso" else configuracao_hud_usuario_padrao(),
+        hud_usuario_itens=montar_itens_hud_configuracao_usuario() if pode_configurar_hud_usuario and secao == "meu-acesso" else [],
         configuracao_empresa=configuracao_empresa,
         banco_status=banco_status,
         banco_config=banco_config,
@@ -15841,7 +15873,7 @@ def salvar_configuracao_versao():
         "sucesso",
         f"Versao do sistema atualizada para {formatar_versao_sistema(versao)}.",
     )
-    return redirect("/configuracoes")
+    return redirect(destino_configuracoes("sistema"))
 
 @app.route("/configuracoes/clima", methods=["POST"])
 def salvar_configuracao_clima():
@@ -15882,7 +15914,7 @@ def salvar_configuracao_clima():
             "O HUD atualiza automaticamente em ate 60 segundos."
         ),
     )
-    return redirect("/configuracoes")
+    return redirect(destino_configuracoes("sistema"))
 
 
 @app.route("/configuracoes/paginas", methods=["POST"])
@@ -15912,7 +15944,7 @@ def salvar_configuracao_paginas():
         "sucesso",
         "Paginas do menu atualizadas. O que foi desabilitado some da sidebar e fica bloqueado para acessos comuns.",
     )
-    return redirect("/configuracoes")
+    return redirect(destino_configuracoes("desenvolvedor"))
 
 
 @app.route("/configuracoes/hud", methods=["POST"])
@@ -15944,7 +15976,7 @@ def salvar_configuracao_hud_usuario():
         "sucesso",
         "Preferencias do HUD salvas para o seu usuario. Isso nao altera o HUD de outros acessos.",
     )
-    return redirect("/configuracoes")
+    return redirect(destino_configuracoes("meu-acesso"))
 
 
 @app.route("/configuracoes/site", methods=["GET", "POST"])
@@ -16247,7 +16279,7 @@ def gerar_backup_agora():
         definir_feedback_configuracoes("sucesso", f"{mensagem} {nome}".strip())
     else:
         definir_feedback_configuracoes("erro", mensagem)
-    return redirect("/configuracoes")
+    return redirect(destino_configuracoes("banco"))
 
 
 @app.route("/configuracoes/backup/validar", methods=["POST"])
@@ -16282,7 +16314,7 @@ def validar_backup_configuracoes():
     if detalhes:
         mensagem += " " + " ".join(detalhes[:3])
     definir_feedback_configuracoes("sucesso" if validacao.get("ok") else "erro", mensagem)
-    return redirect("/configuracoes")
+    return redirect(destino_configuracoes("banco"))
 
 @app.route("/configuracoes/backup/restaurar", methods=["POST"])
 def restaurar_backup_configuracoes():

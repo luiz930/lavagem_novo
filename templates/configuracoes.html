@@ -24,6 +24,17 @@
 </div>
 {% endif %}
 
+<div class="page-card page-card--soft top-spacing">
+    <div class="actions-row actions-row--left">
+        {% for secao in secoes_configuracoes %}
+        <a href="/configuracoes/{{ secao.id }}" class="button-link">
+            <button type="button" {% if secao_configuracoes == secao.id %}disabled{% endif %}>{{ secao.label }}</button>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+
+{% if secao_configuracoes == 'meu-acesso' %}
 <div class="page-grid">
     <div class="page-card">
         <p class="pill-label">Meu acesso</p>
@@ -69,8 +80,9 @@
         </form>
     </div>
 </div>
+{% endif %}
 
-{% if configuracao_sistema_logado %}
+{% if secao_configuracoes == 'sistema' and configuracao_sistema_logado %}
 <div class="page-card top-spacing">
     <p class="pill-label">Site e marca</p>
     <h2 class="section-title top-spacing">Identidade visual e white-label</h2>
@@ -95,7 +107,7 @@
 </div>
 {% endif %}
 
-{% if configuracao_sistema_logado %}
+{% if secao_configuracoes == 'sistema' and configuracao_sistema_logado %}
 <div class="page-card top-spacing">
     <p class="pill-label">Versao do sistema</p>
     <h2 class="section-title top-spacing">{{ configuracao_empresa.versao_sistema_label }}</h2>
@@ -118,7 +130,7 @@
 </div>
 {% endif %}
 
-{% if hud_usuario_logado %}
+{% if secao_configuracoes == 'meu-acesso' and hud_usuario_logado %}
 <div class="page-card top-spacing">
     <p class="pill-label">Meu HUD</p>
     <h2 class="section-title top-spacing">Itens visiveis na tela inicial</h2>
@@ -160,7 +172,7 @@
 </div>
 {% endif %}
 
-{% if desenvolvedor_logado %}
+{% if secao_configuracoes == 'desenvolvedor' and desenvolvedor_logado %}
 <div class="page-card top-spacing">
     <p class="pill-label">Desenvolvedor</p>
     <h2 class="section-title top-spacing">Paginas do sistema</h2>
@@ -192,7 +204,7 @@
 </div>
 {% endif %}
 
-{% if configuracao_sistema_logado %}
+{% if secao_configuracoes == 'sistema' and configuracao_sistema_logado %}
 <div class="page-card top-spacing">
     <p class="pill-label">Clima do HUD</p>
     <h2 class="section-title top-spacing">API e localizacao</h2>
@@ -275,7 +287,7 @@
 </div>
 {% endif %}
 
-{% if banco_online_logado %}
+{% if secao_configuracoes == 'banco' and banco_online_logado %}
 <div class="page-grid top-spacing">
     <div class="page-card">
         <p class="pill-label">Banco online</p>
@@ -378,14 +390,14 @@
 </div>
 {% endif %}
 
-{% if desenvolvedor_logado %}
+{% if secao_configuracoes == 'backup' and desenvolvedor_logado %}
 <div class="page-grid top-spacing">
     <div class="page-card">
         <p class="pill-label">Banco online</p>
         <h2 class="section-title top-spacing">Tabelas do PostgreSQL</h2>
         {% if not request.args.get("detalhar_banco") %}
         <p class="muted-text">A listagem completa das tabelas fica sob demanda para a tela carregar mais rapido.</p>
-        <a href="/configuracoes?detalhar_banco=1" class="button-link top-spacing">
+        <a href="/configuracoes/banco?detalhar_banco=1" class="button-link top-spacing">
             <button type="button">Carregar tabelas agora</button>
         </a>
         {% endif %}
@@ -412,7 +424,7 @@
         <h2 class="section-title top-spacing">Protecao do sistema</h2>
         {% if not request.args.get("detalhar_backup") %}
         <p class="muted-text">Os detalhes de arquivos e backups ficam sob demanda para esta pagina abrir mais rapido.</p>
-        <a href="/configuracoes?detalhar_backup=1" class="button-link top-spacing">
+        <a href="/configuracoes/backup?detalhar_backup=1" class="button-link top-spacing">
             <button type="button">Carregar detalhes de backup</button>
         </a>
         {% endif %}
@@ -654,7 +666,7 @@
 </div>
 {% endif %}
 
-{% if gerencia_usuarios_logado %}
+{% if secao_configuracoes == 'usuarios' and gerencia_usuarios_logado %}
 <div class="page-card top-spacing">
     <h2 class="section-title">Novo login de funcionario</h2>
     <p class="muted-text">Crie acessos individuais para a equipe com senha forte. No primeiro login, a troca de senha sera obrigatoria.</p>
@@ -714,7 +726,7 @@
     <h2 class="section-title">Acessos cadastrados</h2>
     {% if not request.args.get("detalhar_usuarios") %}
     <p class="muted-text">A lista completa de acessos fica sob demanda para esta tela abrir mais rapido depois de salvar configuracoes.</p>
-    <a href="/configuracoes?detalhar_usuarios=1" class="button-link top-spacing">
+    <a href="/configuracoes/usuarios?detalhar_usuarios=1" class="button-link top-spacing">
         <button type="button">Carregar acessos cadastrados</button>
     </a>
     {% endif %}
