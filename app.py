@@ -102,6 +102,11 @@ from domains.sync_clientes import (
     salvar_historico_lavagens_sync as salvar_historico_lavagens_sync_domain,
 )
 from domains.tenant import normalize_empresa_id
+from scripts.site_monitor import (
+    build_report as build_site_monitor_report,
+    run_site_checks,
+    send_telegram_message as send_site_monitor_telegram_message,
+)
 
 try:
     from google.oauth2 import service_account
@@ -3824,6 +3829,8 @@ backup_lock = Lock()
 backup_worker_iniciado = False
 maintenance_lock = Lock()
 maintenance_worker_iniciado = False
+auto_teste_lock = Lock()
+auto_teste_worker_iniciado = False
 init_db_lock = Lock()
 INIT_DB_EXECUTADO = False
 bootstrap_init_thread_started = False
@@ -3832,6 +3839,7 @@ WORKER_SYNC_DELAY_INICIAL = 90
 WORKER_SYNC_BANCOS_DELAY_INICIAL = 360
 WORKER_MANUTENCAO_DELAY_INICIAL = 600
 WORKER_BACKUP_DELAY_INICIAL = 900
+WORKER_AUTO_TESTE_DELAY_INICIAL = 180
 HUD_CACHE = {
     "testado_em": 0.0,
     "usuario": "",
@@ -5216,6 +5224,16 @@ def garantir_schema_sqlite_local_minima(force=False):
                 licenca_plano TEXT,
                 licenca_status TEXT,
                 onboarding_concluido INTEGER DEFAULT 0,
+                paginas_menu_desabilitadas_json TEXT,
+                auto_teste_ativo INTEGER DEFAULT 0,
+                auto_teste_site_url TEXT,
+                auto_teste_intervalo_horas INTEGER DEFAULT 2,
+                auto_teste_telegram_bot_token TEXT,
+                auto_teste_telegram_bot_nick TEXT,
+                auto_teste_telegram_chat_id TEXT,
+                auto_teste_ultimo_status TEXT,
+                auto_teste_ultimo_relatorio TEXT,
+                auto_teste_ultimo_teste_em TEXT,
                 atualizado_em TEXT
             )
             """)
@@ -6244,6 +6262,15 @@ def atualizar_banco():
     adicionar_coluna_se_preciso(c, "configuracao_empresa", "licenca_status TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_empresa", "onboarding_concluido INTEGER DEFAULT 0")
     adicionar_coluna_se_preciso(c, "configuracao_empresa", "paginas_menu_desabilitadas_json TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "auto_teste_ativo INTEGER DEFAULT 0")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "auto_teste_site_url TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "auto_teste_intervalo_horas INTEGER DEFAULT 2")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "auto_teste_telegram_bot_token TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "auto_teste_telegram_bot_nick TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "auto_teste_telegram_chat_id TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "auto_teste_ultimo_status TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "auto_teste_ultimo_relatorio TEXT")
+    adicionar_coluna_se_preciso(c, "configuracao_empresa", "auto_teste_ultimo_teste_em TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "frequencia TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "tipo_backup TEXT")
     adicionar_coluna_se_preciso(c, "configuracao_backup", "retencao_arquivos INTEGER")
@@ -9279,7 +9306,59 @@ def empresa_snapshot_padrao():
         "home_busca_botao_texto": "Buscar",
         "home_estado_inicial_titulo": "Digite uma placa para comecar",
         "paginas_menu_desabilitadas_json": "[]",
+        "auto_teste_ativo": 0,
+        "auto_teste_site_url": "https://wagenestetica.duckdns.org",
+        "auto_teste_intervalo_horas": 2,
+        "auto_teste_telegram_bot_token": "",
+        "auto_teste_telegram_bot_nick": "@wagenesteticabot",
+        "auto_teste_telegram_chat_id": "",
+        "auto_teste_ultimo_status": "",
+        "auto_teste_ultimo_relatorio": "",
+        "auto_teste_ultimo_teste_em": "",
     }
+
+
+def mascarar_token_telegram(token):
+    token = normalizar_texto_campo(token)
+    if not token:
+        return "Nao configurado"
+    if len(token) <= 12:
+        return "***"
+    return f"{token[:8]}...{token[-6:]}"
+
+
+def normalizar_bot_telegram(valor):
+    valor = normalizar_texto_campo(valor)
+    if not valor:
+        return "@wagenesteticabot"
+    return valor if valor.startswith("@") else f"@{valor}"
+
+
+def resolver_chat_id_telegram(token, chat_id_atual=""):
+    chat_id_atual = normalizar_texto_campo(chat_id_atual)
+    if chat_id_atual:
+        return chat_id_atual
+
+    token = normalizar_texto_campo(token)
+    if not token:
+        return ""
+
+    resposta = requests.get(
+        f"https://api.telegram.org/bot{token}/getUpdates",
+        timeout=12,
+    )
+    resposta.raise_for_status()
+    payload = resposta.json()
+
+    for update in reversed(payload.get("result") or []):
+        mensagem = update.get("message") or update.get("edited_message") or {}
+        chat = mensagem.get("chat") or {}
+        chat_id = chat.get("id")
+        if chat_id:
+            return str(chat_id)
+
+    return ""
+
 
 def obter_configuracao_empresa(force=False):
     empresa_id_cache = normalize_empresa_id(empresa_atual_id())
@@ -9337,6 +9416,18 @@ def obter_configuracao_empresa(force=False):
     dados["home_busca_botao_texto"] = normalizar_texto_campo(dados.get("home_busca_botao_texto")) or "Buscar"
     dados["home_estado_inicial_titulo"] = normalizar_texto_campo(dados.get("home_estado_inicial_titulo")) or "Digite uma placa para comecar"
     dados["paginas_menu_desabilitadas_json"] = normalizar_texto_campo(dados.get("paginas_menu_desabilitadas_json")) or "[]"
+    dados["auto_teste_ativo"] = bool(int(dados.get("auto_teste_ativo") or 0))
+    dados["auto_teste_site_url"] = normalizar_texto_campo(dados.get("auto_teste_site_url")) or "https://wagenestetica.duckdns.org"
+    dados["auto_teste_intervalo_horas"] = max(1, min(24, converter_inteiro(dados.get("auto_teste_intervalo_horas"), 2)))
+    dados["auto_teste_telegram_bot_token"] = normalizar_texto_campo(dados.get("auto_teste_telegram_bot_token"))
+    dados["auto_teste_telegram_bot_nick"] = normalizar_texto_campo(dados.get("auto_teste_telegram_bot_nick")) or "@wagenesteticabot"
+    dados["auto_teste_telegram_chat_id"] = normalizar_texto_campo(dados.get("auto_teste_telegram_chat_id"))
+    dados["auto_teste_ultimo_status"] = normalizar_texto_campo(dados.get("auto_teste_ultimo_status"))
+    dados["auto_teste_ultimo_relatorio"] = normalizar_texto_campo(dados.get("auto_teste_ultimo_relatorio"))
+    dados["auto_teste_ultimo_teste_em"] = normalizar_texto_campo(dados.get("auto_teste_ultimo_teste_em"))
+    dados["auto_teste_ultimo_teste_em_fmt"] = formatar_datahora(dados.get("auto_teste_ultimo_teste_em")) if dados.get("auto_teste_ultimo_teste_em") else "Ainda nao testado"
+    dados["auto_teste_telegram_token_configurado"] = bool(dados["auto_teste_telegram_bot_token"])
+    dados["auto_teste_telegram_token_masked"] = mascarar_token_telegram(dados["auto_teste_telegram_bot_token"])
     CONFIG_EMPRESA_CACHE["testado_em"] = agora_cache_ts
     CONFIG_EMPRESA_CACHE["empresa_id"] = empresa_id_cache
     CONFIG_EMPRESA_CACHE["resultado"] = deepcopy(dados)
@@ -9350,6 +9441,130 @@ def salvar_configuracao_versao_form(form):
     limpar_cache_configuracao_empresa()
 
     return versao
+
+
+def montar_configuracao_auto_teste_form(form):
+    atual = obter_configuracao_empresa()
+    token_informado = normalizar_texto_campo(form.get("auto_teste_telegram_bot_token"))
+    remover_token = bool_config_ativo(form.get("remover_auto_teste_token"))
+    token = "" if remover_token else (token_informado or atual.get("auto_teste_telegram_bot_token") or "")
+    chat_id = normalizar_texto_campo(form.get("auto_teste_telegram_chat_id"))
+    bot_nick = normalizar_bot_telegram(form.get("auto_teste_telegram_bot_nick"))
+    site_url = normalizar_texto_campo(form.get("auto_teste_site_url")) or "https://wagenestetica.duckdns.org"
+    intervalo = max(1, min(24, converter_inteiro(form.get("auto_teste_intervalo_horas"), 2)))
+
+    if not site_url.startswith(("https://", "http://")):
+        raise ValueError("Informe a URL completa do site, com https://.")
+
+    return {
+        "auto_teste_ativo": 1 if bool_config_ativo(form.get("auto_teste_ativo")) else 0,
+        "auto_teste_site_url": site_url.rstrip("/"),
+        "auto_teste_intervalo_horas": intervalo,
+        "auto_teste_telegram_bot_token": token,
+        "auto_teste_telegram_bot_nick": bot_nick,
+        "auto_teste_telegram_chat_id": chat_id,
+    }
+
+
+def salvar_configuracao_auto_teste_form(form):
+    payload = montar_configuracao_auto_teste_form(form)
+    salvar_campos_configuracao_empresa(payload)
+    limpar_cache_configuracao_empresa()
+    return obter_configuracao_empresa(force=True)
+
+
+def salvar_resultado_auto_teste(status, relatorio, chat_id=None):
+    campos = {
+        "auto_teste_ultimo_status": normalizar_texto_campo(status),
+        "auto_teste_ultimo_relatorio": normalizar_texto_campo(relatorio),
+        "auto_teste_ultimo_teste_em": agora_iso(),
+    }
+    if chat_id:
+        campos["auto_teste_telegram_chat_id"] = normalizar_texto_campo(chat_id)
+    salvar_campos_configuracao_empresa(campos)
+    limpar_cache_configuracao_empresa()
+
+
+def executar_auto_teste_site(configuracao=None, enviar_telegram=True):
+    configuracao = configuracao or obter_configuracao_empresa(force=True)
+    site_url = configuracao.get("auto_teste_site_url") or "https://wagenestetica.duckdns.org"
+    token = normalizar_texto_campo(configuracao.get("auto_teste_telegram_bot_token"))
+    chat_id = normalizar_texto_campo(configuracao.get("auto_teste_telegram_chat_id"))
+
+    resultados = run_site_checks(site_url, 15)
+    relatorio = build_site_monitor_report(site_url, resultados)
+    status = "ok" if all(item.ok for item in resultados) else "falha"
+
+    if enviar_telegram:
+        if not token:
+            raise ValueError("Informe o token do bot do Telegram.")
+        chat_id = resolver_chat_id_telegram(token, chat_id)
+        if not chat_id:
+            raise ValueError("Nao encontrei o chat_id. Envie /start para o bot no Telegram e teste novamente.")
+        send_site_monitor_telegram_message(token, chat_id, relatorio, 15)
+
+    salvar_resultado_auto_teste(status, relatorio, chat_id=chat_id)
+    return {
+        "status": status,
+        "ok": status == "ok",
+        "relatorio": relatorio,
+        "chat_id": chat_id,
+    }
+
+
+def auto_teste_deve_executar(configuracao):
+    if not configuracao.get("auto_teste_ativo"):
+        return False
+    if not configuracao.get("auto_teste_telegram_bot_token"):
+        return False
+
+    ultimo = normalizar_texto_campo(configuracao.get("auto_teste_ultimo_teste_em"))
+    if not ultimo:
+        return True
+
+    try:
+        ultimo_dt = datetime.fromisoformat(ultimo)
+    except Exception:
+        return True
+
+    intervalo_horas = max(1, min(24, converter_inteiro(configuracao.get("auto_teste_intervalo_horas"), 2)))
+    return (agora() - ultimo_dt).total_seconds() >= intervalo_horas * 3600
+
+
+def loop_worker_auto_teste():
+    primeira_execucao = True
+    while True:
+        if primeira_execucao:
+            primeira_execucao = False
+            time.sleep(WORKER_AUTO_TESTE_DELAY_INICIAL)
+
+        if auto_teste_lock.acquire(blocking=False):
+            try:
+                configuracao = obter_configuracao_empresa(force=True)
+                if auto_teste_deve_executar(configuracao):
+                    resultado = executar_auto_teste_site(configuracao, enviar_telegram=True)
+                    print(f"AUTO TESTE: {resultado['status']}")
+            except Exception as erro:
+                try:
+                    salvar_resultado_auto_teste("erro", f"Erro no auto teste: {erro}")
+                except Exception:
+                    pass
+                print("ERRO WORKER AUTO TESTE:", erro)
+            finally:
+                auto_teste_lock.release()
+
+        time.sleep(300)
+
+
+def iniciar_worker_auto_teste():
+    global auto_teste_worker_iniciado
+
+    if auto_teste_worker_iniciado:
+        return
+
+    auto_teste_worker_iniciado = True
+    Thread(target=loop_worker_auto_teste, daemon=True).start()
+
 
 def limpar_cache_clima():
     CLIMA_CACHE["testado_em"] = 0.0
@@ -13948,6 +14163,7 @@ def preparar_rotinas_interface_logada():
         iniciar_worker_manutencao_arquivos()
         iniciar_worker_sincronizacao()
         iniciar_worker_sincronizacao_bancos()
+        iniciar_worker_auto_teste()
         if modo_banco_preferido() == "postgres" and not SCHEMA_BANCO_ONLINE_GARANTIDO:
             iniciar_bootstrap_schema_online()
 
@@ -15853,6 +16069,7 @@ CONFIGURACOES_SECOES = {
     "meu-acesso": "Meu acesso",
     "sistema": "Sistema",
     "banco": "Banco",
+    "auto-teste": "Auto teste",
     "backup": "Backup",
     "usuarios": "Usuarios",
     "desenvolvedor": "Desenvolvedor",
@@ -15920,7 +16137,7 @@ def configuracoes(secao="meu-acesso"):
             print("ERRO CONFIG BANCO FORM:", erro)
             banco_config = {}
 
-    if pode_gerenciar_config_sistema and secao in {"sistema", "desenvolvedor"}:
+    if pode_gerenciar_config_sistema and secao in {"sistema", "desenvolvedor", "auto-teste"}:
         try:
             configuracao_empresa = obter_configuracao_empresa()
         except Exception as erro:
@@ -15994,7 +16211,7 @@ def configuracoes(secao="meu-acesso"):
             for chave, label in CONFIGURACOES_SECOES.items()
             if (
                 chave == "meu-acesso"
-                or (chave in {"sistema", "banco", "usuarios"} and usuario_gerencia_configuracao_sistema())
+                or (chave in {"sistema", "banco", "auto-teste", "usuarios"} and usuario_gerencia_configuracao_sistema())
                 or (chave in {"backup", "desenvolvedor"} and usuario_desenvolvedor())
             )
         ],
@@ -16105,6 +16322,70 @@ def salvar_configuracao_clima():
         ),
     )
     return redirect(destino_configuracoes("sistema"))
+
+
+@app.route("/configuracoes/auto-teste", methods=["POST"])
+def salvar_configuracao_auto_teste():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_gerencia_configuracao_sistema():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem configurar o auto teste.")
+        return redirect(destino_configuracoes("meu-acesso"))
+
+    try:
+        config = salvar_configuracao_auto_teste_form(request.form)
+    except Exception as erro:
+        definir_feedback_configuracoes("erro", f"Nao foi possivel salvar o auto teste: {erro}")
+        return redirect(destino_configuracoes("auto-teste"))
+
+    registrar_auditoria_assincrona(
+        "configurou_auto_teste",
+        "configuracao_empresa",
+        detalhes={
+            "ativo": bool(config.get("auto_teste_ativo")),
+            "site_url": config.get("auto_teste_site_url"),
+            "bot_nick": config.get("auto_teste_telegram_bot_nick"),
+            "chat_id_configurado": bool(config.get("auto_teste_telegram_chat_id")),
+            "token_configurado": bool(config.get("auto_teste_telegram_bot_token")),
+        },
+    )
+    definir_feedback_configuracoes("sucesso", "Auto teste salvo. Use o botao de teste para confirmar o Telegram.")
+    return redirect(destino_configuracoes("auto-teste"))
+
+
+@app.route("/configuracoes/auto-teste/testar", methods=["POST"])
+def testar_configuracao_auto_teste():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario()
+    if not usuario_gerencia_configuracao_sistema():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem testar o monitor.")
+        return redirect(destino_configuracoes("meu-acesso"))
+
+    try:
+        config = salvar_configuracao_auto_teste_form(request.form)
+        resultado = executar_auto_teste_site(config, enviar_telegram=True)
+    except Exception as erro:
+        salvar_resultado_auto_teste("erro", f"Erro no teste manual: {erro}")
+        definir_feedback_configuracoes("erro", f"Nao foi possivel enviar o teste: {erro}")
+        return redirect(destino_configuracoes("auto-teste"))
+
+    registrar_auditoria_assincrona(
+        "testou_auto_teste",
+        "configuracao_empresa",
+        detalhes={
+            "status": resultado.get("status"),
+            "chat_id_configurado": bool(resultado.get("chat_id")),
+        },
+    )
+    definir_feedback_configuracoes(
+        "sucesso" if resultado.get("ok") else "erro",
+        "Teste enviado ao Telegram. Resultado: " + ("OK." if resultado.get("ok") else "falha no site."),
+    )
+    return redirect(destino_configuracoes("auto-teste"))
 
 
 @app.route("/configuracoes/paginas", methods=["POST"])

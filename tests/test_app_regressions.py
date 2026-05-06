@@ -316,6 +316,63 @@ class AppRegressionTests(unittest.TestCase):
         self.assertIn("paginas_menu_desabilitadas_json", payload)
         self.assertIn("nota_fiscal", json.loads(payload["paginas_menu_desabilitadas_json"]))
 
+    def test_salvar_configuracao_auto_teste_preserva_token_existente(self):
+        atual = app_module.empresa_snapshot_padrao()
+        atual["auto_teste_telegram_bot_token"] = "123456:token-atual"
+
+        with app_module.app.test_request_context(
+            "/configuracoes/auto-teste",
+            method="POST",
+            data={
+                "auto_teste_ativo": "1",
+                "auto_teste_site_url": "https://wagenestetica.duckdns.org/",
+                "auto_teste_intervalo_horas": "2",
+                "auto_teste_telegram_bot_nick": "wagenesteticabot",
+                "auto_teste_telegram_chat_id": "999",
+            },
+        ):
+            with patch.object(app_module, "obter_configuracao_empresa", return_value=atual), \
+                 patch.object(app_module, "salvar_campos_configuracao_empresa") as salvar, \
+                 patch.object(app_module, "limpar_cache_configuracao_empresa"):
+                config = app_module.salvar_configuracao_auto_teste_form(request.form)
+
+        payload = salvar.call_args.args[0]
+        self.assertEqual(payload["auto_teste_telegram_bot_token"], "123456:token-atual")
+        self.assertEqual(payload["auto_teste_telegram_bot_nick"], "@wagenesteticabot")
+        self.assertEqual(payload["auto_teste_site_url"], "https://wagenestetica.duckdns.org")
+        self.assertEqual(payload["auto_teste_ativo"], 1)
+        self.assertIn("auto_teste_ativo", config)
+
+    def test_executar_auto_teste_envia_relatorio_e_salva_chat_resolvido(self):
+        config = app_module.empresa_snapshot_padrao()
+        config.update(
+            {
+                "auto_teste_site_url": "https://wagenestetica.duckdns.org",
+                "auto_teste_telegram_bot_token": "123456:token",
+                "auto_teste_telegram_chat_id": "",
+            }
+        )
+
+        resultado_check = type("Resultado", (), {
+            "name": "Login",
+            "ok": True,
+            "status": 200,
+            "elapsed_ms": 100,
+            "message": "HTTP 200",
+        })()
+
+        with patch.object(app_module, "run_site_checks", return_value=[resultado_check]), \
+             patch.object(app_module, "build_site_monitor_report", return_value="relatorio ok"), \
+             patch.object(app_module, "resolver_chat_id_telegram", return_value="777"), \
+             patch.object(app_module, "send_site_monitor_telegram_message") as enviar, \
+             patch.object(app_module, "salvar_resultado_auto_teste") as salvar_resultado:
+            resultado = app_module.executar_auto_teste_site(config, enviar_telegram=True)
+
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(resultado["chat_id"], "777")
+        enviar.assert_called_once_with("123456:token", "777", "relatorio ok", 15)
+        salvar_resultado.assert_called_once_with("ok", "relatorio ok", chat_id="777")
+
     def test_salvar_configuracao_hud_usuario_isola_por_usuario(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row

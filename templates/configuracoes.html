@@ -172,6 +172,136 @@
 </div>
 {% endif %}
 
+{% if secao_configuracoes == 'auto-teste' and configuracao_sistema_logado %}
+<div class="page-grid top-spacing">
+    <div class="page-card">
+        <p class="pill-label">Monitoramento</p>
+        <h2 class="section-title top-spacing">Auto teste do site</h2>
+        <p class="muted-text">O sistema testa o dominio, login, manifest do app, service worker e status PWA. Com o monitor ativo, o app roda a verificacao automaticamente no intervalo configurado e envia o relatorio para o Telegram.</p>
+
+        <form action="/configuracoes/auto-teste" method="POST" class="stack-form stack-form--wide top-spacing">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+            <label class="inline-toggle">
+                <input
+                    type="checkbox"
+                    name="auto_teste_ativo"
+                    value="1"
+                    {% if configuracao_empresa.auto_teste_ativo %}checked{% endif %}
+                >
+                Ativar monitor automatico
+            </label>
+            <p class="field-help">Quando ativo, o worker interno verifica o site no intervalo escolhido. Deixe desativado se quiser apenas testar manualmente.</p>
+
+            <div class="field-grid top-spacing">
+                <label>
+                    <span class="muted-text">URL do site</span>
+                    <input
+                        name="auto_teste_site_url"
+                        type="url"
+                        value="{{ configuracao_empresa.auto_teste_site_url }}"
+                        placeholder="https://wagenestetica.duckdns.org"
+                        autocomplete="off"
+                        required
+                    >
+                    <span class="field-help">Endereco publico que sera testado. Use HTTPS para validar o app instalado.</span>
+                </label>
+                <label>
+                    <span class="muted-text">Intervalo em horas</span>
+                    <input
+                        name="auto_teste_intervalo_horas"
+                        type="number"
+                        min="1"
+                        max="24"
+                        step="1"
+                        value="{{ configuracao_empresa.auto_teste_intervalo_horas }}"
+                        required
+                    >
+                    <span class="field-help">Padrao recomendado: 2 horas.</span>
+                </label>
+            </div>
+
+            <div class="field-grid top-spacing">
+                <label>
+                    <span class="muted-text">Nick do bot</span>
+                    <input
+                        name="auto_teste_telegram_bot_nick"
+                        type="text"
+                        value="{{ configuracao_empresa.auto_teste_telegram_bot_nick }}"
+                        placeholder="@wagenesteticabot"
+                        autocomplete="off"
+                    >
+                    <span class="field-help">Nome publico do bot. Serve para documentar qual bot esta configurado.</span>
+                </label>
+                <label>
+                    <span class="muted-text">Chat ID</span>
+                    <input
+                        name="auto_teste_telegram_chat_id"
+                        type="text"
+                        value="{{ configuracao_empresa.auto_teste_telegram_chat_id }}"
+                        placeholder="Preenche automatico apos /start ou informe manualmente"
+                        autocomplete="off"
+                    >
+                    <span class="field-help">Destino da mensagem. Se ficar vazio, envie /start para o bot e clique em Enviar teste.</span>
+                </label>
+            </div>
+
+            <label class="top-spacing">
+                <span class="muted-text">Token do bot</span>
+                <input
+                    name="auto_teste_telegram_bot_token"
+                    type="password"
+                    placeholder="{% if configuracao_empresa.auto_teste_telegram_token_configurado %}Token atual: {{ configuracao_empresa.auto_teste_telegram_token_masked }}{% else %}Cole o token do BotFather{% endif %}"
+                    autocomplete="off"
+                    {% if not configuracao_empresa.auto_teste_telegram_token_configurado %}required{% endif %}
+                >
+                <span class="field-help">O token nao aparece na tela depois de salvo. Para trocar, cole um novo token aqui.</span>
+            </label>
+
+            {% if configuracao_empresa.auto_teste_telegram_token_configurado %}
+            <label class="inline-toggle">
+                <input type="checkbox" name="remover_auto_teste_token" value="1">
+                Remover token salvo
+            </label>
+            {% endif %}
+
+            <div class="actions-row actions-row--left top-spacing">
+                <button type="submit">Salvar auto teste</button>
+                <button type="submit" formaction="/configuracoes/auto-teste/testar">Salvar e enviar teste</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Ultimo resultado</p>
+        <h2 class="section-title top-spacing">
+            {% if configuracao_empresa.auto_teste_ultimo_status %}
+            {{ configuracao_empresa.auto_teste_ultimo_status|upper }}
+            {% else %}
+            Ainda nao testado
+            {% endif %}
+        </h2>
+        <p><b>Ultimo teste:</b> {{ configuracao_empresa.auto_teste_ultimo_teste_em_fmt }}</p>
+        <p><b>Token:</b> {{ configuracao_empresa.auto_teste_telegram_token_masked }}</p>
+        <p><b>Chat ID:</b> {{ configuracao_empresa.auto_teste_telegram_chat_id or "Nao configurado" }}</p>
+
+        {% if configuracao_empresa.auto_teste_ultimo_relatorio %}
+        <pre class="top-spacing" style="white-space:pre-wrap; overflow:auto; max-height:360px;">{{ configuracao_empresa.auto_teste_ultimo_relatorio }}</pre>
+        {% else %}
+        <p class="muted-text top-spacing">Depois do primeiro teste, o relatorio aparece aqui e tambem chega no Telegram.</p>
+        {% endif %}
+
+        <div class="page-card page-card--soft top-spacing">
+            <h3 class="section-title">Como auto-configurar</h3>
+            <p class="muted-text">1. Envie <strong>/start</strong> para o bot no Telegram.</p>
+            <p class="muted-text">2. Cole o token do BotFather nesta tela.</p>
+            <p class="muted-text">3. Deixe o Chat ID em branco e clique em <strong>Salvar e enviar teste</strong>.</p>
+            <p class="muted-text">Se o Telegram retornar o chat, o sistema salva o Chat ID automaticamente.</p>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 {% if secao_configuracoes == 'desenvolvedor' and desenvolvedor_logado %}
 <div class="page-card top-spacing">
     <p class="pill-label">Desenvolvedor</p>
