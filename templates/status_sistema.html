@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Status do sistema{% endblock %}
+{% block titulo %}Status do sistema{% endblock %}
+{% block subtitulo %}Resumo simples para acompanhar a saude da operacao{% endblock %}
+
+{% block actions %}
+<a href="/diagnostico" class="button-link"><button type="button">Diagnostico tecnico</button></a>
+<a href="/status-sistema.json" class="button-link"><button type="button">Exportar JSON</button></a>
+<a href="/" class="button-link"><button type="button">Voltar</button></a>
+{% endblock %}
+
+{% block content %}
+
+<div class="page-card {% if status_sistema.resumo.ok %}success-banner{% else %}error-banner{% endif %}">
+    <p class="pill-label">Saude geral</p>
+    <h2 class="section-title top-spacing">{% if status_sistema.resumo.ok %}Tudo operacional{% else %}Atencao necessaria{% endif %}</h2>
+    {% if status_sistema.resumo.falhas %}
+    <p>Pontos para revisar: {{ status_sistema.resumo.falhas|join(", ") }}.</p>
+    {% else %}
+    <p>Banco, backup, licenca, PWA e versao estao dentro do esperado para a operacao.</p>
+    {% endif %}
+    <p class="muted-text">Gerado em {{ status_sistema.gerado_em }}.</p>
+</div>
+
+<div class="list-grid top-spacing">
+    {% for item in status_sistema.itens %}
+    <div class="page-card {% if item.ok %}success-banner{% else %}error-banner{% endif %}">
+        <p class="pill-label">{{ item.nome }}</p>
+        <h2 class="section-title top-spacing">{{ item.valor }}</h2>
+        <p class="muted-text">{{ item.detalhe }}</p>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="page-card top-spacing">
+    <p class="pill-label">Ultimo erro registrado</p>
+    {% if status_sistema.ultimo_erro.mensagem %}
+    <h2 class="section-title top-spacing">{{ status_sistema.ultimo_erro.tipo }}</h2>
+    <p><b>Quando:</b> {{ status_sistema.ultimo_erro.quando }}</p>
+    <p><b>Area:</b> {{ status_sistema.ultimo_erro.endpoint or "-" }}</p>
+    <p><b>Caminho:</b> {{ status_sistema.ultimo_erro.path or "-" }}</p>
+    <p class="muted-text">{{ status_sistema.ultimo_erro.mensagem }}</p>
+    {% else %}
+    <h2 class="section-title top-spacing">Nenhum erro recente</h2>
+    <p class="muted-text">Quando uma falha inesperada acontecer, o resumo aparece aqui para ajudar o suporte.</p>
+    {% endif %}
+</div>
+
+{% endblock %}

@@ -286,6 +286,51 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(response, "ok")
         render_mock.assert_called_once()
 
+    def test_status_sistema_renderiza_para_admin_sem_consultas_pesadas(self):
+        status = {
+            "gerado_em": "2026-05-06T10:00:00",
+            "itens": [],
+            "ultimo_erro": {},
+            "resumo": {"ok": True, "falhas": []},
+        }
+
+        with app_module.app.test_request_context("/status-sistema", method="GET"):
+            session["usuario"] = "admin"
+            session["empresa_id"] = 1
+            with patch.object(app_module, "sincronizar_sessao_usuario"), \
+                 patch.object(app_module, "usuario_gerencia_configuracao_sistema", return_value=True), \
+                 patch.object(app_module, "montar_status_sistema_dono", return_value=status) as montar, \
+                 patch.object(app_module, "render_template", return_value="ok") as render_mock:
+                response = app_module.pagina_status_sistema()
+
+        self.assertEqual(response, "ok")
+        montar.assert_called_once()
+        render_mock.assert_called_once()
+
+    def test_pre_deploy_json_retorna_checklist_sem_500(self):
+        checklist = [{"nome": "HTTPS ativo", "ok": True, "detalhe": "OK", "acao": "OK"}]
+
+        with app_module.app.test_request_context("/pre-deploy.json", method="GET"):
+            session["usuario"] = "admin"
+            session["empresa_id"] = 1
+            with patch.object(app_module, "sincronizar_sessao_usuario"), \
+                 patch.object(app_module, "usuario_gerencia_configuracao_sistema", return_value=True), \
+                 patch.object(app_module, "montar_pre_deploy_checklist", return_value=checklist):
+                response = app_module.pre_deploy_json()
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["checklist"][0]["nome"], "HTTPS ativo")
+
+    def test_erro_global_html_exibe_pagina_amigavel(self):
+        with app_module.app.test_request_context("/rota-com-falha", method="GET"):
+            response, status = app_module.tratar_erro_inesperado_producao(RuntimeError("falha teste"))
+
+        self.assertEqual(status, 500)
+        self.assertIn("Nao foi possivel concluir", response)
+        self.assertEqual(app_module.ULTIMO_ERRO_PRODUCAO["tipo"], "RuntimeError")
+
     def test_paginas_menu_desabilitadas_bloqueiam_acesso_comum(self):
         with patch.object(app_module, "INIT_DB_EXECUTADO", True), \
              patch.object(app_module, "obter_paginas_menu_desabilitadas", return_value={"painel"}):

@@ -17,6 +17,7 @@ import re
 import secrets
 import string
 import tempfile
+import traceback
 import zipfile
 from threading import Thread
 from io import BytesIO, StringIO
@@ -3850,6 +3851,13 @@ maintenance_lock = Lock()
 maintenance_worker_iniciado = False
 auto_teste_lock = Lock()
 auto_teste_worker_iniciado = False
+ULTIMO_ERRO_PRODUCAO = {
+    "quando": "",
+    "endpoint": "",
+    "path": "",
+    "tipo": "",
+    "mensagem": "",
+}
 init_db_lock = Lock()
 INIT_DB_EXECUTADO = False
 bootstrap_init_thread_started = False
@@ -7677,6 +7685,13 @@ PAGINAS_MENU_CONFIGURAVEIS = [
         "titulo": "Diagnostico",
         "descricao": "Validacao do ambiente, checklist e backup de suporte.",
         "endpoints": {"pagina_diagnostico", "validar_diagnostico", "exportar_diagnostico_json", "gerar_backup_suporte"},
+    },
+    {
+        "id": "status_sistema",
+        "grupo": "Apoio / Administracao",
+        "titulo": "Status do sistema",
+        "descricao": "Resumo simples de saude operacional para o dono.",
+        "endpoints": {"pagina_status_sistema", "status_sistema_json"},
     },
     {
         "id": "configuracoes_site",
@@ -14251,6 +14266,35 @@ def healthz():
         "modo_banco": modo_banco_preferido(),
     }
 
+
+@app.errorhandler(Exception)
+def tratar_erro_inesperado_producao(erro):
+    if isinstance(erro, HTTPException):
+        return erro
+
+    registrar_ultimo_erro_producao(erro, descricao="erro_global")
+
+    if request.path.startswith("/api/") or request.path.endswith(".json"):
+        return jsonify(
+            {
+                "ok": False,
+                "erro": "erro_interno",
+                "mensagem": "Nao foi possivel concluir a operacao agora. Tente novamente em instantes.",
+                "quando": ULTIMO_ERRO_PRODUCAO.get("quando"),
+            }
+        ), 500
+
+    try:
+        return render_template(
+            "erro_sistema.html",
+            ultimo_erro=dict(ULTIMO_ERRO_PRODUCAO),
+        ), 500
+    except Exception:
+        return (
+            "<h1>Sistema temporariamente indisponivel</h1>"
+            "<p>Nao foi possivel concluir a operacao agora. Tente novamente em instantes.</p>"
+        ), 500
+
 @app.after_request
 def aplicar_headers_resposta(response):
     return append_security_headers(response)
@@ -16003,9 +16047,21 @@ def trocar_empresa_ativa():
 
 
 def montar_checklist_producao():
-    banco_status = obter_status_banco_online()
-    backup_status = obter_status_backup_banco()
-    credenciais_drive, erro_drive = carregar_credenciais_google_drive()
+    banco_status = executar_com_fallback_producao(
+        obter_status_banco_online,
+        {"conectado": False, "mensagem": "Banco online indisponivel para validacao."},
+        "status_banco_online",
+    )
+    backup_status = executar_com_fallback_producao(
+        obter_status_backup_banco,
+        status_backup_banco_padrao(),
+        "status_backup",
+    )
+    credenciais_drive, erro_drive = executar_com_fallback_producao(
+        carregar_credenciais_google_drive,
+        (None, "Google Drive indisponivel para validacao."),
+        "credenciais_google_drive",
+    )
     itens = [
         {
             "nome": "CSRF ativo",
@@ -16041,6 +16097,210 @@ def montar_checklist_producao():
     return itens
 
 
+def executar_com_fallback_producao(funcao, padrao, descricao):
+    try:
+        return funcao()
+    except Exception as erro:
+        registrar_ultimo_erro_producao(erro, descricao=descricao)
+        return padrao
+
+
+def registrar_ultimo_erro_producao(erro, descricao=""):
+    ULTIMO_ERRO_PRODUCAO.update(
+        {
+            "quando": agora_iso(),
+            "endpoint": (request.endpoint if has_request_context() else "") or descricao or "",
+            "path": (request.path if has_request_context() else "") or "",
+            "tipo": erro.__class__.__name__,
+            "mensagem": str(erro),
+        }
+    )
+    print("ERRO PRODUCAO:", descricao or ULTIMO_ERRO_PRODUCAO["endpoint"], erro)
+    print("".join(traceback.format_exception(type(erro), erro, erro.__traceback__)))
+
+
+def request_https_ativo():
+    if not has_request_context():
+        return False
+    proto = normalizar_texto_campo(request.headers.get("X-Forwarded-Proto")).lower()
+    return request.is_secure or proto == "https"
+
+
+def testar_rota_interna_status(nome, caminho, status_esperado=200):
+    inicio = time.perf_counter()
+    try:
+        with app.test_client() as client:
+            resposta = client.get(caminho)
+        elapsed_ms = int((time.perf_counter() - inicio) * 1000)
+        return {
+            "nome": nome,
+            "ok": int(resposta.status_code) == int(status_esperado),
+            "detalhe": f"HTTP {resposta.status_code} em {elapsed_ms} ms",
+            "acao": "OK" if int(resposta.status_code) == int(status_esperado) else f"Esperado HTTP {status_esperado}.",
+        }
+    except Exception as erro:
+        registrar_ultimo_erro_producao(erro, descricao=f"predeploy_{nome}")
+        return {
+            "nome": nome,
+            "ok": False,
+            "detalhe": str(erro),
+            "acao": "Revisar rota ou dependencia antes do deploy.",
+        }
+
+
+def montar_pre_deploy_checklist():
+    checklist = montar_checklist_producao()
+    banco_status = executar_com_fallback_producao(
+        obter_status_banco_online,
+        {"conectado": False, "backend": "", "mensagem": "Banco online indisponivel."},
+        "predeploy_banco",
+    )
+    backup_status = executar_com_fallback_producao(
+        obter_status_backup_banco,
+        status_backup_banco_padrao(),
+        "predeploy_backup",
+    )
+
+    checklist.extend(
+        [
+            {
+                "nome": "HTTPS ativo",
+                "ok": request_https_ativo(),
+                "detalhe": "Requisicao atual em HTTPS." if request_https_ativo() else "A requisicao atual nao parece HTTPS.",
+                "acao": "Usar dominio HTTPS com proxy configurado.",
+            },
+            {
+                "nome": "Banco online em producao",
+                "ok": banco_status.get("backend") == "postgres" and bool(banco_status.get("conectado")),
+                "detalhe": banco_status.get("mensagem") or "Banco nao validado.",
+                "acao": "Confirmar DATABASE_BACKEND=postgres e connection string online.",
+            },
+            {
+                "nome": "Backup com arquivo recente",
+                "ok": bool(backup_status.get("ultimo_backup")),
+                "detalhe": backup_status.get("ultimo_backup_em_fmt") or "Nenhum backup localizado.",
+                "acao": "Gerar backup antes do deploy.",
+            },
+            testar_rota_interna_status("Manifest PWA", "/site.webmanifest", 200),
+            testar_rota_interna_status("Service worker", "/sw.js", 200),
+            testar_rota_interna_status("PWA status", "/api/pwa/status", 200),
+        ]
+    )
+    return checklist
+
+
+def montar_diagnostico_seguro():
+    banco_status = executar_com_fallback_producao(
+        obter_status_banco_online,
+        {"conectado": False, "configurado": False, "modo_label": "Banco indisponivel", "mensagem": "Nao foi possivel validar o banco agora."},
+        "diagnostico_banco",
+    )
+    backup_status = executar_com_fallback_producao(obter_status_backup_banco, status_backup_banco_padrao(), "diagnostico_backup")
+    arquivos_status = executar_com_fallback_producao(obter_status_arquivos, status_arquivos_padrao(), "diagnostico_arquivos")
+    licenca = executar_com_fallback_producao(carregar_contexto_licenca_empresa_seguro, {}, "diagnostico_licenca")
+    return {
+        "banco_status": banco_status,
+        "banco_online_tabelas": executar_com_fallback_producao(
+            lambda: listar_tabelas_banco_online(banco_status),
+            {"quantidade": 0, "mensagem": "Tabelas nao carregadas."},
+            "diagnostico_tabelas",
+        ),
+        "backup_status": backup_status,
+        "arquivos_status": arquivos_status,
+        "licenca": licenca,
+        "google_drive_pronto": executar_com_fallback_producao(google_drive_pronto_para_backup, False, "diagnostico_drive_pronto"),
+        "google_drive_disponivel": executar_com_fallback_producao(google_drive_disponivel_para_backup, False, "diagnostico_drive_disponivel"),
+        "csrf_ativo": csrf_protection_ativa(),
+        "session_cookie_secure": SESSION_COOKIE_SECURE_RAW in {"1", "true", "yes", "on"},
+        "modo_banco": modo_banco_preferido(),
+        "versao": obter_versao_sistema(),
+        "storage_provider": carregar_contexto_produto().get("storage_provider"),
+        "checklist": montar_checklist_producao(),
+        "pre_deploy": montar_pre_deploy_checklist(),
+        "ultima_validacao": session.get("ultima_validacao_diagnostico") if has_request_context() else "",
+        "ultimo_erro": dict(ULTIMO_ERRO_PRODUCAO),
+    }
+
+
+def montar_status_sistema_dono():
+    banco_status = executar_com_fallback_producao(
+        obter_status_banco_online,
+        {"conectado": False, "mensagem": "Banco indisponivel.", "backend_label": "-"},
+        "status_dono_banco",
+    )
+    backup_status = executar_com_fallback_producao(obter_status_backup_banco, status_backup_banco_padrao(), "status_dono_backup")
+    licenca = executar_com_fallback_producao(carregar_contexto_licenca_empresa_seguro, {}, "status_dono_licenca")
+    usuarios_ativos = executar_com_fallback_producao(contar_usuarios_ativos_empresa, 0, "status_dono_usuarios")
+    pwa_status = executar_com_fallback_producao(
+        lambda: {
+            "https": request_https_ativo(),
+            "manifest": testar_rota_interna_status("Manifest PWA", "/site.webmanifest", 200).get("ok"),
+            "service_worker": testar_rota_interna_status("Service worker", "/sw.js", 200).get("ok"),
+        },
+        {"https": False, "manifest": False, "service_worker": False},
+        "status_dono_pwa",
+    )
+
+    itens = [
+        {
+            "nome": "Banco online",
+            "ok": bool(banco_status.get("conectado")),
+            "valor": banco_status.get("backend_label") or banco_status.get("modo_label") or "-",
+            "detalhe": banco_status.get("mensagem") or "-",
+        },
+        {
+            "nome": "Backup",
+            "ok": bool(backup_status.get("ultimo_backup")),
+            "valor": backup_status.get("ultimo_backup_em_fmt") or "Sem backup",
+            "detalhe": f"{backup_status.get('tipo_backup_label', '-')} | {backup_status.get('frequencia_label', '-')}",
+        },
+        {
+            "nome": "Licenca",
+            "ok": not bool(licenca.get("bloqueada")),
+            "valor": f"{licenca.get('plano_label', '-') } / {licenca.get('status_label', '-')}",
+            "detalhe": licenca.get("validade_em") or "Sem validade definida",
+        },
+        {
+            "nome": "Usuarios ativos",
+            "ok": True,
+            "valor": str(usuarios_ativos),
+            "detalhe": "Acessos ativos na empresa atual.",
+        },
+        {
+            "nome": "PWA instalado",
+            "ok": bool(pwa_status.get("https") and pwa_status.get("manifest") and pwa_status.get("service_worker")),
+            "valor": "Pronto" if pwa_status.get("https") else "Verificar HTTPS",
+            "detalhe": "HTTPS, manifest e service worker validados." if pwa_status.get("https") else "Abra pelo dominio HTTPS.",
+        },
+        {
+            "nome": "Versao",
+            "ok": True,
+            "valor": obter_versao_sistema(),
+            "detalhe": "Versao atual exibida no sistema.",
+        },
+    ]
+
+    return {
+        "gerado_em": agora_iso(),
+        "itens": itens,
+        "ultimo_erro": dict(ULTIMO_ERRO_PRODUCAO),
+        "resumo": {
+            "ok": all(item["ok"] for item in itens),
+            "falhas": [item["nome"] for item in itens if not item["ok"]],
+        },
+    }
+
+
+def contar_usuarios_ativos_empresa():
+    conn = conectar()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM usuarios WHERE empresa_id=? AND COALESCE(ativo, 1)=1", (empresa_atual_id(),))
+        return int(c.fetchone()[0] or 0)
+    finally:
+        conn.close()
+
+
 @app.route("/diagnostico")
 def pagina_diagnostico():
     if not session.get("usuario"):
@@ -16049,23 +16309,7 @@ def pagina_diagnostico():
         definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem acessar o diagnostico.")
         return redirect("/configuracoes")
 
-    banco_status = obter_status_banco_online()
-    diagnostico = {
-        "banco_status": banco_status,
-        "banco_online_tabelas": listar_tabelas_banco_online(banco_status),
-        "backup_status": obter_status_backup_banco(),
-        "arquivos_status": obter_status_arquivos(),
-        "licenca": carregar_contexto_licenca_empresa_seguro(),
-        "google_drive_pronto": google_drive_pronto_para_backup(),
-        "google_drive_disponivel": google_drive_disponivel_para_backup(),
-        "csrf_ativo": csrf_protection_ativa(),
-        "session_cookie_secure": SESSION_COOKIE_SECURE_RAW in {"1", "true", "yes", "on"},
-        "modo_banco": modo_banco_preferido(),
-        "versao": obter_versao_sistema(),
-        "storage_provider": carregar_contexto_produto().get("storage_provider"),
-        "checklist": montar_checklist_producao(),
-        "ultima_validacao": session.get("ultima_validacao_diagnostico") or "",
-    }
+    diagnostico = montar_diagnostico_seguro()
     return render_template(
         "diagnostico.html",
         feedback=session.pop("diagnostico_feedback", None),
@@ -16081,7 +16325,7 @@ def validar_diagnostico():
         definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem validar o ambiente.")
         return redirect("/configuracoes")
 
-    itens = montar_checklist_producao()
+    itens = montar_pre_deploy_checklist()
     session["ultima_validacao_diagnostico"] = agora_iso()
     falhas = [item["nome"] for item in itens if not item["ok"]]
     if falhas:
@@ -16097,23 +16341,46 @@ def exportar_diagnostico_json():
         return redirect("/login")
     if not usuario_gerencia_configuracao_sistema():
         return jsonify({"erro": "nao_autorizado"}), 403
-    banco_status = obter_status_banco_online()
+    payload = {"gerado_em": agora_iso(), **montar_diagnostico_seguro()}
+    return jsonify(json.loads(json.dumps(payload, ensure_ascii=False, default=str)))
+
+
+@app.route("/pre-deploy.json")
+def pre_deploy_json():
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_gerencia_configuracao_sistema():
+        return jsonify({"erro": "nao_autorizado"}), 403
+    checklist = montar_pre_deploy_checklist()
     payload = {
         "gerado_em": agora_iso(),
-        "banco_status": banco_status,
-        "banco_online_tabelas": listar_tabelas_banco_online(banco_status),
-        "backup_status": obter_status_backup_banco(),
-        "arquivos_status": obter_status_arquivos(),
-        "licenca": carregar_contexto_licenca_empresa_seguro(),
-        "google_drive_pronto": google_drive_pronto_para_backup(),
-        "csrf_ativo": csrf_protection_ativa(),
-        "session_cookie_secure": SESSION_COOKIE_SECURE_RAW in {"1", "true", "yes", "on"},
-        "modo_banco": modo_banco_preferido(),
-        "versao": obter_versao_sistema(),
-        "checklist": montar_checklist_producao(),
-        "ultima_validacao": session.get("ultima_validacao_diagnostico") or "",
+        "ok": all(item.get("ok") for item in checklist),
+        "checklist": checklist,
+        "ultimo_erro": dict(ULTIMO_ERRO_PRODUCAO),
     }
     return jsonify(json.loads(json.dumps(payload, ensure_ascii=False, default=str)))
+
+
+@app.route("/status-sistema")
+def pagina_status_sistema():
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_gerencia_configuracao_sistema():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem acessar o status do sistema.")
+        return redirect("/configuracoes")
+    return render_template(
+        "status_sistema.html",
+        status_sistema=montar_status_sistema_dono(),
+    )
+
+
+@app.route("/status-sistema.json")
+def status_sistema_json():
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_gerencia_configuracao_sistema():
+        return jsonify({"erro": "nao_autorizado"}), 403
+    return jsonify(json.loads(json.dumps(montar_status_sistema_dono(), ensure_ascii=False, default=str)))
 
 
 @app.route("/diagnostico/backup-suporte", methods=["POST"])

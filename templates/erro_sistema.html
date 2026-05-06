@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Sistema indisponivel{% endblock %}
+{% block titulo %}Sistema indisponivel{% endblock %}
+{% block subtitulo %}A operacao nao foi concluida, mas o erro foi registrado para suporte{% endblock %}
+
+{% block actions %}
+<a href="/" class="button-link"><button type="button">Inicio</button></a>
+{% if session.get("usuario") %}
+<a href="/status-sistema" class="button-link"><button type="button">Status</button></a>
+<a href="/diagnostico" class="button-link"><button type="button">Diagnostico</button></a>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+
+<div class="page-card error-banner">
+    <p class="pill-label">Erro interno</p>
+    <h2 class="section-title top-spacing">Nao foi possivel concluir essa operacao agora</h2>
+    <p>Tente novamente em instantes. Se continuar acontecendo, abra o Status do sistema ou o Diagnostico para conferir o ultimo erro registrado.</p>
+</div>
+
+<div class="page-card top-spacing">
+    <p><b>Quando:</b> {{ ultimo_erro.quando or "-" }}</p>
+    <p><b>Area:</b> {{ ultimo_erro.endpoint or "-" }}</p>
+    <p><b>Caminho:</b> {{ ultimo_erro.path or "-" }}</p>
+    <p class="muted-text">{{ ultimo_erro.tipo or "Erro" }}{% if ultimo_erro.mensagem %}: {{ ultimo_erro.mensagem }}{% endif %}</p>
+</div>
+
+{% endblock %}

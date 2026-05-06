@@ -433,6 +433,9 @@ body.responsive-page.sidebar-open {
             {% if pagina_menu_habilitada('diagnostico') %}
             <a href="{{ url_for('pagina_diagnostico') }}"><button><span>&#128736;</span> Diagnostico</button></a>
             {% endif %}
+            {% if pagina_menu_habilitada('status_sistema') %}
+            <a href="{{ url_for('pagina_status_sistema') }}"><button><span>&#128202;</span> Status do sistema</button></a>
+            {% endif %}
             {% if pagina_menu_habilitada('configuracoes_site') %}
             <a href="{{ url_for('configuracoes_site') }}"><button><span>&#127912;</span> Configuracoes do site</button></a>
             {% endif %}

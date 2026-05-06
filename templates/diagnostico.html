@@ -14,6 +14,8 @@
     <button type="submit">Backup suporte</button>
 </form>
 <a href="/diagnostico/exportar.json" class="button-link"><button type="button">Exportar JSON</button></a>
+<a href="/pre-deploy.json" class="button-link"><button type="button">Pre-deploy JSON</button></a>
+<a href="/status-sistema" class="button-link"><button type="button">Status do dono</button></a>
 <a href="/empresas" class="button-link"><button type="button">Empresas</button></a>
 {% endblock %}
 
@@ -82,6 +84,33 @@
         </div>
         {% endfor %}
     </div>
+</div>
+
+<div class="top-spacing">
+    <h2 class="section-title">Pre-deploy automatico</h2>
+    <div class="list-grid">
+        {% for item in diagnostico.pre_deploy %}
+        <div class="page-card {% if item.ok %}success-banner{% else %}error-banner{% endif %}">
+            <p><b>{{ item.nome }}</b></p>
+            <p>{{ item.detalhe }}</p>
+            <p class="muted-text">Acao recomendada: {{ item.acao }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <p class="pill-label">Ultimo erro de producao</p>
+    {% if diagnostico.ultimo_erro.mensagem %}
+    <h2 class="section-title top-spacing">{{ diagnostico.ultimo_erro.tipo }}</h2>
+    <p><b>Quando:</b> {{ diagnostico.ultimo_erro.quando }}</p>
+    <p><b>Area:</b> {{ diagnostico.ultimo_erro.endpoint or "-" }}</p>
+    <p><b>Caminho:</b> {{ diagnostico.ultimo_erro.path or "-" }}</p>
+    <p class="muted-text">{{ diagnostico.ultimo_erro.mensagem }}</p>
+    {% else %}
+    <h2 class="section-title top-spacing">Nenhum erro recente</h2>
+    <p class="muted-text">Falhas inesperadas capturadas pelo sistema aparecem aqui para suporte.</p>
+    {% endif %}
 </div>
 
 <div class="page-card top-spacing">
