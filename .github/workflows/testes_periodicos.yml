@@ -1,0 +1,80 @@
+name: Testes Periodicos
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"
+  workflow_dispatch:
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile app
+        run: python -m py_compile app.py
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Notify Telegram
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          JOB_STATUS: ${{ job.status }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import urllib.parse
+          import urllib.request
+
+          token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+          chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+          if not token or not chat_id:
+              print("Telegram secrets not configured. Skipping notification.")
+              sys.exit(0)
+
+          status = os.getenv("JOB_STATUS", "unknown")
+          repository = os.getenv("REPOSITORY", "")
+          workflow = os.getenv("WORKFLOW_NAME", "")
+          run_url = os.getenv("RUN_URL", "")
+
+          status_label = "OK" if status == "success" else "FALHOU"
+          message = (
+              f"Testes periodicos: {status_label}\n"
+              f"Projeto: {repository}\n"
+              f"Workflow: {workflow}\n"
+              f"Resultado: {status}\n"
+              f"Detalhes: {run_url}"
+          )
+
+          data = urllib.parse.urlencode({
+              "chat_id": chat_id,
+              "text": message,
+              "disable_web_page_preview": "true",
+          }).encode("utf-8")
+
+          url = f"https://api.telegram.org/bot{token}/sendMessage"
+          request = urllib.request.Request(url, data=data, method="POST")
+
+          with urllib.request.urlopen(request, timeout=20) as response:
+              print(response.read().decode("utf-8"))
+          PY
