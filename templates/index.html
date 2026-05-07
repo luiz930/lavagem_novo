@@ -11,6 +11,7 @@
 
 <link rel="manifest" href="/site.webmanifest">
 <meta name="theme-color" content="{{ brand_primary_color }}">
+<link rel="stylesheet" href="/static/responsive.css">
 {% if auto_suporte_disponivel %}
 <link rel="stylesheet" href="/static/auto_suporte.css">
 {% endif %}
@@ -73,7 +74,10 @@ if ("serviceWorker" in navigator) {
 /* ================= BASE ================= */
 body {
     font-family: Arial;
-    background: var(--bg);
+    background:
+        radial-gradient(circle at top, rgba(var(--primary-rgb), 0.12), transparent 28%),
+        radial-gradient(circle at bottom right, rgba(var(--primary-rgb), 0.07), transparent 22%),
+        var(--bg);
     color: var(--text);
     text-align: center;
     -webkit-tap-highlight-color: transparent;
@@ -378,7 +382,7 @@ input, select {
 }
 
 .center-box {
-    display: 20px;
+    display: flex;
     justify-content: center;
     margin-top: 10px;
 }
@@ -1209,10 +1213,146 @@ input[type="file"] {
 
 }
 
+/* ================= PADRAO RESPONSIVO COMPARTILHADO ================= */
+.home-page {
+    padding: 0;
+}
+
+.home-page button {
+    min-height: 44px;
+}
+
+.home-page input,
+.home-page select,
+.home-page textarea {
+    border: 1px solid rgba(var(--primary-rgb), 0.18);
+    background: linear-gradient(180deg, rgba(var(--surface-rgb), 0.98), rgba(var(--background-rgb), 0.98));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.home-page input:focus,
+.home-page select:focus,
+.home-page textarea:focus {
+    border-color: rgba(var(--primary-rgb), 0.62);
+    box-shadow: 0 0 0 4px rgba(var(--primary-rgb), 0.1);
+    outline: none;
+}
+
+.home-page .card,
+.home-page .card-cliente,
+.home-page .hud-shell,
+.home-page .site-footer {
+    border-radius: 18px;
+    border-color: rgba(var(--primary-rgb), 0.22);
+    background: linear-gradient(180deg, rgba(var(--surface-rgb), 0.98), rgba(var(--background-rgb), 0.96));
+}
+
+.home-page .search-panel {
+    width: min(100%, 720px);
+    margin: 0 auto 24px;
+}
+
+.home-page .busca-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: stretch;
+    gap: 10px;
+}
+
+.home-page .busca-form input,
+.home-page .busca-form button {
+    min-height: 48px;
+}
+
+.home-page .busca-form input {
+    max-width: none;
+}
+
+.home-page .busca-form button {
+    padding-inline: 18px;
+}
+
+.home-page .container-cliente,
+.home-page .historico-list {
+    width: min(100%, 1060px);
+}
+
+.home-page .card-cliente,
+.home-page .historico-card,
+.home-page .lavagem-alerta {
+    text-align: left;
+}
+
+@media (max-width: 900px) {
+    .home-page .main {
+        padding-top: 82px;
+    }
+
+    .home-page .home-layout {
+        width: 100%;
+    }
+
+    .home-page .container-cliente,
+    .home-page .historico-list {
+        gap: 14px;
+    }
+}
+
+@media (max-width: 640px) {
+    .home-page .main {
+        padding: 72px 12px 28px;
+    }
+
+    .home-page .main h1 {
+        margin-bottom: 18px;
+        padding: 0 50px;
+        font-size: clamp(1.45rem, 7vw, 1.9rem);
+        overflow-wrap: anywhere;
+    }
+
+    .home-page .search-panel {
+        margin-bottom: 18px;
+    }
+
+    .home-page .busca-form {
+        grid-template-columns: 1fr;
+    }
+
+    .home-page .busca-form input,
+    .home-page .busca-form button,
+    .home-page .novo-cliente-form input,
+    .home-page .novo-cliente-form button,
+    .home-page #formServico input,
+    .home-page #formServico select,
+    .home-page #formServico button,
+    .home-page #formEditar input,
+    .home-page #formEditar button {
+        width: 100%;
+        max-width: none;
+        margin: 0;
+    }
+
+    .home-page .hud-shell {
+        margin-bottom: 18px;
+        padding: 14px;
+    }
+
+    .home-page .card,
+    .home-page .card-cliente {
+        padding: 16px;
+    }
+
+    .home-page .site-footer {
+        width: 100%;
+        padding: 16px;
+        font-size: 0.86rem;
+    }
+}
+
 </style>
 </head>
 
-<body>
+<body class="responsive-page home-page">
 
 <div id="overlay" class="overlay" onclick="toggleSidebar()"></div>
 
