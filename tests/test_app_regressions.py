@@ -1395,6 +1395,103 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(clientes, [])
         self.assertEqual(sincronizacoes, [])
 
+    def test_central_tecnica_filtra_e_limpa_erros_resolvidos(self):
+        with tempfile.TemporaryDirectory(prefix="erros_producao_") as pasta:
+            caminho = os.path.join(pasta, "erros.json")
+            erros = [
+                {"id": "aberto", "resolvido": False, "quando": "2026-05-07T10:00:00"},
+                {"id": "resolvido", "resolvido": True, "quando": "2026-05-07T09:00:00"},
+            ]
+            with patch.object(app_module, "ERROS_PRODUCAO_ARQUIVO", caminho):
+                app_module.salvar_erros_producao(erros)
+
+                self.assertEqual([item["id"] for item in app_module.listar_erros_producao(filtro="abertos")], ["aberto"])
+                self.assertEqual([item["id"] for item in app_module.listar_erros_producao(filtro="resolvidos")], ["resolvido"])
+                self.assertEqual(app_module.contar_erros_producao_por_status()["todos"], 2)
+                removidos = app_module.limpar_erros_producao_resolvidos()
+
+                self.assertEqual(removidos, 1)
+                self.assertEqual([item["id"] for item in app_module.carregar_erros_producao()], ["aberto"])
+
+    def test_metricas_tempo_resposta_marcam_tendencia_e_alerta_2s(self):
+        rota = "/painel"
+        estado_original = dict(app_module.METRICAS_TEMPO_RESPOSTA[rota])
+        try:
+            app_module.METRICAS_TEMPO_RESPOSTA[rota] = {
+                "rota": rota,
+                "ultimo_ms": 400,
+                "media_ms": 400,
+                "max_ms": 400,
+                "amostras": 1,
+                "status": 200,
+                "ultima_medicao": "",
+                "classe": "rapido",
+            }
+            with app_module.app.test_request_context(rota):
+                app_module.g.inicio_tempo_resposta = app_module.time.perf_counter() - 2.2
+                response = app_module.app.response_class("ok", status=200)
+                app_module.registrar_tempo_resposta(response)
+
+            item = app_module.metricas_tempo_resposta_central_tecnica()
+            painel = next(valor for valor in item if valor["rota"] == rota)
+            self.assertEqual(painel["tendencia"], "piorou")
+            self.assertTrue(painel["alerta_2s"])
+            self.assertEqual(painel["classe"], "lento")
+        finally:
+            app_module.METRICAS_TEMPO_RESPOSTA[rota] = estado_original
+
+    def test_banco_online_falha_registra_rota_atingida(self):
+        with app_module.app.test_request_context("/clientes"):
+            with patch.object(app_module, "modo_banco_preferido", return_value="postgres"), \
+                 patch.object(app_module, "url_postgres_ajustada", return_value="postgresql://u:p@h:5432/db?sslmode=require"), \
+                 patch.object(app_module, "banco_online_estritamente_obrigatorio", return_value=True), \
+                 patch.object(app_module, "conectar_postgres_com_fallback", side_effect=TimeoutError("timeout teste")), \
+                 patch.object(app_module, "registrar_ultimo_erro_producao") as registrar_mock:
+                with self.assertRaises(app_module.BancoOnlineObrigatorioErro):
+                    app_module.conectar()
+
+        registrar_mock.assert_called()
+        self.assertEqual(registrar_mock.call_args.kwargs.get("descricao"), "banco_online_conectar")
+
+    def test_index_sem_placa_nao_abre_banco_para_listas_pesadas(self):
+        with app_module.app.test_request_context("/", method="GET"):
+            session["usuario"] = "admin"
+            session["empresa_id"] = 1
+            with patch.object(app_module, "preparar_rotinas_interface_logada"), \
+                 patch.object(app_module, "conectar") as conectar_mock, \
+                 patch.object(app_module, "render_template", return_value="ok") as render_mock:
+                resposta = app_module.index()
+
+        self.assertEqual(resposta, "ok")
+        conectar_mock.assert_not_called()
+        kwargs = render_mock.call_args.kwargs
+        self.assertEqual(kwargs["servicos_lista"], [])
+        self.assertEqual(kwargs["produtos_pneu"], [])
+
+    def test_exportar_relatorio_tecnico_json_requer_desenvolvedor(self):
+        with app_module.app.test_request_context("/configuracoes/desenvolvedor/relatorio.json?erros=todos"):
+            session["usuario"] = "dev"
+            with patch.object(app_module, "usuario_desenvolvedor", return_value=True), \
+                 patch.object(app_module, "montar_central_tecnica_desenvolvedor", return_value={"gerado_em": "agora"}) as central_mock:
+                response = app_module.exportar_relatorio_tecnico_central()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["ok"])
+        central_mock.assert_called_once_with(filtro_erros="todos")
+
+    def test_fluxos_criticos_tem_cobertura_minima_login_pwa_clientes(self):
+        regras = {str(rule) for rule in app_module.app.url_map.iter_rules()}
+
+        self.assertIn("/login", regras)
+        self.assertIn("/", regras)
+        self.assertIn("/clientes", regras)
+        self.assertIn("/servico", regras)
+        self.assertIn("/finalizar/<int:id>", regras)
+        self.assertIn("/site.webmanifest", regras)
+        self.assertIn("/sw.js", regras)
+        self.assertIn("/api/pwa/status", regras)
+        self.assertIn("/clientes/sincronizacao/<int:sync_id>/excluir", regras)
+
 
 if __name__ == "__main__":
     unittest.main()

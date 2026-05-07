@@ -3863,17 +3863,25 @@ ULTIMO_ERRO_PRODUCAO = {
 ERROS_PRODUCAO_ARQUIVO = os.path.join("logs", "erros_producao.json")
 ERROS_PRODUCAO_LIMITE = 80
 ERROS_PRODUCAO_LOCK = Lock()
+POSTGRES_CONNECT_TIMEOUT = 3
+POSTGRES_RETRY_TENTATIVAS = 2
+POSTGRES_RETRY_DELAY = 0.25
+BANCO_ONLINE_FALHAS_ROTAS = {}
 ROTAS_MONITORADAS_RESPOSTA = {"/", "/clientes", "/painel", "/configuracoes", "/financeiro", "/status-sistema"}
 METRICAS_TEMPO_RESPOSTA = {
     rota: {
         "rota": rota,
         "ultimo_ms": 0,
+        "anterior_ms": 0,
         "media_ms": 0,
         "max_ms": 0,
         "amostras": 0,
         "status": "",
         "ultima_medicao": "",
         "classe": "rapido",
+        "tendencia": "estavel",
+        "tendencia_label": "Estavel",
+        "alerta_2s": False,
     }
     for rota in ROTAS_MONITORADAS_RESPOSTA
 }
@@ -4303,7 +4311,7 @@ def url_postgres_ajustada():
 
     if "connect_timeout=" not in url:
         separador = "&" if "?" in url else "?"
-        url = f"{url}{separador}connect_timeout=5"
+        url = f"{url}{separador}connect_timeout={POSTGRES_CONNECT_TIMEOUT}"
 
     return url
 
@@ -4622,16 +4630,48 @@ def conectar_postgres_com_fallback(dsn):
     ultimo_erro = None
     for hostaddr in tentativas:
         try:
-            return psycopg2.connect(dsn, hostaddr=hostaddr)
+            return conectar_postgres_com_retry(dsn, hostaddr=hostaddr)
         except Exception as erro:
             ultimo_erro = erro
 
     try:
-        return psycopg2.connect(dsn)
+        return conectar_postgres_com_retry(dsn)
     except Exception as erro:
         if ultimo_erro is not None:
             raise ultimo_erro
         raise erro
+
+
+def erro_transitorio_conexao_postgres(erro):
+    texto = str(erro or "").lower()
+    sinais = (
+        "timeout",
+        "timed out",
+        "connection refused",
+        "could not connect",
+        "could not translate host",
+        "server closed the connection",
+        "ssl syscall",
+        "network is unreachable",
+        "too many connections",
+        "remaining connection slots",
+        "connection reset",
+    )
+    return any(sinal in texto for sinal in sinais)
+
+
+def conectar_postgres_com_retry(dsn, **kwargs):
+    ultimo_erro = None
+    tentativas = max(1, int(POSTGRES_RETRY_TENTATIVAS or 1))
+    for tentativa in range(tentativas):
+        try:
+            return psycopg2.connect(dsn, **kwargs)
+        except Exception as erro:
+            ultimo_erro = erro
+            if tentativa >= tentativas - 1 or not erro_transitorio_conexao_postgres(erro):
+                break
+            time.sleep(float(POSTGRES_RETRY_DELAY or 0))
+    raise ultimo_erro
 
 
 def quebrar_url_postgres(url):
@@ -4903,6 +4943,7 @@ def conectar():
                 BANCO_ONLINE_STATUS_CACHE["resultado"]["mensagem"],
                 intervalo_segundos=120 if erro_limite_conexoes_banco_online(e) else 60,
             )
+            registrar_falha_banco_online_request(e, descricao="banco_online_conectar")
             if banco_online_estritamente_obrigatorio():
                 raise BancoOnlineObrigatorioErro(
                     "Banco online obrigatorio neste ambiente e a conexao falhou: "
@@ -14414,11 +14455,14 @@ def registrar_tempo_resposta(response):
                 atual = dict(METRICAS_TEMPO_RESPOSTA.get(caminho) or {"rota": caminho})
                 amostras = int(atual.get("amostras") or 0) + 1
                 media_anterior = int(atual.get("media_ms") or 0)
+                ultimo_anterior = int(atual.get("ultimo_ms") or 0)
                 media = int(((media_anterior * (amostras - 1)) + tempo_ms) / amostras)
+                tendencia = classificar_tendencia_resposta_ms(ultimo_anterior, tempo_ms)
                 atual.update(
                     {
                         "rota": caminho,
                         "ultimo_ms": tempo_ms,
+                        "anterior_ms": ultimo_anterior,
                         "media_ms": media,
                         "max_ms": max(int(atual.get("max_ms") or 0), tempo_ms),
                         "amostras": amostras,
@@ -14426,6 +14470,9 @@ def registrar_tempo_resposta(response):
                         "ultima_medicao": agora_iso(),
                         "classe": classificar_latencia_ms(tempo_ms),
                         "label": rotulo_latencia_ms(tempo_ms),
+                        "tendencia": tendencia,
+                        "tendencia_label": rotulo_tendencia_resposta(tendencia),
+                        "alerta_2s": tempo_ms > 2000,
                     }
                 )
                 METRICAS_TEMPO_RESPOSTA[caminho] = atual
@@ -16304,11 +16351,28 @@ def montar_registro_erro_producao(erro, descricao=""):
     }
 
 
-def listar_erros_producao(apenas_abertos=False, limite=20):
+def normalizar_filtro_erros_producao(filtro):
+    filtro = normalizar_texto_campo(filtro or "abertos").lower()
+    if filtro in {"resolvidos", "todos"}:
+        return filtro
+    return "abertos"
+
+
+def listar_erros_producao(apenas_abertos=False, limite=20, filtro=None):
     erros = carregar_erros_producao()
-    if apenas_abertos:
+    filtro_normalizado = normalizar_filtro_erros_producao(filtro) if filtro else ""
+    if filtro_normalizado == "abertos" or apenas_abertos:
         erros = [item for item in erros if not item.get("resolvido")]
+    elif filtro_normalizado == "resolvidos":
+        erros = [item for item in erros if item.get("resolvido")]
     return erros[: int(limite or 20)]
+
+
+def contar_erros_producao_por_status():
+    erros = carregar_erros_producao()
+    resolvidos = sum(1 for item in erros if item.get("resolvido"))
+    abertos = len(erros) - resolvidos
+    return {"abertos": abertos, "resolvidos": resolvidos, "todos": len(erros)}
 
 
 def salvar_registro_erro_producao(registro):
@@ -16337,6 +16401,16 @@ def marcar_erro_producao_resolvido(erro_id, usuario=""):
         return alterado
 
 
+def limpar_erros_producao_resolvidos():
+    with ERROS_PRODUCAO_LOCK:
+        erros = carregar_erros_producao()
+        mantidos = [item for item in erros if not item.get("resolvido")]
+        removidos = len(erros) - len(mantidos)
+        if removidos:
+            salvar_erros_producao(mantidos)
+        return removidos
+
+
 def registrar_ultimo_erro_producao(erro, descricao=""):
     registro = montar_registro_erro_producao(erro, descricao=descricao)
     ULTIMO_ERRO_PRODUCAO.update(registro)
@@ -16346,6 +16420,20 @@ def registrar_ultimo_erro_producao(erro, descricao=""):
         print("ERRO AO GRAVAR CENTRAL DE ERROS:", erro_log)
     print("ERRO PRODUCAO:", descricao or ULTIMO_ERRO_PRODUCAO["endpoint"], erro)
     print(registro.get("stack") or "".join(traceback.format_exception(type(erro), erro, erro.__traceback__)))
+
+
+def registrar_falha_banco_online_request(erro, descricao="banco_online"):
+    agora_ts = time.time()
+    caminho = (request.path if has_request_context() else "") or descricao
+    mensagem = str(erro or "")[:160]
+    chave = f"{caminho}|{erro.__class__.__name__}|{mensagem}"
+    if agora_ts - float(BANCO_ONLINE_FALHAS_ROTAS.get(chave) or 0.0) < 60:
+        return
+    BANCO_ONLINE_FALHAS_ROTAS[chave] = agora_ts
+    try:
+        registrar_ultimo_erro_producao(erro, descricao=descricao)
+    except Exception as erro_log:
+        print("ERRO AO REGISTRAR FALHA BANCO ONLINE:", erro_log)
 
 
 def request_https_ativo():
@@ -16605,6 +16693,28 @@ def rotulo_latencia_ms(valor_ms):
     return "Lento"
 
 
+def classificar_tendencia_resposta_ms(anterior_ms, atual_ms):
+    anterior = int(anterior_ms or 0)
+    atual = int(atual_ms or 0)
+    if not anterior or not atual:
+        return "estavel"
+    delta = atual - anterior
+    margem = max(250, int(anterior * 0.2))
+    if delta > margem:
+        return "piorou"
+    if delta < -margem:
+        return "melhorou"
+    return "estavel"
+
+
+def rotulo_tendencia_resposta(tendencia):
+    if tendencia == "piorou":
+        return "Piorou"
+    if tendencia == "melhorou":
+        return "Melhorou"
+    return "Estavel"
+
+
 def scanner_rotas_central_tecnica():
     resultados = []
     with app.test_client() as client:
@@ -16624,6 +16734,7 @@ def scanner_rotas_central_tecnica():
                     "tempo_ms": tempo_ms,
                     "tempo_label": rotulo_latencia_ms(tempo_ms),
                     "tempo_classe": classificar_latencia_ms(tempo_ms),
+                    "alerta_2s": tempo_ms > 2000,
                     "tamanho_kb": round(tamanho / 1024, 1),
                     "destino": destino,
                     "mensagem": f"HTTP {status}" + (f" -> {destino}" if destino else ""),
@@ -16639,6 +16750,7 @@ def scanner_rotas_central_tecnica():
                     "tempo_ms": tempo_ms,
                     "tempo_label": "Falha",
                     "tempo_classe": "lento",
+                    "alerta_2s": tempo_ms > 2000,
                     "tamanho_kb": 0,
                     "destino": "",
                     "mensagem": str(erro),
@@ -16652,6 +16764,7 @@ def metricas_tempo_resposta_central_tecnica():
         item = dict(METRICAS_TEMPO_RESPOSTA.get(rota) or {})
         item.setdefault("rota", rota)
         item.setdefault("ultimo_ms", 0)
+        item.setdefault("anterior_ms", 0)
         item.setdefault("media_ms", 0)
         item.setdefault("max_ms", 0)
         item.setdefault("amostras", 0)
@@ -16659,6 +16772,12 @@ def metricas_tempo_resposta_central_tecnica():
         item.setdefault("ultima_medicao", "")
         item["classe"] = classificar_latencia_ms(item.get("ultimo_ms") or 0)
         item["label"] = rotulo_latencia_ms(item.get("ultimo_ms") or 0)
+        item["tendencia"] = item.get("tendencia") or classificar_tendencia_resposta_ms(
+            item.get("anterior_ms") or 0,
+            item.get("ultimo_ms") or 0,
+        )
+        item["tendencia_label"] = rotulo_tendencia_resposta(item.get("tendencia"))
+        item["alerta_2s"] = bool(item.get("alerta_2s") or int(item.get("ultimo_ms") or 0) > 2000)
         itens.append(item)
     return itens
 
@@ -16773,17 +16892,22 @@ def caches_central_tecnica():
     ]
 
 
-def montar_central_tecnica_desenvolvedor():
+def montar_central_tecnica_desenvolvedor(filtro_erros="abertos"):
+    filtro_erros = normalizar_filtro_erros_producao(filtro_erros)
     status = montar_status_sistema_dono()
     banco = estado_banco_central_tecnica()
     rotas = scanner_rotas_central_tecnica()
     caches = caches_central_tecnica()
     tempo_resposta = metricas_tempo_resposta_central_tecnica()
+    contagem_erros = contar_erros_producao_por_status()
     erros_abertos = listar_erros_producao(apenas_abertos=True, limite=12)
-    erros_recentes = listar_erros_producao(apenas_abertos=False, limite=12)
+    erros_recentes = listar_erros_producao(limite=12, filtro=filtro_erros)
     falhas_rotas = [item for item in rotas if not item.get("ok")]
     rotas_lentas = [item for item in rotas if item.get("tempo_classe") == "lento"]
+    rotas_alerta_2s = [item for item in rotas if item.get("alerta_2s")]
     paginas_lentas = [item for item in tempo_resposta if item.get("classe") == "lento"]
+    paginas_alerta_2s = [item for item in tempo_resposta if item.get("alerta_2s")]
+    paginas_pioraram = [item for item in tempo_resposta if item.get("tendencia") == "piorou"]
     return {
         "gerado_em": agora_iso(),
         "saude": status,
@@ -16793,13 +16917,23 @@ def montar_central_tecnica_desenvolvedor():
         "tempo_resposta": tempo_resposta,
         "erros_abertos": erros_abertos,
         "erros_recentes": erros_recentes,
+        "erros_filtro": filtro_erros,
+        "erros_contagem": contagem_erros,
+        "rotas_alerta_2s": rotas_alerta_2s,
+        "paginas_alerta_2s": paginas_alerta_2s,
+        "paginas_pioraram": paginas_pioraram,
         "resumo": {
             "ok": bool(status.get("resumo", {}).get("ok")) and not falhas_rotas and not banco.get("tabelas_falha") and not erros_abertos,
             "rotas_testadas": len(rotas),
             "rotas_falha": len(falhas_rotas),
             "rotas_lentas": len(rotas_lentas),
+            "rotas_alerta_2s": len(rotas_alerta_2s),
             "paginas_lentas": len(paginas_lentas),
+            "paginas_alerta_2s": len(paginas_alerta_2s),
+            "paginas_pioraram": len(paginas_pioraram),
             "erros_abertos": len(erros_abertos),
+            "erros_resolvidos": contagem_erros.get("resolvidos", 0),
+            "erros_total": contagem_erros.get("todos", 0),
             "caches_ativos": sum(1 for item in caches if item.get("ativo")),
             "tabelas_ok": banco.get("tabelas_ok", 0),
         },
@@ -17166,6 +17300,40 @@ def enviar_erro_central_tecnica_telegram(erro_id):
     return redirect(destino_configuracoes("desenvolvedor"))
 
 
+@app.route("/configuracoes/desenvolvedor/erros/limpar-resolvidos", methods=["POST"])
+def limpar_erros_resolvidos_central_tecnica():
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente o desenvolvedor pode limpar erros resolvidos.")
+        return redirect(destino_configuracoes("desenvolvedor"))
+
+    removidos = limpar_erros_producao_resolvidos()
+    if removidos:
+        registrar_auditoria(
+            "limpou_erros_resolvidos",
+            "central_tecnica",
+            detalhes={"removidos": removidos},
+            usuario=resumo_usuario_logado(),
+        )
+        definir_feedback_configuracoes("sucesso", f"{removidos} erro(s) resolvido(s) removido(s) da lista.")
+    else:
+        definir_feedback_configuracoes("info", "Nao havia erros resolvidos para limpar.")
+    return redirect(destino_configuracoes("desenvolvedor"))
+
+
+@app.route("/configuracoes/desenvolvedor/relatorio.json")
+def exportar_relatorio_tecnico_central():
+    if not session.get("usuario"):
+        return jsonify({"ok": False, "erro": "login_necessario"}), 401
+    if not usuario_desenvolvedor():
+        return jsonify({"ok": False, "erro": "acesso_negado"}), 403
+
+    filtro_erros = request.args.get("erros") or "todos"
+    relatorio = montar_central_tecnica_desenvolvedor(filtro_erros=filtro_erros)
+    return jsonify({"ok": True, "relatorio": relatorio})
+
+
 @app.route("/diagnostico")
 def pagina_diagnostico():
     if not session.get("usuario"):
@@ -17407,8 +17575,9 @@ def configuracoes(secao="meu-acesso"):
             pastas_sync_sugeridas = []
 
     if pode_gerenciar_base and secao == "desenvolvedor":
+        filtro_erros = request.args.get("erros") or "abertos"
         try:
-            central_tecnica = montar_central_tecnica_desenvolvedor()
+            central_tecnica = montar_central_tecnica_desenvolvedor(filtro_erros=filtro_erros)
         except Exception as erro:
             registrar_ultimo_erro_producao(erro, descricao="central_tecnica")
             central_tecnica = {
@@ -17419,8 +17588,13 @@ def configuracoes(secao="meu-acesso"):
                 "caches": [],
                 "tempo_resposta": metricas_tempo_resposta_central_tecnica(),
                 "erros_abertos": listar_erros_producao(apenas_abertos=True, limite=12),
-                "erros_recentes": listar_erros_producao(apenas_abertos=False, limite=12),
-                "resumo": {"ok": False, "rotas_testadas": 0, "rotas_falha": 0, "rotas_lentas": 0, "paginas_lentas": 0, "erros_abertos": 0, "caches_ativos": 0, "tabelas_ok": 0},
+                "erros_recentes": listar_erros_producao(limite=12, filtro=filtro_erros),
+                "erros_filtro": normalizar_filtro_erros_producao(filtro_erros),
+                "erros_contagem": contar_erros_producao_por_status(),
+                "rotas_alerta_2s": [],
+                "paginas_alerta_2s": [],
+                "paginas_pioraram": [],
+                "resumo": {"ok": False, "rotas_testadas": 0, "rotas_falha": 0, "rotas_lentas": 0, "rotas_alerta_2s": 0, "paginas_lentas": 0, "paginas_alerta_2s": 0, "paginas_pioraram": 0, "erros_abertos": 0, "erros_resolvidos": 0, "erros_total": 0, "caches_ativos": 0, "tabelas_ok": 0},
             }
 
     return render_template(
@@ -18776,24 +18950,16 @@ def index():
     historico = []
     buscou = False
     lavagem_info = None
-
-    conn = conectar()
-    c = conn.cursor()
-    empresa_id = empresa_atual_id()
-
-    # ðŸ”¥ LISTAS FIXAS
-    c.execute("SELECT * FROM tipos_servico")
-    servicos_lista = c.fetchall()
-
-    c.execute("SELECT * FROM produtos_pneu")
-    produtos_pneu = c.fetchall()
-
-    # ðŸ”¥ GET (AQUI ESTÃ O SEGREDO)
+    servicos_lista = []
+    produtos_pneu = []
     placa = request.args.get("placa", "").upper()
 
     if placa:
         buscou = True
         lavagem_info = montar_contexto_lavagem_placa(placa)
+        conn = conectar()
+        c = conn.cursor()
+        empresa_id = empresa_atual_id()
 
         # ðŸ”¥ CLIENTE
         c.execute("""
@@ -18817,7 +18983,13 @@ def index():
             dados["data_nascimento_exibicao"] = formatar_data_nascimento_exibicao(dados.get("data_nascimento"))
             historico = listar_historico_servicos(placa=placa)
 
-    conn.close()
+            c.execute("SELECT * FROM tipos_servico")
+            servicos_lista = c.fetchall()
+
+            c.execute("SELECT * FROM produtos_pneu")
+            produtos_pneu = c.fetchall()
+
+        conn.close()
 
     return render_template(
         "index.html",

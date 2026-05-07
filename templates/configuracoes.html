@@ -313,6 +313,7 @@
         <a href="/configuracoes/desenvolvedor" class="button-link"><button type="button">Atualizar central</button></a>
         <a href="/status-sistema.json" class="button-link"><button type="button">Exportar status JSON</button></a>
         <a href="/diagnostico/exportar.json" class="button-link"><button type="button">Exportar diagnostico JSON</button></a>
+        <a href="/configuracoes/desenvolvedor/relatorio.json?erros=todos" class="button-link"><button type="button">Exportar relatorio tecnico JSON</button></a>
     </div>
     <p class="muted-text top-spacing" style="font-family:Consolas, 'Courier New', monospace;">Gerado em {{ central_tecnica.gerado_em }}</p>
 </div>
@@ -346,7 +347,7 @@
     <div class="page-card">
         <p class="pill-label">Paginas lentas</p>
         <h2 class="section-title top-spacing">{{ central_tecnica.resumo.paginas_lentas }}</h2>
-        <p class="muted-text">Baseado no tempo real das paginas monitoradas.</p>
+        <p class="muted-text">{{ central_tecnica.resumo.paginas_alerta_2s }} acima de 2s, {{ central_tecnica.resumo.paginas_pioraram }} piorando.</p>
     </div>
 </div>
 
@@ -384,6 +385,16 @@
     <p class="pill-label">Central de erros</p>
     <h2 class="section-title top-spacing">Ultimos erros 500</h2>
     <p class="muted-text">Erros inesperados ficam registrados aqui com rota, usuario, horario e stack resumido.</p>
+
+    <div class="actions-row actions-row--left top-spacing">
+        <a href="/configuracoes/desenvolvedor?erros=abertos" class="button-link"><button type="button" {% if central_tecnica.erros_filtro == 'abertos' %}style="box-shadow:0 0 0 2px rgba(250,204,21,.45);"{% endif %}>Abertos ({{ central_tecnica.erros_contagem.abertos }})</button></a>
+        <a href="/configuracoes/desenvolvedor?erros=resolvidos" class="button-link"><button type="button" {% if central_tecnica.erros_filtro == 'resolvidos' %}style="box-shadow:0 0 0 2px rgba(250,204,21,.45);"{% endif %}>Resolvidos ({{ central_tecnica.erros_contagem.resolvidos }})</button></a>
+        <a href="/configuracoes/desenvolvedor?erros=todos" class="button-link"><button type="button" {% if central_tecnica.erros_filtro == 'todos' %}style="box-shadow:0 0 0 2px rgba(250,204,21,.45);"{% endif %}>Todos ({{ central_tecnica.erros_contagem.todos }})</button></a>
+        <form action="/configuracoes/desenvolvedor/erros/limpar-resolvidos" method="POST">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button type="submit">Limpar erros resolvidos</button>
+        </form>
+    </div>
 
     <div class="stack-form stack-form--wide top-spacing">
         {% for erro in central_tecnica.erros_recentes %}
@@ -431,6 +442,7 @@
                     <th>Ultimo</th>
                     <th>Media</th>
                     <th>Pico</th>
+                    <th>Tendencia</th>
                     <th>Status</th>
                     <th>Ultima medicao</th>
                 </tr>
@@ -449,7 +461,17 @@
                         {% endif %}
                     </td>
                     <td>{{ item.media_ms }} ms</td>
-                    <td>{{ item.max_ms }} ms</td>
+                    <td>{% if item.max_ms > 2000 %}<span style="color:#fca5a5;">{{ item.max_ms }} ms</span>{% else %}{{ item.max_ms }} ms{% endif %}</td>
+                    <td>
+                        {% if item.tendencia == 'piorou' %}
+                        <span style="color:#fca5a5;">Piorou</span>
+                        {% elif item.tendencia == 'melhorou' %}
+                        <span style="color:#86efac;">Melhorou</span>
+                        {% else %}
+                        <span class="muted-text">Estavel</span>
+                        {% endif %}
+                        {% if item.alerta_2s %}<br><span style="color:#fca5a5;">Alerta &gt; 2s</span>{% endif %}
+                    </td>
                     <td>{{ item.status or "-" }}</td>
                     <td class="muted-text">{{ item.ultima_medicao or "Ainda nao medida" }}</td>
                 </tr>
@@ -479,7 +501,7 @@
                 <tr>
                     <td><code>{{ rota.caminho }}</code><br><span class="muted-text">{{ rota.nome }}</span></td>
                     <td>{% if rota.ok %}<span style="color:#86efac;">{{ rota.status }}</span>{% else %}<span style="color:#fca5a5;">{{ rota.status or "erro" }}</span>{% endif %}</td>
-                    <td>{{ rota.tempo_ms }} ms</td>
+                    <td>{% if rota.alerta_2s %}<span style="color:#fca5a5;">{{ rota.tempo_ms }} ms</span><br><span style="color:#fca5a5;">Alerta &gt; 2s</span>{% else %}{{ rota.tempo_ms }} ms{% endif %}</td>
                     <td>{{ rota.tamanho_kb }} KB</td>
                     <td>
                         {% if rota.tempo_classe == 'rapido' %}
