@@ -16311,6 +16311,17 @@ def executar_com_fallback_producao(funcao, padrao, descricao):
         return padrao
 
 
+def executar_check_auto_suporte(funcao, padrao, descricao, descricoes_resolvidas=None):
+    try:
+        resultado = funcao()
+    except Exception as erro:
+        registrar_ultimo_erro_producao(erro, descricao=descricao)
+        return padrao
+    if descricoes_resolvidas:
+        marcar_erros_auto_suporte_resolvidos(descricoes_resolvidas)
+    return resultado
+
+
 def caminho_erros_producao():
     pasta = os.path.dirname(os.path.abspath(ERROS_PRODUCAO_ARQUIVO))
     os.makedirs(pasta, exist_ok=True)
@@ -16417,6 +16428,34 @@ def marcar_erro_producao_resolvido(erro_id, usuario=""):
         if alterado:
             salvar_erros_producao(erros)
         return alterado
+
+
+def marcar_erros_auto_suporte_resolvidos(descricoes, usuario="auto_suporte"):
+    descricoes_normalizadas = {
+        normalizar_texto_campo(descricao)
+        for descricao in (descricoes or [])
+        if normalizar_texto_campo(descricao)
+    }
+    if not descricoes_normalizadas:
+        return 0
+
+    with ERROS_PRODUCAO_LOCK:
+        erros = carregar_erros_producao()
+        resolvidos = 0
+        for item in erros:
+            if item.get("resolvido"):
+                continue
+            descricao = normalizar_texto_campo(item.get("descricao"))
+            if descricao not in descricoes_normalizadas:
+                continue
+            item["resolvido"] = True
+            item["resolvido_em"] = agora_iso()
+            item["resolvido_por"] = normalizar_texto_campo(usuario)
+            item["resolucao_auto_suporte"] = "Check voltou a executar sem erro."
+            resolvidos += 1
+        if resolvidos:
+            salvar_erros_producao(erros)
+        return resolvidos
 
 
 def limpar_erros_producao_resolvidos():
@@ -17276,22 +17315,24 @@ def montar_pacote_codex_auto_suporte():
         },
         "git": montar_git_info_auto_suporte(),
         "ultimo_erro": dict(ULTIMO_ERRO_PRODUCAO),
-        "erros_abertos": listar_erros_producao(apenas_abertos=True, limite=8),
         "tempo_resposta": metricas_tempo_resposta_central_tecnica(),
         "status_sistema": status_sistema,
         "banco": banco,
         "backup": backup,
-        "fluxos_suspeitos": executar_com_fallback_producao(
+        "fluxos_suspeitos": executar_check_auto_suporte(
             detectar_fluxos_suspeitos_auto_suporte,
             [],
             "pacote_codex_fluxos",
+            {"pacote_codex_fluxos", "auto_suporte_fluxos"},
         ),
-        "planilhas_erro": executar_com_fallback_producao(
+        "planilhas_erro": executar_check_auto_suporte(
             listar_planilhas_com_erro_auto_suporte,
             [],
             "pacote_codex_planilhas",
+            {"pacote_codex_planilhas", "auto_suporte_planilhas_erro"},
         ),
     }
+    pacote["erros_abertos"] = listar_erros_producao(apenas_abertos=True, limite=8)
     pacote["texto_para_codex"] = formatar_pacote_codex_texto(pacote)
     return pacote
 
@@ -17354,15 +17395,17 @@ def enviar_alerta_telegram_auto_suporte(texto):
 
 def status_auto_suporte():
     status = montar_status_sistema_dono()
-    fluxos = executar_com_fallback_producao(
+    fluxos = executar_check_auto_suporte(
         detectar_fluxos_suspeitos_auto_suporte,
         [],
         "auto_suporte_fluxos",
+        {"auto_suporte_fluxos", "pacote_codex_fluxos"},
     )
-    planilhas_erro = executar_com_fallback_producao(
+    planilhas_erro = executar_check_auto_suporte(
         listar_planilhas_com_erro_auto_suporte,
         [],
         "auto_suporte_planilhas_erro",
+        {"auto_suporte_planilhas_erro", "pacote_codex_planilhas"},
     )
     tempo_resposta = metricas_tempo_resposta_central_tecnica()
     erros_abertos = listar_erros_producao(apenas_abertos=True, limite=8)

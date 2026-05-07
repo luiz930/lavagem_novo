@@ -1689,6 +1689,53 @@ class AppRegressionTests(unittest.TestCase):
         self.assertNotIn("LIKE '%FALHA%'", conn.cursor_fake.sql)
         self.assertEqual(conn.cursor_fake.params, (1, "%ERRO%", "%FALHA%", "%ERRO%", "%FALHA%", 3))
 
+    def test_auto_suporte_resolve_erros_antigos_quando_checks_voltam_a_passar(self):
+        with tempfile.TemporaryDirectory(prefix="erros_auto_suporte_") as pasta:
+            caminho = os.path.join(pasta, "erros.json")
+            erros = [
+                {"id": "fluxo-antigo", "descricao": "auto_suporte_fluxos", "resolvido": False},
+                {"id": "planilha-antiga", "descricao": "pacote_codex_planilhas", "resolvido": False},
+                {"id": "erro-real", "descricao": "erro_global", "resolvido": False},
+            ]
+            with patch.object(app_module, "ERROS_PRODUCAO_ARQUIVO", caminho):
+                app_module.salvar_erros_producao(erros)
+                with app_module.app.test_request_context("/api/auto-suporte/status"):
+                    session["usuario"] = "admin"
+                    with patch.object(app_module, "montar_status_sistema_dono", return_value={"resumo": {"falhas": []}, "itens": []}), \
+                         patch.object(app_module, "detectar_fluxos_suspeitos_auto_suporte", return_value=[]), \
+                         patch.object(app_module, "listar_planilhas_com_erro_auto_suporte", return_value=[]), \
+                         patch.object(app_module, "metricas_tempo_resposta_central_tecnica", return_value=[]):
+                        status = app_module.status_auto_suporte()
+
+                erros_atualizados = {item["id"]: item for item in app_module.carregar_erros_producao()}
+                self.assertTrue(erros_atualizados["fluxo-antigo"]["resolvido"])
+                self.assertTrue(erros_atualizados["planilha-antiga"]["resolvido"])
+                self.assertEqual(erros_atualizados["fluxo-antigo"]["resolvido_por"], "auto_suporte")
+                self.assertFalse(erros_atualizados["erro-real"]["resolvido"])
+                self.assertEqual([item["id"] for item in status["erros_abertos"]], ["erro-real"])
+
+    def test_pacote_codex_atualiza_erros_abertos_depois_dos_checks(self):
+        with tempfile.TemporaryDirectory(prefix="erros_pacote_codex_") as pasta:
+            caminho = os.path.join(pasta, "erros.json")
+            erros = [
+                {"id": "pacote-fluxo", "descricao": "pacote_codex_fluxos", "resolvido": False},
+                {"id": "pacote-planilha", "descricao": "auto_suporte_planilhas_erro", "resolvido": False},
+            ]
+            with patch.object(app_module, "ERROS_PRODUCAO_ARQUIVO", caminho):
+                app_module.salvar_erros_producao(erros)
+                with app_module.app.test_request_context("/api/auto-suporte/pacote-codex"):
+                    session["usuario"] = "admin"
+                    with patch.object(app_module, "montar_status_sistema_dono", return_value={"resumo": {"falhas": []}, "itens": []}), \
+                         patch.object(app_module, "obter_status_banco_online", return_value={"conectado": True}), \
+                         patch.object(app_module, "obter_status_backup_banco", return_value={"ok": True}), \
+                         patch.object(app_module, "metricas_tempo_resposta_central_tecnica", return_value=[]), \
+                         patch.object(app_module, "detectar_fluxos_suspeitos_auto_suporte", return_value=[]), \
+                         patch.object(app_module, "listar_planilhas_com_erro_auto_suporte", return_value=[]):
+                        pacote = app_module.montar_pacote_codex_auto_suporte()
+
+                self.assertEqual(pacote["erros_abertos"], [])
+                self.assertTrue(all(item["resolvido"] for item in app_module.carregar_erros_producao()))
+
 
 if __name__ == "__main__":
     unittest.main()
