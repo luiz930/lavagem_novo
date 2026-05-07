@@ -338,6 +338,16 @@
         <h2 class="section-title top-spacing">{{ central_tecnica.resumo.caches_ativos }}</h2>
         <p class="muted-text">Caches ativos neste processo Flask.</p>
     </div>
+    <div class="page-card">
+        <p class="pill-label">Erros 500</p>
+        <h2 class="section-title top-spacing">{{ central_tecnica.resumo.erros_abertos }}</h2>
+        <p class="muted-text">Erro(s) aberto(s) aguardando revisao.</p>
+    </div>
+    <div class="page-card">
+        <p class="pill-label">Paginas lentas</p>
+        <h2 class="section-title top-spacing">{{ central_tecnica.resumo.paginas_lentas }}</h2>
+        <p class="muted-text">Baseado no tempo real das paginas monitoradas.</p>
+    </div>
 </div>
 
 <div class="page-grid top-spacing">
@@ -367,6 +377,85 @@
             </p>
             {% endfor %}
         </div>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <p class="pill-label">Central de erros</p>
+    <h2 class="section-title top-spacing">Ultimos erros 500</h2>
+    <p class="muted-text">Erros inesperados ficam registrados aqui com rota, usuario, horario e stack resumido.</p>
+
+    <div class="stack-form stack-form--wide top-spacing">
+        {% for erro in central_tecnica.erros_recentes %}
+        <div class="page-card page-card--soft" style="border-color:{% if erro.resolvido %}rgba(34,197,94,.3){% else %}rgba(248,113,113,.45){% endif %};">
+            <div class="actions-row actions-row--left">
+                <span class="pill-label">{% if erro.resolvido %}Resolvido{% else %}Aberto{% endif %}</span>
+                <span class="status-badge status-badge--muted">{{ erro.quando }}</span>
+                <span class="status-badge status-badge--warning">{{ erro.tipo }}</span>
+            </div>
+            <p class="top-spacing"><b>{{ erro.path or erro.endpoint or "-" }}</b></p>
+            <p class="muted-text">Usuario: {{ erro.usuario or "-" }} | {{ erro.mensagem }}</p>
+            <details class="top-spacing">
+                <summary>Stack resumido</summary>
+                <pre class="top-spacing" style="white-space:pre-wrap; overflow:auto; max-height:220px; font-family:Consolas, 'Courier New', monospace;">{{ erro.stack }}</pre>
+            </details>
+            <div class="actions-row actions-row--left top-spacing">
+                {% if not erro.resolvido %}
+                <form action="/configuracoes/desenvolvedor/erros/{{ erro.id }}/resolver" method="POST">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit">Marcar resolvido</button>
+                </form>
+                {% endif %}
+                <form action="/configuracoes/desenvolvedor/erros/{{ erro.id }}/telegram" method="POST">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit">Enviar Telegram</button>
+                </form>
+            </div>
+        </div>
+        {% else %}
+        <div class="page-card page-card--soft">
+            <p class="muted-text">Nenhum erro 500 registrado.</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <p class="pill-label">Monitor real</p>
+    <h2 class="section-title top-spacing">Tempo de resposta por pagina</h2>
+    <div style="overflow:auto;">
+        <table class="data-table" style="min-width:760px;">
+            <thead>
+                <tr>
+                    <th>Pagina</th>
+                    <th>Ultimo</th>
+                    <th>Media</th>
+                    <th>Pico</th>
+                    <th>Status</th>
+                    <th>Ultima medicao</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in central_tecnica.tempo_resposta %}
+                <tr>
+                    <td><code>{{ item.rota }}</code></td>
+                    <td>
+                        {% if item.classe == 'lento' %}
+                        <span style="color:#fca5a5;">{{ item.ultimo_ms }} ms</span>
+                        {% elif item.classe == 'atencao' %}
+                        <span style="color:#fde68a;">{{ item.ultimo_ms }} ms</span>
+                        {% else %}
+                        <span style="color:#86efac;">{{ item.ultimo_ms }} ms</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ item.media_ms }} ms</td>
+                    <td>{{ item.max_ms }} ms</td>
+                    <td>{{ item.status or "-" }}</td>
+                    <td class="muted-text">{{ item.ultima_medicao or "Ainda nao medida" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </div>
 </div>
 

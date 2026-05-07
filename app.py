@@ -4,6 +4,7 @@ import json
 import math
 import sqlite3
 import socket
+from flask import g
 from flask import send_from_directory
 from copy import deepcopy
 import base64
@@ -3858,6 +3859,23 @@ ULTIMO_ERRO_PRODUCAO = {
     "path": "",
     "tipo": "",
     "mensagem": "",
+}
+ERROS_PRODUCAO_ARQUIVO = os.path.join("logs", "erros_producao.json")
+ERROS_PRODUCAO_LIMITE = 80
+ERROS_PRODUCAO_LOCK = Lock()
+ROTAS_MONITORADAS_RESPOSTA = {"/", "/clientes", "/painel", "/configuracoes", "/financeiro", "/status-sistema"}
+METRICAS_TEMPO_RESPOSTA = {
+    rota: {
+        "rota": rota,
+        "ultimo_ms": 0,
+        "media_ms": 0,
+        "max_ms": 0,
+        "amostras": 0,
+        "status": "",
+        "ultima_medicao": "",
+        "classe": "rapido",
+    }
+    for rota in ROTAS_MONITORADAS_RESPOSTA
 }
 init_db_lock = Lock()
 INIT_DB_EXECUTADO = False
@@ -9146,6 +9164,31 @@ def consumir_cadastro_novo_para_atendimento(placa):
     session[chave_marcadores_cadastro_novo()] = marcadores
     return bool(marcado_em and time.time() - marcado_em < 7200)
 
+
+def contar_atendimentos_anteriores_veiculo(cursor, empresa_id, veiculo_id):
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM servicos
+        WHERE empresa_id=?
+          AND veiculo_id=?
+        """,
+        (empresa_id, veiculo_id),
+    )
+    linha = cursor.fetchone()
+    try:
+        return int(linha["total"] or 0)
+    except Exception:
+        return int((linha or [0])[0] or 0)
+
+
+def classificar_perfil_cliente_atendimento(cursor, empresa_id, veiculo_id, placa):
+    cadastro_criado_agora = consumir_cadastro_novo_para_atendimento(placa)
+    atendimentos_anteriores = contar_atendimentos_anteriores_veiculo(cursor, empresa_id, veiculo_id)
+    if cadastro_criado_agora and atendimentos_anteriores <= 0:
+        return "NOVO", "cliente cadastrado agora sem atendimento anterior", atendimentos_anteriores
+    return "RETORNO", "placa ja tinha cadastro ou atendimento anterior", atendimentos_anteriores
+
 def enriquecer_perfil_cliente_atendimento(servicos):
     primeiro_servico_por_veiculo = {}
     for item in sorted(servicos or [], key=lambda row: converter_inteiro(row.get("id"), 0)):
@@ -14321,13 +14364,20 @@ def tratar_erro_inesperado_producao(erro):
         return erro
 
     registrar_ultimo_erro_producao(erro, descricao="erro_global")
+    if excecao_relacionada_banco(erro):
+        registrar_log_banco_online(f"Falha de banco capturada na request {request.path}: {erro}", intervalo_segundos=30)
+        return tratar_banco_online_obrigatorio(
+            BancoOnlineObrigatorioErro(
+                "Servico indisponivel agora. Tentar novamente. Se persistir, valide o banco online no diagnostico."
+            )
+        )
 
     if request.path.startswith("/api/") or request.path.endswith(".json"):
         return jsonify(
             {
                 "ok": False,
                 "erro": "erro_interno",
-                "mensagem": "Nao foi possivel concluir a operacao agora. Tente novamente em instantes.",
+                "mensagem": "Servico indisponivel agora. Tentar novamente.",
                 "quando": ULTIMO_ERRO_PRODUCAO.get("quando"),
             }
         ), 500
@@ -14346,6 +14396,42 @@ def tratar_erro_inesperado_producao(erro):
 @app.after_request
 def aplicar_headers_resposta(response):
     return append_security_headers(response)
+
+
+@app.before_request
+def iniciar_medicao_tempo_resposta():
+    g.inicio_tempo_resposta = time.perf_counter()
+
+
+@app.after_request
+def registrar_tempo_resposta(response):
+    try:
+        caminho = request.path or ""
+        if caminho in ROTAS_MONITORADAS_RESPOSTA:
+            inicio = float(getattr(g, "inicio_tempo_resposta", 0.0) or 0.0)
+            if inicio:
+                tempo_ms = int((time.perf_counter() - inicio) * 1000)
+                atual = dict(METRICAS_TEMPO_RESPOSTA.get(caminho) or {"rota": caminho})
+                amostras = int(atual.get("amostras") or 0) + 1
+                media_anterior = int(atual.get("media_ms") or 0)
+                media = int(((media_anterior * (amostras - 1)) + tempo_ms) / amostras)
+                atual.update(
+                    {
+                        "rota": caminho,
+                        "ultimo_ms": tempo_ms,
+                        "media_ms": media,
+                        "max_ms": max(int(atual.get("max_ms") or 0), tempo_ms),
+                        "amostras": amostras,
+                        "status": int(response.status_code),
+                        "ultima_medicao": agora_iso(),
+                        "classe": classificar_latencia_ms(tempo_ms),
+                        "label": rotulo_latencia_ms(tempo_ms),
+                    }
+                )
+                METRICAS_TEMPO_RESPOSTA[caminho] = atual
+    except Exception as erro:
+        print("ERRO METRICA RESPOSTA:", erro)
+    return response
 
 
 @app.errorhandler(BancoOnlineObrigatorioErro)
@@ -14380,20 +14466,6 @@ def tratar_banco_online_obrigatorio(erro):
     </html>
     """
     return html, 503
-
-
-@app.errorhandler(Exception)
-def tratar_excecao_global(erro):
-    if isinstance(erro, HTTPException):
-        return erro
-    if excecao_relacionada_banco(erro):
-        registrar_log_banco_online(f"Falha de banco capturada na request {request.path}: {erro}", intervalo_segundos=30)
-        return tratar_banco_online_obrigatorio(
-            BancoOnlineObrigatorioErro(
-                "Falha ao acessar o banco configurado. Verifique a conexao online e rode o diagnostico."
-            )
-        )
-    raise erro
 
 
 @app.before_request
@@ -16174,18 +16246,106 @@ def executar_com_fallback_producao(funcao, padrao, descricao):
         return padrao
 
 
+def caminho_erros_producao():
+    pasta = os.path.dirname(os.path.abspath(ERROS_PRODUCAO_ARQUIVO))
+    os.makedirs(pasta, exist_ok=True)
+    return os.path.abspath(ERROS_PRODUCAO_ARQUIVO)
+
+
+def carregar_erros_producao():
+    caminho = caminho_erros_producao()
+    if not os.path.isfile(caminho):
+        return []
+    try:
+        with open(caminho, "r", encoding="utf-8") as arquivo:
+            dados = json.load(arquivo)
+        if isinstance(dados, list):
+            return [item for item in dados if isinstance(item, dict)]
+    except Exception:
+        return []
+    return []
+
+
+def salvar_erros_producao(erros):
+    caminho = caminho_erros_producao()
+    dados = list(erros or [])[:ERROS_PRODUCAO_LIMITE]
+    caminho_temp = f"{caminho}.tmp"
+    with open(caminho_temp, "w", encoding="utf-8") as arquivo:
+        json.dump(dados, arquivo, ensure_ascii=False, indent=2, default=sanitizar_para_json)
+    os.replace(caminho_temp, caminho)
+
+
+def resumir_stack_erro(erro, limite_linhas=18):
+    linhas = traceback.format_exception(type(erro), erro, erro.__traceback__)
+    stack = "".join(linhas).strip().splitlines()
+    return "\n".join(stack[-limite_linhas:])
+
+
+def montar_registro_erro_producao(erro, descricao=""):
+    endpoint = (request.endpoint if has_request_context() else "") or descricao or ""
+    path = (request.path if has_request_context() else "") or ""
+    usuario = ""
+    if has_request_context():
+        usuario = normalizar_texto_campo(session.get("usuario") or session.get("usuario_nome"))
+    quando = agora_iso()
+    return {
+        "id": f"{int(time.time() * 1000)}-{secrets.token_hex(3)}",
+        "quando": quando,
+        "endpoint": endpoint,
+        "path": path,
+        "usuario": usuario,
+        "tipo": erro.__class__.__name__,
+        "mensagem": str(erro),
+        "stack": resumir_stack_erro(erro),
+        "resolvido": False,
+        "resolvido_em": "",
+        "resolvido_por": "",
+        "descricao": normalizar_texto_campo(descricao),
+    }
+
+
+def listar_erros_producao(apenas_abertos=False, limite=20):
+    erros = carregar_erros_producao()
+    if apenas_abertos:
+        erros = [item for item in erros if not item.get("resolvido")]
+    return erros[: int(limite or 20)]
+
+
+def salvar_registro_erro_producao(registro):
+    with ERROS_PRODUCAO_LOCK:
+        erros = carregar_erros_producao()
+        erros.insert(0, dict(registro))
+        salvar_erros_producao(erros)
+
+
+def marcar_erro_producao_resolvido(erro_id, usuario=""):
+    erro_id = normalizar_texto_campo(erro_id)
+    if not erro_id:
+        return False
+    with ERROS_PRODUCAO_LOCK:
+        erros = carregar_erros_producao()
+        alterado = False
+        for item in erros:
+            if normalizar_texto_campo(item.get("id")) == erro_id:
+                item["resolvido"] = True
+                item["resolvido_em"] = agora_iso()
+                item["resolvido_por"] = normalizar_texto_campo(usuario)
+                alterado = True
+                break
+        if alterado:
+            salvar_erros_producao(erros)
+        return alterado
+
+
 def registrar_ultimo_erro_producao(erro, descricao=""):
-    ULTIMO_ERRO_PRODUCAO.update(
-        {
-            "quando": agora_iso(),
-            "endpoint": (request.endpoint if has_request_context() else "") or descricao or "",
-            "path": (request.path if has_request_context() else "") or "",
-            "tipo": erro.__class__.__name__,
-            "mensagem": str(erro),
-        }
-    )
+    registro = montar_registro_erro_producao(erro, descricao=descricao)
+    ULTIMO_ERRO_PRODUCAO.update(registro)
+    try:
+        salvar_registro_erro_producao(registro)
+    except Exception as erro_log:
+        print("ERRO AO GRAVAR CENTRAL DE ERROS:", erro_log)
     print("ERRO PRODUCAO:", descricao or ULTIMO_ERRO_PRODUCAO["endpoint"], erro)
-    print("".join(traceback.format_exception(type(erro), erro, erro.__traceback__)))
+    print(registro.get("stack") or "".join(traceback.format_exception(type(erro), erro, erro.__traceback__)))
 
 
 def request_https_ativo():
@@ -16486,6 +16646,23 @@ def scanner_rotas_central_tecnica():
     return resultados
 
 
+def metricas_tempo_resposta_central_tecnica():
+    itens = []
+    for rota in sorted(ROTAS_MONITORADAS_RESPOSTA):
+        item = dict(METRICAS_TEMPO_RESPOSTA.get(rota) or {})
+        item.setdefault("rota", rota)
+        item.setdefault("ultimo_ms", 0)
+        item.setdefault("media_ms", 0)
+        item.setdefault("max_ms", 0)
+        item.setdefault("amostras", 0)
+        item.setdefault("status", "")
+        item.setdefault("ultima_medicao", "")
+        item["classe"] = classificar_latencia_ms(item.get("ultimo_ms") or 0)
+        item["label"] = rotulo_latencia_ms(item.get("ultimo_ms") or 0)
+        itens.append(item)
+    return itens
+
+
 def contar_registros_tabela_central(cursor, tabela):
     cursor.execute(f"SELECT COUNT(*) AS total FROM {tabela}")
     linha = cursor.fetchone()
@@ -16601,19 +16778,28 @@ def montar_central_tecnica_desenvolvedor():
     banco = estado_banco_central_tecnica()
     rotas = scanner_rotas_central_tecnica()
     caches = caches_central_tecnica()
+    tempo_resposta = metricas_tempo_resposta_central_tecnica()
+    erros_abertos = listar_erros_producao(apenas_abertos=True, limite=12)
+    erros_recentes = listar_erros_producao(apenas_abertos=False, limite=12)
     falhas_rotas = [item for item in rotas if not item.get("ok")]
     rotas_lentas = [item for item in rotas if item.get("tempo_classe") == "lento"]
+    paginas_lentas = [item for item in tempo_resposta if item.get("classe") == "lento"]
     return {
         "gerado_em": agora_iso(),
         "saude": status,
         "banco": banco,
         "rotas": rotas,
         "caches": caches,
+        "tempo_resposta": tempo_resposta,
+        "erros_abertos": erros_abertos,
+        "erros_recentes": erros_recentes,
         "resumo": {
-            "ok": bool(status.get("resumo", {}).get("ok")) and not falhas_rotas and not banco.get("tabelas_falha"),
+            "ok": bool(status.get("resumo", {}).get("ok")) and not falhas_rotas and not banco.get("tabelas_falha") and not erros_abertos,
             "rotas_testadas": len(rotas),
             "rotas_falha": len(falhas_rotas),
             "rotas_lentas": len(rotas_lentas),
+            "paginas_lentas": len(paginas_lentas),
+            "erros_abertos": len(erros_abertos),
             "caches_ativos": sum(1 for item in caches if item.get("ativo")),
             "tabelas_ok": banco.get("tabelas_ok", 0),
         },
@@ -16731,6 +16917,59 @@ def desativar_planilhas_com_erro_auto_suporte():
         conn.close()
 
 
+def listar_planilhas_com_erro_auto_suporte(limite=6):
+    conn = conectar()
+    try:
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT id, nome, ultimo_status, ultima_mensagem
+            FROM sincronizacoes_clientes
+            WHERE empresa_id=?
+              AND ativo=1
+              AND COALESCE(excluido_em, '')=''
+              AND (
+                    UPPER(COALESCE(ultimo_status, '')) LIKE '%ERRO%'
+                 OR UPPER(COALESCE(ultimo_status, '')) LIKE '%FALHA%'
+                 OR UPPER(COALESCE(ultima_mensagem, '')) LIKE '%ERRO%'
+                 OR UPPER(COALESCE(ultima_mensagem, '')) LIKE '%FALHA%'
+              )
+            ORDER BY atualizado_em DESC
+            LIMIT ?
+            """,
+            (empresa_atual_id(), int(limite or 6)),
+        )
+        return [dict(row) for row in c.fetchall()]
+    finally:
+        conn.close()
+
+
+def montar_sugestoes_auto_suporte(status_sistema, fluxos, planilhas_erro, tempo_resposta, erros_abertos):
+    sugestoes = []
+    banco_item = next((item for item in status_sistema.get("itens", []) if item.get("nome") == "Banco online"), {})
+    backup_item = next((item for item in status_sistema.get("itens", []) if item.get("nome") == "Backup"), {})
+    telegram_config = obter_configuracao_empresa(force=False)
+    token_ok = bool(normalizar_texto_campo(telegram_config.get("auto_teste_telegram_bot_token")))
+    chat_ok = bool(normalizar_texto_campo(telegram_config.get("auto_teste_telegram_chat_id")))
+
+    if not banco_item.get("ok"):
+        sugestoes.append({"titulo": "Banco indisponivel", "mensagem": "Validar a conexao do banco online agora.", "acao": "testar_banco"})
+    if any(item.get("classe") == "lento" for item in tempo_resposta):
+        lento = next(item for item in tempo_resposta if item.get("classe") == "lento")
+        sugestoes.append({"titulo": "Pagina demorou", "mensagem": f"{lento.get('rota')} carregou em {lento.get('ultimo_ms')} ms.", "acao": "limpar_caches"})
+    if not backup_item.get("ok"):
+        sugestoes.append({"titulo": "Backup falhou", "mensagem": "Gerar um backup de suporte antes de investigar.", "acao": "gerar_backup_suporte"})
+    if not (token_ok and chat_ok):
+        sugestoes.append({"titulo": "Telegram nao configurado", "mensagem": "Configure token e chat ID no Auto teste para receber alertas.", "acao": "registrar_incidente"})
+    if planilhas_erro:
+        sugestoes.append({"titulo": "Planilha com erro", "mensagem": f"{len(planilhas_erro)} planilha(s) ativa(s) com erro.", "acao": "desativar_planilhas_com_erro"})
+    if fluxos:
+        sugestoes.append({"titulo": "Atendimento duplicado suspeito", "mensagem": f"{len(fluxos)} placa(s) com duplicidade em andamento.", "acao": "marcar_fluxo_suspeito"})
+    if erros_abertos:
+        sugestoes.append({"titulo": "Erro 500 aberto", "mensagem": f"{len(erros_abertos)} erro(s) aguardando revisao.", "acao": "enviar_alerta_telegram"})
+    return sugestoes[:8]
+
+
 def enviar_alerta_telegram_auto_suporte(texto):
     config = obter_configuracao_empresa(force=True)
     token = normalizar_texto_campo(config.get("auto_teste_telegram_bot_token"))
@@ -16751,16 +16990,33 @@ def status_auto_suporte():
         [],
         "auto_suporte_fluxos",
     )
+    planilhas_erro = executar_com_fallback_producao(
+        listar_planilhas_com_erro_auto_suporte,
+        [],
+        "auto_suporte_planilhas_erro",
+    )
+    tempo_resposta = metricas_tempo_resposta_central_tecnica()
+    erros_abertos = listar_erros_producao(apenas_abertos=True, limite=8)
     falhas = list(status.get("resumo", {}).get("falhas") or [])
     if fluxos:
-        falhas.append("Fluxos duplicados")
+        falhas.append("Atendimento duplicado suspeito")
+    if planilhas_erro:
+        falhas.append("Planilha com erro")
+    if any(item.get("classe") == "lento" for item in tempo_resposta):
+        falhas.append("Pagina demorou")
+    if erros_abertos:
+        falhas.append("Erro 500 aberto")
 
     return {
         "ok": not falhas,
         "gerado_em": agora_iso(),
         "falhas": falhas,
         "ultimo_erro": dict(ULTIMO_ERRO_PRODUCAO),
+        "erros_abertos": erros_abertos,
         "fluxos_suspeitos": fluxos,
+        "planilhas_erro": planilhas_erro,
+        "tempo_resposta": tempo_resposta,
+        "sugestoes": montar_sugestoes_auto_suporte(status, fluxos, planilhas_erro, tempo_resposta, erros_abertos),
         "acoes": [
             {"id": chave, "label": label}
             for chave, label in ACOES_AUTO_SUPORTE.items()
@@ -16854,6 +17110,60 @@ def api_auto_suporte_acao():
     except Exception as erro:
         registrar_ultimo_erro_producao(erro, descricao="auto_suporte_acao")
         return jsonify({"ok": False, "erro": str(erro)}), 400
+
+
+@app.route("/configuracoes/desenvolvedor/erros/<erro_id>/resolver", methods=["POST"])
+def resolver_erro_central_tecnica(erro_id):
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente o desenvolvedor pode resolver erros da Central Tecnica.")
+        return redirect(destino_configuracoes("desenvolvedor"))
+
+    resolvido = marcar_erro_producao_resolvido(erro_id, usuario=session.get("usuario"))
+    if resolvido:
+        registrar_auditoria(
+            "resolveu_erro_producao",
+            "central_tecnica",
+            detalhes={"erro_id": erro_id},
+            usuario=resumo_usuario_logado(),
+        )
+        definir_feedback_configuracoes("sucesso", "Erro marcado como resolvido.")
+    else:
+        definir_feedback_configuracoes("erro", "Erro nao encontrado na Central Tecnica.")
+    return redirect(destino_configuracoes("desenvolvedor"))
+
+
+@app.route("/configuracoes/desenvolvedor/erros/<erro_id>/telegram", methods=["POST"])
+def enviar_erro_central_tecnica_telegram(erro_id):
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_desenvolvedor():
+        definir_feedback_configuracoes("erro", "Somente o desenvolvedor pode enviar erros da Central Tecnica.")
+        return redirect(destino_configuracoes("desenvolvedor"))
+
+    erro_id = normalizar_texto_campo(erro_id)
+    erro_item = next((item for item in carregar_erros_producao() if normalizar_texto_campo(item.get("id")) == erro_id), None)
+    if not erro_item:
+        definir_feedback_configuracoes("erro", "Erro nao encontrado para envio.")
+        return redirect(destino_configuracoes("desenvolvedor"))
+
+    texto = (
+        "Erro de producao Wagen Estetica\n"
+        f"Quando: {erro_item.get('quando')}\n"
+        f"Rota: {erro_item.get('path') or erro_item.get('endpoint')}\n"
+        f"Usuario: {erro_item.get('usuario') or '-'}\n"
+        f"Tipo: {erro_item.get('tipo')}\n"
+        f"Mensagem: {erro_item.get('mensagem')}\n"
+        f"Stack:\n{str(erro_item.get('stack') or '')[-1200:]}"
+    )
+    try:
+        enviar_alerta_telegram_auto_suporte(texto)
+        definir_feedback_configuracoes("sucesso", "Erro enviado para o Telegram.")
+    except Exception as erro:
+        registrar_ultimo_erro_producao(erro, descricao="central_erros_telegram")
+        definir_feedback_configuracoes("erro", f"Nao foi possivel enviar para o Telegram: {erro}")
+    return redirect(destino_configuracoes("desenvolvedor"))
 
 
 @app.route("/diagnostico")
@@ -17107,7 +17417,10 @@ def configuracoes(secao="meu-acesso"):
                 "banco": {"backend": "-", "conectado": False, "mensagem": str(erro), "tempo_ms": 0, "tabelas": [], "tabelas_ok": 0, "tabelas_falha": ["central_tecnica"]},
                 "rotas": [],
                 "caches": [],
-                "resumo": {"ok": False, "rotas_testadas": 0, "rotas_falha": 0, "rotas_lentas": 0, "caches_ativos": 0, "tabelas_ok": 0},
+                "tempo_resposta": metricas_tempo_resposta_central_tecnica(),
+                "erros_abertos": listar_erros_producao(apenas_abertos=True, limite=12),
+                "erros_recentes": listar_erros_producao(apenas_abertos=False, limite=12),
+                "resumo": {"ok": False, "rotas_testadas": 0, "rotas_falha": 0, "rotas_lentas": 0, "paginas_lentas": 0, "erros_abertos": 0, "caches_ativos": 0, "tabelas_ok": 0},
             }
 
     return render_template(
@@ -19052,8 +19365,12 @@ def servico():
     else:
         nova_prioridade = resultado + 1
 
-    cadastro_criado_agora = consumir_cadastro_novo_para_atendimento(placa)
-    perfil_cliente_atendimento = "NOVO" if cadastro_criado_agora else "RETORNO"
+    perfil_cliente_atendimento, motivo_perfil_cliente, atendimentos_anteriores = classificar_perfil_cliente_atendimento(
+        c,
+        empresa_id,
+        veiculo_id,
+        placa,
+    )
 
     # ðŸ”¥ INSERIR SERVIÃ‡O (NOVO MODELO)
     c.execute("""
@@ -19125,6 +19442,8 @@ def servico():
             "valor_adicional": valor_adicional,
             "valor_total": valor_total,
             "perfil_cliente_atendimento": perfil_cliente_atendimento,
+            "motivo_perfil_cliente": motivo_perfil_cliente,
+            "atendimentos_anteriores": atendimentos_anteriores,
             "entrega_prevista": entrega_prevista_iso,
             "fotos_entrada": entrada_salvas,
             "fotos_detalhe": detalhe_salvas,

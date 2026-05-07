@@ -34,6 +34,28 @@
         return falhas.map((falha) => `[WARN] ${falha}`).join("\n");
     }
 
+    function renderizarSugestoes(status) {
+        const sugestoes = Array.isArray(status.sugestoes) ? status.sugestoes : [];
+        if (!sugestoes.length) {
+            return null;
+        }
+        const bloco = criarElemento("div", "auto-support-suggestions");
+        bloco.appendChild(criarElemento("p", "auto-support-section-title", "Sugestoes seguras"));
+        sugestoes.forEach((item) => {
+            const card = criarElemento("div", "auto-support-suggestion");
+            card.appendChild(criarElemento("p", "auto-support-log-title", item.titulo || "Revisao sugerida"));
+            card.appendChild(criarElemento("p", "auto-support-log-message", item.mensagem || "Revisar este ponto."));
+            if (item.acao) {
+                const btn = criarElemento("button", "auto-support-mini-action", "Executar acao sugerida");
+                btn.type = "button";
+                btn.addEventListener("click", () => executarAcao(item.acao, item.titulo || "Acao sugerida"));
+                card.appendChild(btn);
+            }
+            bloco.appendChild(card);
+        });
+        return bloco;
+    }
+
     function adicionarLog(titulo, mensagem, ok) {
         estado.logs.unshift({
             titulo,
@@ -146,6 +168,11 @@
         statusBox.appendChild(criarElemento("p", "auto-support-message", status.mensagem || "AutoSuporte pronto para acoes seguras."));
         statusBox.appendChild(criarElemento("pre", "auto-support-terminal", textoFalhas(status)));
         body.appendChild(statusBox);
+
+        const sugestoes = renderizarSugestoes(status);
+        if (sugestoes) {
+            body.appendChild(sugestoes);
+        }
 
         const acoes = [
             ["limpar_caches", "Limpar caches"],

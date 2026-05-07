@@ -196,6 +196,27 @@
     margin-top: 12px;
 }
 
+.auto-support-suggestions {
+    margin-top: 12px;
+    display: grid;
+    gap: 8px;
+}
+
+.auto-support-section-title {
+    margin: 0;
+    color: #86efac;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    text-transform: uppercase;
+}
+
+.auto-support-suggestion {
+    border: 1px solid rgba(34, 197, 94, .24);
+    border-radius: 8px;
+    background: rgba(22, 101, 52, .14);
+    padding: 9px 10px;
+}
+
 .auto-support-action {
     border: 1px solid rgba(250, 204, 21, .34);
     border-radius: 8px;
@@ -211,6 +232,18 @@
 .auto-support-action:hover {
     border-color: rgba(250, 204, 21, .7);
     background: rgba(250, 204, 21, .18);
+}
+
+.auto-support-mini-action {
+    margin-top: 8px;
+    border: 1px solid rgba(34, 197, 94, .45);
+    border-radius: 8px;
+    background: rgba(34, 197, 94, .16);
+    color: #dcfce7;
+    padding: 7px 9px;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 12px;
 }
 
 .auto-support-log {

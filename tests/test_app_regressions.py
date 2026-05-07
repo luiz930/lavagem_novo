@@ -1266,6 +1266,32 @@ class AppRegressionTests(unittest.TestCase):
             self.assertFalse(app_module.consumir_cadastro_novo_para_atendimento("abc1234"))
             self.assertFalse(app_module.consumir_cadastro_novo_para_atendimento("XYZ9876"))
 
+    def test_classificar_perfil_cliente_forca_retorno_quando_ja_existe_atendimento(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute(
+            """
+            CREATE TABLE servicos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empresa_id INTEGER DEFAULT 1,
+                veiculo_id INTEGER
+            )
+            """
+        )
+        c.execute("INSERT INTO servicos (empresa_id, veiculo_id) VALUES (1, 10)")
+
+        with app_module.app.test_request_context("/"):
+            session["usuario"] = "admin"
+            app_module.registrar_cadastro_novo_para_atendimento("ABC1234")
+
+            perfil, motivo, anteriores = app_module.classificar_perfil_cliente_atendimento(c, 1, 10, "ABC1234")
+
+        self.assertEqual(perfil, "RETORNO")
+        self.assertEqual(anteriores, 1)
+        self.assertIn("atendimento anterior", motivo)
+        conn.close()
+
     def test_servico_bloqueia_atendimento_duplicado_sem_consumir_marcador_novo(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
