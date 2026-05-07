@@ -12,6 +12,7 @@ import mimetypes
 from zoneinfo import ZoneInfo
 import os
 import shutil
+import subprocess
 import time
 import hashlib
 import re
@@ -17045,6 +17046,7 @@ ACOES_AUTO_SUPORTE = {
     "testar_banco": "Testar banco",
     "gerar_backup_suporte": "Gerar backup de suporte",
     "desativar_planilhas_com_erro": "Pausar planilhas com erro",
+    "gerar_pacote_codex": "Gerar pacote Codex",
     "registrar_incidente": "Registrar incidente",
     "enviar_alerta_telegram": "Enviar alerta Telegram",
     "marcar_fluxo_suspeito": "Marcar fluxo suspeito",
@@ -17199,8 +17201,133 @@ def montar_sugestoes_auto_suporte(status_sistema, fluxos, planilhas_erro, tempo_
     if fluxos:
         sugestoes.append({"titulo": "Atendimento duplicado suspeito", "mensagem": f"{len(fluxos)} placa(s) com duplicidade em andamento.", "acao": "marcar_fluxo_suspeito"})
     if erros_abertos:
-        sugestoes.append({"titulo": "Erro 500 aberto", "mensagem": f"{len(erros_abertos)} erro(s) aguardando revisao.", "acao": "enviar_alerta_telegram"})
+        sugestoes.append({"titulo": "Erro 500 aberto", "mensagem": f"{len(erros_abertos)} erro(s) aguardando revisao. Gere o pacote e me envie no Codex.", "acao": "gerar_pacote_codex"})
     return sugestoes[:8]
+
+
+def executar_git_local_auto_suporte(*args):
+    try:
+        resultado = subprocess.run(
+            ["git", *args],
+            cwd=app.root_path,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=6,
+            check=False,
+        )
+    except Exception:
+        return ""
+    if resultado.returncode != 0:
+        return ""
+    return (resultado.stdout or "").strip()
+
+
+def montar_git_info_auto_suporte():
+    return {
+        "branch": executar_git_local_auto_suporte("branch", "--show-current"),
+        "commit": executar_git_local_auto_suporte("rev-parse", "--short", "HEAD"),
+        "commit_completo": executar_git_local_auto_suporte("rev-parse", "HEAD"),
+        "status": executar_git_local_auto_suporte("status", "--short"),
+        "ultimo_commit": executar_git_local_auto_suporte("log", "-1", "--pretty=format:%h %ad %s", "--date=iso"),
+    }
+
+
+def montar_pacote_codex_auto_suporte():
+    status_sistema = executar_com_fallback_producao(
+        montar_status_sistema_dono,
+        {"resumo": {"ok": False, "falhas": ["status_indisponivel"]}, "itens": []},
+        "pacote_codex_status",
+    )
+    banco = executar_com_fallback_producao(
+        obter_status_banco_online,
+        {"conectado": False, "mensagem": "Banco indisponivel.", "backend": "-"},
+        "pacote_codex_banco",
+    )
+    backup = executar_com_fallback_producao(
+        obter_status_backup_banco,
+        status_backup_banco_padrao(),
+        "pacote_codex_backup",
+    )
+    pacote = {
+        "tipo": "pacote_tecnico_codex",
+        "gerado_em": agora_iso(),
+        "instrucao_para_codex": (
+            "Analise este pacote tecnico, corrija o erro no projeto Flask, rode os testes, "
+            "faca commit e push no GitHub se a validacao passar."
+        ),
+        "ambiente": {
+            "versao_sistema": obter_versao_sistema(),
+            "app_version": APP_VERSION,
+            "host": request.host if has_request_context() else "",
+            "url": request.url if has_request_context() else "",
+            "usuario": session.get("usuario") if has_request_context() else "",
+            "empresa_id": empresa_atual_id() if has_request_context() else "",
+        },
+        "git": montar_git_info_auto_suporte(),
+        "ultimo_erro": dict(ULTIMO_ERRO_PRODUCAO),
+        "erros_abertos": listar_erros_producao(apenas_abertos=True, limite=8),
+        "tempo_resposta": metricas_tempo_resposta_central_tecnica(),
+        "status_sistema": status_sistema,
+        "banco": banco,
+        "backup": backup,
+        "fluxos_suspeitos": executar_com_fallback_producao(
+            detectar_fluxos_suspeitos_auto_suporte,
+            [],
+            "pacote_codex_fluxos",
+        ),
+        "planilhas_erro": executar_com_fallback_producao(
+            listar_planilhas_com_erro_auto_suporte,
+            [],
+            "pacote_codex_planilhas",
+        ),
+    }
+    pacote["texto_para_codex"] = formatar_pacote_codex_texto(pacote)
+    return pacote
+
+
+def formatar_pacote_codex_texto(pacote):
+    ultimo = pacote.get("ultimo_erro") or {}
+    git_info = pacote.get("git") or {}
+    linhas = [
+        "PACOTE TECNICO AUTOSUPORTE -> CODEX",
+        "",
+        pacote.get("instrucao_para_codex") or "",
+        "",
+        f"Gerado em: {pacote.get('gerado_em')}",
+        f"Versao: {pacote.get('ambiente', {}).get('versao_sistema')}",
+        f"Git: {git_info.get('branch')} @ {git_info.get('commit')}",
+        f"Host: {pacote.get('ambiente', {}).get('host')}",
+        f"Usuario: {pacote.get('ambiente', {}).get('usuario')}",
+        "",
+        "ULTIMO ERRO",
+        f"Rota: {ultimo.get('path') or ultimo.get('endpoint') or '-'}",
+        f"Tipo: {ultimo.get('tipo') or '-'}",
+        f"Mensagem: {ultimo.get('mensagem') or '-'}",
+        f"Quando: {ultimo.get('quando') or '-'}",
+        "",
+        "STACK RESUMIDO",
+        str(ultimo.get("stack") or "-")[-3500:],
+        "",
+        "ROTAS MONITORADAS",
+    ]
+    for item in pacote.get("tempo_resposta") or []:
+        linhas.append(
+            f"- {item.get('rota')}: {item.get('ultimo_ms')}ms, status {item.get('status') or '-'}, "
+            f"{item.get('tendencia_label') or item.get('tendencia') or '-'}"
+        )
+    linhas.extend(
+        [
+            "",
+            "STATUS SISTEMA",
+            json.dumps(pacote.get("status_sistema") or {}, ensure_ascii=False, indent=2, default=sanitizar_para_json),
+            "",
+            "ERROS ABERTOS",
+            json.dumps(pacote.get("erros_abertos") or [], ensure_ascii=False, indent=2, default=sanitizar_para_json),
+        ]
+    )
+    return "\n".join(linhas)
 
 
 def enviar_alerta_telegram_auto_suporte(texto):
@@ -17292,6 +17419,10 @@ def executar_acao_auto_suporte(acao, observacao=""):
         limpar_cache_clientes()
         detalhes["planilhas_pausadas"] = total
         mensagem = f"{total} planilha(s) com erro foram pausadas temporariamente."
+    elif acao == "gerar_pacote_codex":
+        pacote = montar_pacote_codex_auto_suporte()
+        detalhes["pacote_codex"] = pacote
+        mensagem = "Pacote tecnico gerado. Copie ou baixe o relatorio e envie aqui no Codex."
     elif acao == "registrar_incidente":
         mensagem = observacao or "Incidente registrado manualmente pelo AutoSuporte."
         severidade = "warning"
@@ -17310,7 +17441,15 @@ def executar_acao_auto_suporte(acao, observacao=""):
         )
         severidade = "warning" if fluxos else "info"
 
-    registrar_incidente_auto_suporte(ACOES_AUTO_SUPORTE[acao], mensagem, detalhes=detalhes, severidade=severidade)
+    detalhes_incidente = dict(detalhes)
+    if "pacote_codex" in detalhes_incidente:
+        pacote = detalhes_incidente.pop("pacote_codex") or {}
+        detalhes_incidente["pacote_codex_resumo"] = {
+            "gerado_em": pacote.get("gerado_em"),
+            "ultimo_erro": (pacote.get("ultimo_erro") or {}).get("id"),
+            "erros_abertos": len(pacote.get("erros_abertos") or []),
+        }
+    registrar_incidente_auto_suporte(ACOES_AUTO_SUPORTE[acao], mensagem, detalhes=detalhes_incidente, severidade=severidade)
     return {
         "ok": severidade != "error",
         "acao": acao,
@@ -17343,6 +17482,14 @@ def api_auto_suporte_acao():
     except Exception as erro:
         registrar_ultimo_erro_producao(erro, descricao="auto_suporte_acao")
         return jsonify({"ok": False, "erro": str(erro)}), 400
+
+
+@app.route("/api/auto-suporte/pacote-codex")
+def api_auto_suporte_pacote_codex():
+    if not usuario_pode_usar_auto_suporte():
+        return jsonify({"erro": "nao_autorizado"}), 403
+    pacote = montar_pacote_codex_auto_suporte()
+    return jsonify(json.loads(json.dumps({"ok": True, "pacote_codex": pacote}, ensure_ascii=False, default=sanitizar_para_json)))
 
 
 @app.route("/configuracoes/desenvolvedor/erros/<erro_id>/resolver", methods=["POST"])

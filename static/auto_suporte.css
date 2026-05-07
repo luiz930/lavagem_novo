@@ -202,6 +202,21 @@
     gap: 8px;
 }
 
+.auto-support-package {
+    margin-top: 12px;
+    border: 1px solid rgba(96, 165, 250, .28);
+    border-radius: 10px;
+    background: rgba(15, 23, 42, .72);
+    padding: 10px;
+}
+
+.auto-support-package-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+}
+
 .auto-support-section-title {
     margin: 0;
     color: #86efac;
@@ -246,6 +261,11 @@
     font-size: 12px;
 }
 
+.auto-support-mini-action:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
 .auto-support-log {
     margin-top: 12px;
     display: grid;
@@ -288,6 +308,10 @@
     }
 
     .auto-support-actions {
+        grid-template-columns: 1fr;
+    }
+
+    .auto-support-package-actions {
         grid-template-columns: 1fr;
     }
 }

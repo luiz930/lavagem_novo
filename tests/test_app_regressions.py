@@ -543,6 +543,7 @@ class AppRegressionTests(unittest.TestCase):
         with patch.object(app_module, "has_request_context", return_value=False), \
              patch.object(app_module, "run_site_checks", return_value=[resultado_check]), \
              patch.object(app_module, "build_site_monitor_report", return_value="relatorio ok"), \
+             patch.object(app_module, "check_auto_teste_banco_online", return_value=resultado_check), \
              patch.object(app_module, "resolver_chat_id_telegram", return_value="777"), \
              patch.object(app_module, "send_site_monitor_telegram_message") as enviar, \
              patch.object(app_module, "salvar_resultado_auto_teste_seguro") as salvar_resultado:
@@ -575,6 +576,7 @@ class AppRegressionTests(unittest.TestCase):
             with patch.object(app_module, "run_site_checks") as externo, \
                  patch.object(app_module, "run_site_checks_interno", return_value=[resultado_check]) as interno, \
                  patch.object(app_module, "build_site_monitor_report", return_value="relatorio ok"), \
+                 patch.object(app_module, "check_auto_teste_banco_online", return_value=resultado_check), \
                  patch.object(app_module, "send_site_monitor_telegram_message"), \
                  patch.object(app_module, "salvar_resultado_auto_teste_seguro"):
                 resultado = app_module.executar_auto_teste_site(config, enviar_telegram=True)
@@ -1569,6 +1571,52 @@ class AppRegressionTests(unittest.TestCase):
 
         self.assertEqual(resposta, "ok")
         self.assertTrue(contexto_mock.call_args.kwargs["detalhado"])
+
+    def test_auto_suporte_sugere_pacote_codex_para_erro_500(self):
+        sugestoes = app_module.montar_sugestoes_auto_suporte(
+            {"itens": []},
+            [],
+            [],
+            [],
+            [{"id": "erro-1", "path": "/clientes"}],
+        )
+
+        erro = next(item for item in sugestoes if item["titulo"] == "Erro 500 aberto")
+        self.assertEqual(erro["acao"], "gerar_pacote_codex")
+
+    def test_auto_suporte_gera_pacote_codex_sem_enviar_telegram(self):
+        pacote = {
+            "gerado_em": "2026-05-07T10:00:00",
+            "ultimo_erro": {"id": "erro-1", "path": "/clientes", "tipo": "RuntimeError"},
+            "erros_abertos": [{"id": "erro-1"}],
+            "texto_para_codex": "PACOTE",
+        }
+        with app_module.app.test_request_context("/api/auto-suporte/acao", method="POST"):
+            session["usuario"] = "admin"
+            session["empresa_id"] = 1
+            with patch.object(app_module, "montar_pacote_codex_auto_suporte", return_value=pacote), \
+                 patch.object(app_module, "enviar_alerta_telegram_auto_suporte") as telegram_mock, \
+                 patch.object(app_module, "status_auto_suporte", return_value={"ok": True}), \
+                 patch.object(app_module, "registrar_incidente_auto_suporte") as incidente_mock:
+                resultado = app_module.executar_acao_auto_suporte("gerar_pacote_codex")
+
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(resultado["detalhes"]["pacote_codex"]["texto_para_codex"], "PACOTE")
+        telegram_mock.assert_not_called()
+        incidente_detalhes = incidente_mock.call_args.kwargs["detalhes"]
+        self.assertNotIn("pacote_codex", incidente_detalhes)
+        self.assertEqual(incidente_detalhes["pacote_codex_resumo"]["ultimo_erro"], "erro-1")
+
+    def test_api_pacote_codex_retorna_relatorio_para_usuario_autorizado(self):
+        pacote = {"texto_para_codex": "PACOTE", "ultimo_erro": {}}
+        with app_module.app.test_request_context("/api/auto-suporte/pacote-codex"):
+            session["usuario"] = "admin"
+            with patch.object(app_module, "usuario_pode_usar_auto_suporte", return_value=True), \
+                 patch.object(app_module, "montar_pacote_codex_auto_suporte", return_value=pacote):
+                response = app_module.api_auto_suporte_pacote_codex()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["pacote_codex"]["texto_para_codex"], "PACOTE")
 
 
 if __name__ == "__main__":
