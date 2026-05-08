@@ -31,6 +31,7 @@
 .auto-support-bubble[data-alert="true"] {
     border-color: rgba(248, 113, 113, .95);
     box-shadow: 0 16px 42px rgba(0, 0, 0, .44), 0 0 32px rgba(248, 113, 113, .42);
+    animation: auto-support-alert-pulse 1.15s ease-in-out infinite;
 }
 
 .auto-support-bubble[data-level="alerta"] {
@@ -53,6 +54,31 @@
     border-radius: 999px;
     background: #ef4444;
     box-shadow: 0 0 0 4px rgba(239, 68, 68, .2);
+    animation: auto-support-dot-pulse 1.15s ease-in-out infinite;
+}
+
+@keyframes auto-support-alert-pulse {
+    0%,
+    100% {
+        transform: translateY(0) scale(1);
+        filter: saturate(1);
+    }
+    50% {
+        transform: translateY(-2px) scale(1.04);
+        filter: saturate(1.28);
+    }
+}
+
+@keyframes auto-support-dot-pulse {
+    0%,
+    100% {
+        opacity: .72;
+        transform: scale(.92);
+    }
+    50% {
+        opacity: 1;
+        transform: scale(1.18);
+    }
 }
 
 .auto-support-bot {
@@ -118,7 +144,7 @@
     position: absolute;
     right: 0;
     bottom: 72px;
-    width: min(380px, calc(100vw - 32px));
+    width: min(360px, calc(100vw - 32px));
     max-height: min(640px, calc(100vh - 110px));
     overflow: auto;
     border: 1px solid rgba(34, 197, 94, .45);
@@ -201,8 +227,8 @@
 
 .auto-support-actions {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
     margin-top: 12px;
 }
 
@@ -289,29 +315,34 @@
 .auto-support-package-actions {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
+    gap: 6px;
     margin-top: 8px;
 }
 
 .auto-support-quick-actions {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
     margin-top: 12px;
 }
 
 .auto-support-primary-action,
 .auto-support-primary-link {
-    border: 1px solid rgba(96, 165, 250, .38);
-    border-radius: 8px;
-    background: rgba(37, 99, 235, .18);
-    color: #dbeafe;
-    padding: 9px 10px;
+    min-height: 34px !important;
+    border: 1px solid rgba(96, 165, 250, .32) !important;
+    border-radius: 8px !important;
+    background: rgba(15, 23, 42, .76) !important;
+    color: #dbeafe !important;
+    padding: 7px 8px !important;
     cursor: pointer;
-    font-weight: 800;
-    font-size: 12px;
+    font-weight: 800 !important;
+    font-size: 11px !important;
+    line-height: 1.15 !important;
     text-align: center;
     text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .auto-support-primary-action:disabled {
@@ -335,15 +366,17 @@
 }
 
 .auto-support-action {
-    border: 1px solid rgba(250, 204, 21, .34);
-    border-radius: 8px;
-    background: rgba(250, 204, 21, .12);
-    color: #fef9c3;
-    padding: 9px 10px;
+    min-height: 32px !important;
+    border: 1px solid rgba(250, 204, 21, .28) !important;
+    border-radius: 8px !important;
+    background: rgba(15, 23, 42, .68) !important;
+    color: #fef9c3 !important;
+    padding: 6px 8px !important;
     cursor: pointer;
-    font-weight: 700;
-    font-size: 12px;
-    text-align: left;
+    font-weight: 750 !important;
+    font-size: 11px !important;
+    line-height: 1.15 !important;
+    text-align: center;
 }
 
 .auto-support-action:hover {
@@ -353,14 +386,16 @@
 
 .auto-support-mini-action {
     margin-top: 8px;
-    border: 1px solid rgba(34, 197, 94, .45);
-    border-radius: 8px;
-    background: rgba(34, 197, 94, .16);
-    color: #dcfce7;
-    padding: 7px 9px;
+    min-height: 30px !important;
+    border: 1px solid rgba(34, 197, 94, .38) !important;
+    border-radius: 8px !important;
+    background: rgba(34, 197, 94, .13) !important;
+    color: #dcfce7 !important;
+    padding: 6px 8px !important;
     cursor: pointer;
-    font-weight: 700;
-    font-size: 12px;
+    font-weight: 750 !important;
+    font-size: 11px !important;
+    line-height: 1.15 !important;
 }
 
 .auto-support-mini-action:disabled {
@@ -410,7 +445,7 @@
     }
 
     .auto-support-actions {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .auto-support-package-actions {
@@ -418,6 +453,6 @@
     }
 
     .auto-support-quick-actions {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }

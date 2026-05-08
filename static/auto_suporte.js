@@ -132,7 +132,7 @@
             const resposta = await fetch("/api/auto-suporte/status", { cache: "no-store" });
             if (!resposta.ok) return;
             estado.status = await resposta.json();
-            if ((abrirSeFalha || estado.status.auto_abrir) && estado.status && estado.status.ok === false && !hojeOcultado()) {
+            if (abrirSeFalha && estado.status && estado.status.ok === false && !hojeOcultado()) {
                 abrirPainel();
             } else {
                 renderizar();
@@ -322,12 +322,12 @@
         corrigir.type = "button";
         corrigir.disabled = !primeiraSugestao;
         corrigir.addEventListener("click", () => primeiraSugestao && executarAcao(primeiraSugestao.acao, primeiraSugestao.titulo || "Corrigir agora"));
-        const pacote = criarElemento("button", "auto-support-primary-action", "Gerar pacote para Codex");
+        const pacote = criarElemento("button", "auto-support-primary-action", "Pacote Codex");
         pacote.type = "button";
         pacote.addEventListener("click", carregarPacoteCodex);
-        const central = criarElemento("a", "auto-support-primary-link", "Abrir Central Tecnica");
+        const central = criarElemento("a", "auto-support-primary-link", "Central");
         central.href = "/configuracoes?aba=desenvolvedor";
-        const ocultar = criarElemento("button", "auto-support-primary-action", "Ocultar por hoje");
+        const ocultar = criarElemento("button", "auto-support-primary-action", "Silenciar hoje");
         ocultar.type = "button";
         ocultar.addEventListener("click", ocultarPorHoje);
         atalhos.appendChild(corrigir);
@@ -337,22 +337,22 @@
         body.appendChild(atalhos);
 
         const acoes = [
-            ["limpar_caches", "Limpar caches"],
-            ["validar_ambiente", "Validar ambiente"],
-            ["testar_banco", "Testar banco"],
-            ["testar_backup", "Testar backup"],
-            ["testar_telegram", "Testar Telegram"],
-            ["revalidar_pwa", "Revalidar PWA"],
+            ["limpar_caches", "Caches"],
+            ["validar_ambiente", "Ambiente"],
+            ["testar_banco", "Banco"],
+            ["testar_backup", "Backup"],
+            ["testar_telegram", "Telegram"],
+            ["revalidar_pwa", "PWA"],
             ["gerar_backup_suporte", "Backup suporte"],
             ["desativar_planilhas_com_erro", "Pausar planilhas"],
-            ["corrigir_classificacao_clientes", "Corrigir novo/retorno"],
-            ["limpar_erros_resolvidos", "Limpar erros"],
+            ["corrigir_classificacao_clientes", "Novo/retorno"],
+            ["limpar_erros_resolvidos", "Erros resolvidos"],
             ["limpar_todos_erros", "Limpar todos"],
             ["gerar_pacote_codex", "Pacote Codex"],
-            ["enviar_relatorio_telegram", "Relatorio Telegram"],
-            ["marcar_fluxo_suspeito", "Fluxos suspeitos"],
-            ["registrar_incidente", "Registrar incidente"],
-            ["enviar_alerta_telegram", "Alerta Telegram"],
+            ["enviar_relatorio_telegram", "Relatorio"],
+            ["marcar_fluxo_suspeito", "Fluxos"],
+            ["registrar_incidente", "Incidente"],
+            ["enviar_alerta_telegram", "Alerta"],
         ];
         const actions = criarElemento("div", "auto-support-actions");
         acoes.forEach(([acao, label]) => {
