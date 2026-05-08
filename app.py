@@ -16505,6 +16505,26 @@ def limpar_erros_producao_resolvidos():
         return removidos
 
 
+def limpar_todos_erros_producao(usuario=""):
+    with ERROS_PRODUCAO_LOCK:
+        erros = carregar_erros_producao()
+        removidos = len(erros)
+        if removidos:
+            salvar_erros_producao([])
+    if removidos:
+        registrar_historico_auto_suporte(
+            "limpeza_erros",
+            "Erros limpos",
+            f"{removidos} erro(s) removido(s) da Central de erros.",
+            severidade="info",
+            detalhes={
+                "removidos": removidos,
+                "usuario": normalizar_texto_campo(usuario),
+            },
+        )
+    return removidos
+
+
 def registrar_ultimo_erro_producao(erro, descricao=""):
     registro = montar_registro_erro_producao(erro, descricao=descricao)
     ULTIMO_ERRO_PRODUCAO.update(registro)
@@ -17127,6 +17147,7 @@ ACOES_AUTO_SUPORTE = {
     "desativar_planilhas_com_erro": "Pausar planilhas com erro",
     "corrigir_classificacao_clientes": "Corrigir classificacao novo/retorno",
     "limpar_erros_resolvidos": "Limpar erros resolvidos",
+    "limpar_todos_erros": "Limpar todos os erros",
     "gerar_pacote_codex": "Gerar pacote Codex",
     "enviar_relatorio_telegram": "Enviar relatorio Telegram",
     "registrar_incidente": "Registrar incidente",
@@ -18096,6 +18117,10 @@ def executar_acao_auto_suporte(acao, observacao=""):
         total = limpar_erros_producao_resolvidos()
         detalhes["erros_removidos"] = total
         mensagem = f"{total} erro(s) resolvido(s) foram removido(s) da Central de erros."
+    elif acao == "limpar_todos_erros":
+        total = limpar_todos_erros_producao(usuario=session.get("usuario") if has_request_context() else "")
+        detalhes["erros_removidos"] = total
+        mensagem = f"{total} erro(s) foram limpo(s) da Central de erros."
     elif acao == "gerar_pacote_codex":
         pacote = montar_pacote_codex_auto_suporte()
         detalhes["pacote_codex"] = pacote

@@ -82,6 +82,11 @@
         </form>
         <form method="post" action="/auto-suporte/acao">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="acao" value="limpar_todos_erros">
+            <button type="submit" class="button-danger">Limpar erros</button>
+        </form>
+        <form method="post" action="/auto-suporte/acao">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="acao" value="corrigir_classificacao_clientes">
             <button type="submit">Corrigir novo/retorno</button>
         </form>

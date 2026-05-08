@@ -347,6 +347,7 @@
             ["desativar_planilhas_com_erro", "Pausar planilhas"],
             ["corrigir_classificacao_clientes", "Corrigir novo/retorno"],
             ["limpar_erros_resolvidos", "Limpar erros"],
+            ["limpar_todos_erros", "Limpar todos"],
             ["gerar_pacote_codex", "Pacote Codex"],
             ["enviar_relatorio_telegram", "Relatorio Telegram"],
             ["marcar_fluxo_suspeito", "Fluxos suspeitos"],

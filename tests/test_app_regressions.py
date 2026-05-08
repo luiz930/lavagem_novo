@@ -1792,6 +1792,30 @@ class AppRegressionTests(unittest.TestCase):
             self.assertEqual(resultado["detalhes"]["erros_removidos"], 1)
             self.assertEqual([item["id"] for item in erros_restantes], ["aberto"])
 
+    def test_auto_suporte_acao_limpa_todos_os_erros(self):
+        with tempfile.TemporaryDirectory(prefix="auto_suporte_limpa_todos_") as pasta:
+            caminho_erros = os.path.join(pasta, "erros.json")
+            caminho_historico = os.path.join(pasta, "historico.json")
+            erros = [
+                {"id": "aberto", "resolvido": False},
+                {"id": "resolvido", "resolvido": True},
+            ]
+            with app_module.app.test_request_context("/auto-suporte/acao"):
+                session["usuario"] = "admin"
+                with patch.object(app_module, "ERROS_PRODUCAO_ARQUIVO", caminho_erros), \
+                     patch.object(app_module, "AUTO_SUPORTE_HISTORICO_ARQUIVO", caminho_historico), \
+                     patch.object(app_module, "registrar_incidente_auto_suporte"), \
+                     patch.object(app_module, "status_auto_suporte", return_value={"ok": True, "falhas": []}):
+                    app_module.salvar_erros_producao(erros)
+                    resultado = app_module.executar_acao_auto_suporte("limpar_todos_erros")
+                    erros_restantes = app_module.carregar_erros_producao()
+                    historico = app_module.listar_historico_auto_suporte(limite=5)
+
+            self.assertTrue(resultado["ok"])
+            self.assertEqual(resultado["detalhes"]["erros_removidos"], 2)
+            self.assertEqual(erros_restantes, [])
+            self.assertEqual(historico[0]["evento"], "limpeza_erros")
+
     def test_auto_suporte_detecta_inconsistencias_de_negocio(self):
         class CursorFake:
             def __init__(self):
