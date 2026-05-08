@@ -19729,7 +19729,16 @@ def atualizar_retorno_cliente():
         definir_feedback_retornos("erro", "Informe a placa para atualizar o retorno.")
         return redirect(retorno_url)
 
-    estado_atual = carregar_estados_retornos([placa]).get(placa, {})
+    try:
+        estado_atual = carregar_estados_retornos([placa]).get(placa, {})
+    except Exception as erro:
+        registrar_ultimo_erro_producao(erro, descricao="retornos_carregar_estado")
+        definir_feedback_retornos(
+            "erro",
+            "Nao foi possivel atualizar o retorno agora. O banco online ficou indisponivel por instantes; tente novamente.",
+        )
+        return redirect(retorno_url)
+
     status_atual = normalizar_status_retorno(estado_atual.get("status"))
     observacao_atual = normalizar_texto_campo(estado_atual.get("observacao"))
     observacao_form = normalizar_texto_campo(request.form.get("observacao"))
@@ -19807,28 +19816,40 @@ def atualizar_retorno_cliente():
         definir_feedback_retornos("erro", "Acao de retorno nao reconhecida.")
         return redirect(retorno_url)
 
-    upsert_retorno_cliente(
-        placa,
-        payload["status"],
-        observacao=payload["observacao"],
-        proximo_contato_em=payload["proximo_contato_em"],
-        ultimo_contato_em=payload["ultimo_contato_em"],
-        ultima_acao=payload["ultima_acao"],
-        reagendado_dias=payload["reagendado_dias"],
-        usuario=resumo_usuario_logado(),
-    )
-    registrar_auditoria(
-        acao_auditoria,
-        "retorno",
-        placa=placa,
-        detalhes={
-            "status": payload["status"],
-            "observacao": payload["observacao"],
-            "proximo_contato_em": payload["proximo_contato_em"],
-            "ultimo_contato_em": payload["ultimo_contato_em"],
-            "reagendado_dias": payload["reagendado_dias"],
-        },
-    )
+    try:
+        upsert_retorno_cliente(
+            placa,
+            payload["status"],
+            observacao=payload["observacao"],
+            proximo_contato_em=payload["proximo_contato_em"],
+            ultimo_contato_em=payload["ultimo_contato_em"],
+            ultima_acao=payload["ultima_acao"],
+            reagendado_dias=payload["reagendado_dias"],
+            usuario=resumo_usuario_logado(),
+        )
+    except Exception as erro:
+        registrar_ultimo_erro_producao(erro, descricao="retornos_atualizar")
+        definir_feedback_retornos(
+            "erro",
+            "Nao foi possivel salvar o retorno agora. O banco online ficou indisponivel por instantes; tente novamente.",
+        )
+        return redirect(retorno_url)
+
+    try:
+        registrar_auditoria(
+            acao_auditoria,
+            "retorno",
+            placa=placa,
+            detalhes={
+                "status": payload["status"],
+                "observacao": payload["observacao"],
+                "proximo_contato_em": payload["proximo_contato_em"],
+                "ultimo_contato_em": payload["ultimo_contato_em"],
+                "reagendado_dias": payload["reagendado_dias"],
+            },
+        )
+    except Exception as erro:
+        registrar_ultimo_erro_producao(erro, descricao="retornos_auditoria")
     definir_feedback_retornos("sucesso", mensagem_sucesso)
     return redirect(retorno_url)
 

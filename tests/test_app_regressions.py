@@ -1868,6 +1868,45 @@ class AppRegressionTests(unittest.TestCase):
         caches_mock.assert_called_once()
         clientes_mock.assert_called_once()
 
+    def test_retornos_atualizar_mostra_feedback_quando_banco_falha_ao_ler(self):
+        with app_module.app.test_request_context(
+            "/retornos/atualizar",
+            method="POST",
+            data={"placa": "ABC1234", "acao": "sem_interesse", "retorno_url": "/retornos"},
+        ):
+            session["usuario"] = "admin"
+            with patch.object(app_module, "sincronizar_sessao_usuario"), \
+                 patch.object(app_module, "carregar_estados_retornos", side_effect=RuntimeError("banco offline")), \
+                 patch.object(app_module, "registrar_ultimo_erro_producao") as erro_mock:
+                response = app_module.atualizar_retorno_cliente()
+
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.location, "/retornos")
+            self.assertEqual(session["retornos_feedback"]["tipo"], "erro")
+            self.assertIn("Nao foi possivel atualizar", session["retornos_feedback"]["mensagem"])
+            erro_mock.assert_called_once()
+
+    def test_retornos_atualizar_nao_quebra_quando_auditoria_falha(self):
+        with app_module.app.test_request_context(
+            "/retornos/atualizar",
+            method="POST",
+            data={"placa": "ABC1234", "acao": "sem_interesse", "retorno_url": "/retornos"},
+        ):
+            session["usuario"] = "admin"
+            with patch.object(app_module, "sincronizar_sessao_usuario"), \
+                 patch.object(app_module, "carregar_estados_retornos", return_value={"ABC1234": {"status": "pendente"}}), \
+                 patch.object(app_module, "upsert_retorno_cliente") as upsert_mock, \
+                 patch.object(app_module, "registrar_auditoria", side_effect=RuntimeError("auditoria offline")), \
+                 patch.object(app_module, "registrar_ultimo_erro_producao") as erro_mock:
+                response = app_module.atualizar_retorno_cliente()
+
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.location, "/retornos")
+            self.assertEqual(session["retornos_feedback"]["tipo"], "sucesso")
+            self.assertIn("sem interesse", session["retornos_feedback"]["mensagem"])
+            upsert_mock.assert_called_once()
+            erro_mock.assert_called_once()
+
     def test_pagina_auto_suporte_renderiza_painel_proprio(self):
         status_auto = {
             "ok": True,
