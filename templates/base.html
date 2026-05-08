@@ -570,17 +570,13 @@ function toggleSidebar() {
 let baseSyncToken = "";
 let baseSyncExecutando = false;
 let baseSyncIntervalHandle = null;
-const baseSyncIntervalPadrao = 90;
+const baseSyncIntervalPadrao = 600;
 const baseSyncIntervalChave = "wagen_sync_interval_seconds";
 const baseUsaSnapshotHome = window.location.pathname === "/";
 
 function baseObterIntervaloSincronia() {
-    const valorArmazenado = Number(localStorage.getItem(baseSyncIntervalChave) || baseSyncIntervalPadrao);
-    if (!Number.isFinite(valorArmazenado) || valorArmazenado <= 0) {
-        return baseSyncIntervalPadrao;
-    }
-
-    return Math.max(30, Math.min(240, Math.round(valorArmazenado)));
+    localStorage.setItem(baseSyncIntervalChave, String(baseSyncIntervalPadrao));
+    return baseSyncIntervalPadrao;
 }
 
 function baseReiniciarAgendamentoSincronia() {

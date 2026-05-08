@@ -683,22 +683,23 @@
         <div class="top-spacing">
             <p class="pill-label">Sincronizacao</p>
             <h3 class="section-title top-spacing">Atualizacao automatica</h3>
-            <p class="muted-text">Defina em quantos segundos a tela confere se o banco online mudou e recarrega quando houver nova gravacao.</p>
+            <p class="muted-text">A tela confere se o banco online mudou a cada 600 segundos para evitar travamentos e recarregamentos excessivos.</p>
 
             <div class="field-grid top-spacing">
                 <input
                     type="number"
-                    min="5"
-                    max="120"
+                    min="600"
+                    max="600"
                     step="1"
-                    value="12"
+                    value="600"
+                    readonly
                     data-sync-interval-input
                 >
-                <button type="button" data-sync-interval-apply>Aplicar intervalo</button>
+                <button type="button" data-sync-interval-apply>Fixar 600 segundos</button>
                 <button type="button" data-sync-interval-now>Atualizar agora</button>
             </div>
 
-            <p class="muted-text" data-sync-interval-feedback>Atualizacao automatica ajustada para 12 segundos.</p>
+            <p class="muted-text" data-sync-interval-feedback>Atualizacao automatica travada em 600 segundos.</p>
         </div>
     </div>
 
@@ -1264,15 +1265,11 @@ const syncIntervalApply = document.querySelector("[data-sync-interval-apply]");
 const syncIntervalNow = document.querySelector("[data-sync-interval-now]");
 const syncIntervalFeedback = document.querySelector("[data-sync-interval-feedback]");
 const SYNC_INTERVAL_KEY = "wagen_sync_interval_seconds";
-const SYNC_INTERVAL_PADRAO = 60;
+const SYNC_INTERVAL_PADRAO = 600;
 
 function lerIntervaloSincroniaSalvo() {
-    const valor = Number(localStorage.getItem(SYNC_INTERVAL_KEY) || SYNC_INTERVAL_PADRAO);
-    if (!Number.isFinite(valor) || valor <= 0) {
-        return SYNC_INTERVAL_PADRAO;
-    }
-
-    return Math.max(20, Math.min(180, Math.round(valor)));
+    localStorage.setItem(SYNC_INTERVAL_KEY, String(SYNC_INTERVAL_PADRAO));
+    return SYNC_INTERVAL_PADRAO;
 }
 
 function atualizarFeedbackSincronia(texto) {
@@ -1282,14 +1279,14 @@ function atualizarFeedbackSincronia(texto) {
 }
 
 function aplicarIntervaloSincronia(segundos) {
-    const valor = Math.max(20, Math.min(180, Math.round(Number(segundos) || SYNC_INTERVAL_PADRAO)));
+    const valor = SYNC_INTERVAL_PADRAO;
     localStorage.setItem(SYNC_INTERVAL_KEY, String(valor));
 
     if (syncIntervalInput) {
         syncIntervalInput.value = String(valor);
     }
 
-    atualizarFeedbackSincronia(`Atualizacao automatica ajustada para ${valor} segundos.`);
+    atualizarFeedbackSincronia(`Atualizacao automatica travada em ${valor} segundos.`);
 
     if (typeof window.reiniciarSincroniaBancoBase === "function") {
         window.reiniciarSincroniaBancoBase();
