@@ -1729,6 +1729,7 @@ class AppRegressionTests(unittest.TestCase):
                          patch.object(app_module, "obter_status_banco_online", return_value={"conectado": True}), \
                          patch.object(app_module, "obter_status_backup_banco", return_value={"ok": True}), \
                          patch.object(app_module, "metricas_tempo_resposta_central_tecnica", return_value=[]), \
+                         patch.object(app_module, "detectar_inconsistencias_negocio_auto_suporte", return_value=[]), \
                          patch.object(app_module, "detectar_fluxos_suspeitos_auto_suporte", return_value=[]), \
                          patch.object(app_module, "listar_planilhas_com_erro_auto_suporte", return_value=[]):
                         pacote = app_module.montar_pacote_codex_auto_suporte()
@@ -1762,6 +1763,7 @@ class AppRegressionTests(unittest.TestCase):
                  patch.object(app_module, "obter_configuracao_empresa", return_value={"auto_teste_telegram_bot_token": "x", "auto_teste_telegram_chat_id": "1"}), \
                  patch.object(app_module, "detectar_fluxos_suspeitos_auto_suporte", return_value=[]), \
                  patch.object(app_module, "listar_planilhas_com_erro_auto_suporte", return_value=[]), \
+                 patch.object(app_module, "detectar_inconsistencias_negocio_auto_suporte", return_value=[]), \
                  patch.object(app_module, "metricas_tempo_resposta_central_tecnica", return_value=[]):
                 with app_module.app.test_request_context("/api/auto-suporte/status"):
                     session["usuario"] = "admin"
@@ -1789,6 +1791,101 @@ class AppRegressionTests(unittest.TestCase):
             self.assertTrue(resultado["ok"])
             self.assertEqual(resultado["detalhes"]["erros_removidos"], 1)
             self.assertEqual([item["id"] for item in erros_restantes], ["aberto"])
+
+    def test_auto_suporte_detecta_inconsistencias_de_negocio(self):
+        class CursorFake:
+            def __init__(self):
+                self.calls = 0
+
+            def execute(self, sql, params=None):
+                self.calls += 1
+
+            def fetchone(self):
+                return [1 if self.calls in {1, 3, 7} else 0]
+
+        class ConnFake:
+            def __init__(self):
+                self.cursor_fake = CursorFake()
+
+            def cursor(self):
+                return self.cursor_fake
+
+            def close(self):
+                return None
+
+        with app_module.app.test_request_context("/auto-suporte"):
+            session["empresa_id"] = 1
+            with patch.object(app_module, "conectar", return_value=ConnFake()):
+                inconsistencias = app_module.detectar_inconsistencias_negocio_auto_suporte()
+
+        ids = {item["id"] for item in inconsistencias}
+        self.assertIn("servico_sem_veiculo", ids)
+        self.assertIn("novo_com_historico", ids)
+        self.assertIn("planilha_sincronizando_ha_muito_tempo", ids)
+
+    def test_pagina_auto_suporte_renderiza_painel_proprio(self):
+        status_auto = {
+            "ok": True,
+            "gerado_em": "2026-05-08T10:00:00",
+            "diagnostico": {
+                "nivel": "info",
+                "label": "Informativo",
+                "titulo": "Tudo operacional",
+                "frase": "Sem incidentes.",
+                "itens": [],
+            },
+            "erros_abertos": [],
+            "inconsistencias_negocio": [],
+            "sugestoes": [],
+        }
+        status_sistema = {
+            "gerado_em": "2026-05-08T10:00:00",
+            "resumo": {"ok": True, "falhas": []},
+            "itens": [
+                {"nome": "Banco online", "ok": True, "valor": "Ativo", "detalhe": "OK"},
+                {"nome": "Backup", "ok": True, "valor": "Hoje", "detalhe": "OK"},
+                {"nome": "PWA instalado", "ok": True, "valor": "Pronto", "detalhe": "OK"},
+                {"nome": "Licenca", "ok": True, "valor": "Business", "detalhe": "OK"},
+                {"nome": "Bot Telegram", "ok": True, "valor": "Ativo", "detalhe": "OK"},
+            ],
+            "ultimo_erro": {},
+        }
+        with app_module.app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["usuario"] = "admin"
+                sess["usuario_perfil"] = "admin"
+                sess["empresa_id"] = 1
+                sess["senha_alteracao_obrigatoria"] = False
+            with patch.object(app_module, "usuario_pode_usar_auto_suporte", return_value=True), \
+                 patch.object(app_module, "usuario_desenvolvedor", return_value=True), \
+                 patch.object(app_module, "sincronizar_sessao_usuario"), \
+                 patch.object(app_module, "status_auto_suporte", return_value=status_auto), \
+                 patch.object(app_module, "montar_status_sistema_dono", return_value=status_sistema), \
+                 patch.object(app_module, "listar_historico_auto_suporte", return_value=[]):
+                response = client.get("/auto-suporte")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("AutoSuporte", html)
+        self.assertIn("Saude do sistema para o dono", html)
+        self.assertIn("Modo suporte remoto", html)
+
+    def test_fluxos_criticos_smoke_login_pwa_auto_suporte(self):
+        regras = {str(rule) for rule in app_module.app.url_map.iter_rules()}
+        self.assertIn("/login", regras)
+        self.assertIn("/", regras)
+        self.assertIn("/clientes", regras)
+        self.assertIn("/auto-suporte", regras)
+        self.assertIn("/site.webmanifest", regras)
+        self.assertIn("/sw.js", regras)
+        self.assertIn("/api/pwa/status", regras)
+
+        with app_module.app.test_client() as client:
+            self.assertEqual(client.get("/login").status_code, 200)
+            self.assertEqual(client.get("/site.webmanifest").status_code, 200)
+            self.assertEqual(client.get("/sw.js").status_code, 200)
+            self.assertEqual(client.get("/api/pwa/status").status_code, 200)
+            self.assertEqual(client.get("/clientes").status_code, 302)
 
 
 if __name__ == "__main__":

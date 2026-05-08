@@ -7778,6 +7778,13 @@ PAGINAS_MENU_CONFIGURAVEIS = [
         "endpoints": {"pagina_status_sistema", "status_sistema_json"},
     },
     {
+        "id": "auto_suporte",
+        "grupo": "Apoio / Administracao",
+        "titulo": "AutoSuporte",
+        "descricao": "Central do bot, historico, diagnostico inteligente e reparos seguros.",
+        "endpoints": {"pagina_auto_suporte", "auto_suporte_json", "pagina_auto_suporte_acao", "api_auto_suporte_status", "api_auto_suporte_acao", "api_auto_suporte_pacote_codex"},
+    },
+    {
         "id": "configuracoes_site",
         "grupo": "Apoio / Administracao",
         "titulo": "Configuracoes do site",
@@ -17302,6 +17309,172 @@ def listar_planilhas_com_erro_auto_suporte(limite=6):
         conn.close()
 
 
+def contar_query_auto_suporte(cursor, sql, params=()):
+    cursor.execute(sql, params)
+    row = cursor.fetchone()
+    if not row:
+        return 0
+    try:
+        return int(row[0] or 0)
+    except Exception:
+        return 0
+
+
+def detectar_inconsistencias_negocio_auto_suporte():
+    empresa_id = empresa_atual_id()
+    limite_sync = (agora() - timedelta(hours=1)).isoformat(timespec="seconds")
+    checks = [
+        {
+            "id": "servico_sem_veiculo",
+            "titulo": "Servico sem veiculo",
+            "mensagem": "Atendimentos sem veiculo vinculado podem quebrar painel, fotos e historico.",
+            "acao": "gerar_pacote_codex",
+            "sql": """
+                SELECT COUNT(*)
+                FROM servicos
+                LEFT JOIN veiculos ON veiculos.id=servicos.veiculo_id AND veiculos.empresa_id=servicos.empresa_id
+                WHERE servicos.empresa_id=? AND servicos.veiculo_id IS NOT NULL AND veiculos.id IS NULL
+            """,
+            "params": (empresa_id,),
+        },
+        {
+            "id": "veiculo_sem_cliente",
+            "titulo": "Veiculo sem cliente",
+            "mensagem": "Veiculos sem cliente dificultam identificar novo cadastro ou retorno.",
+            "acao": "gerar_pacote_codex",
+            "sql": """
+                SELECT COUNT(*)
+                FROM veiculos
+                LEFT JOIN clientes ON clientes.id=veiculos.cliente_id AND clientes.empresa_id=veiculos.empresa_id
+                WHERE veiculos.empresa_id=? AND veiculos.cliente_id IS NOT NULL AND clientes.id IS NULL
+            """,
+            "params": (empresa_id,),
+        },
+        {
+            "id": "novo_com_historico",
+            "titulo": "Cliente novo contado com historico",
+            "mensagem": "Atendimento marcado como NOVO mesmo com servico anterior para o mesmo veiculo.",
+            "acao": "marcar_fluxo_suspeito",
+            "sql": """
+                SELECT COUNT(*)
+                FROM servicos atual
+                WHERE atual.empresa_id=?
+                  AND UPPER(COALESCE(atual.perfil_cliente_atendimento, ''))='NOVO'
+                  AND atual.veiculo_id IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1 FROM servicos anterior
+                      WHERE anterior.empresa_id=atual.empresa_id
+                        AND anterior.veiculo_id=atual.veiculo_id
+                        AND anterior.id<>atual.id
+                        AND COALESCE(anterior.entrada, '') < COALESCE(atual.entrada, '')
+                  )
+            """,
+            "params": (empresa_id,),
+        },
+        {
+            "id": "retorno_sem_historico",
+            "titulo": "Retorno sem historico",
+            "mensagem": "Atendimento marcado como RETORNO sem servico anterior para o veiculo.",
+            "acao": "marcar_fluxo_suspeito",
+            "sql": """
+                SELECT COUNT(*)
+                FROM servicos atual
+                WHERE atual.empresa_id=?
+                  AND UPPER(COALESCE(atual.perfil_cliente_atendimento, ''))='RETORNO'
+                  AND atual.veiculo_id IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM servicos anterior
+                      WHERE anterior.empresa_id=atual.empresa_id
+                        AND anterior.veiculo_id=atual.veiculo_id
+                        AND anterior.id<>atual.id
+                        AND COALESCE(anterior.entrada, '') < COALESCE(atual.entrada, '')
+                  )
+            """,
+            "params": (empresa_id,),
+        },
+        {
+            "id": "orcamento_aprovado_sem_servico",
+            "titulo": "Orcamento aprovado sem atendimento",
+            "mensagem": "Orcamentos aprovados sem atendimento para a mesma placa podem indicar fluxo comercial incompleto.",
+            "acao": "gerar_pacote_codex",
+            "sql": """
+                SELECT COUNT(*)
+                FROM orcamentos
+                WHERE empresa_id=?
+                  AND UPPER(COALESCE(status, '')) IN ('APROVADO', 'APROVADA')
+                  AND COALESCE(TRIM(placa), '')<>''
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM servicos
+                      JOIN veiculos ON veiculos.id=servicos.veiculo_id AND veiculos.empresa_id=servicos.empresa_id
+                      WHERE servicos.empresa_id=orcamentos.empresa_id
+                        AND UPPER(TRIM(veiculos.placa))=UPPER(TRIM(orcamentos.placa))
+                  )
+            """,
+            "params": (empresa_id,),
+        },
+        {
+            "id": "nota_sem_atendimento",
+            "titulo": "Nota fiscal sem atendimento",
+            "mensagem": "Notas com placa sem atendimento vinculado devem ser revisadas antes do suporte fiscal.",
+            "acao": "gerar_pacote_codex",
+            "sql": """
+                SELECT COUNT(*)
+                FROM notas_fiscais
+                WHERE empresa_id=?
+                  AND COALESCE(TRIM(placa), '')<>''
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM servicos
+                      JOIN veiculos ON veiculos.id=servicos.veiculo_id AND veiculos.empresa_id=servicos.empresa_id
+                      WHERE servicos.empresa_id=notas_fiscais.empresa_id
+                        AND UPPER(TRIM(veiculos.placa))=UPPER(TRIM(notas_fiscais.placa))
+                  )
+            """,
+            "params": (empresa_id,),
+        },
+        {
+            "id": "planilha_sincronizando_ha_muito_tempo",
+            "titulo": "Planilha sincronizando ha muito tempo",
+            "mensagem": "Sincronizacao presa por mais de 1 hora pode deixar clientes desatualizados.",
+            "acao": "desativar_planilhas_com_erro",
+            "sql": """
+                SELECT COUNT(*)
+                FROM sincronizacoes_clientes
+                WHERE empresa_id=?
+                  AND ativo=1
+                  AND COALESCE(excluido_em, '')=''
+                  AND UPPER(COALESCE(ultimo_status, '')) IN ('SINCRONIZANDO', 'EM_ANDAMENTO', 'EM ANDAMENTO')
+                  AND COALESCE(atualizado_em, criado_em, '') < ?
+            """,
+            "params": (empresa_id, limite_sync),
+        },
+    ]
+
+    conn = conectar()
+    try:
+        c = conn.cursor()
+        inconsistencias = []
+        for check in checks:
+            try:
+                total = contar_query_auto_suporte(c, check["sql"], check["params"])
+            except Exception as erro:
+                registrar_ultimo_erro_producao(erro, descricao=f"auto_suporte_negocio_{check['id']}")
+                total = 0
+            if total > 0:
+                inconsistencias.append({
+                    "id": check["id"],
+                    "titulo": check["titulo"],
+                    "mensagem": check["mensagem"],
+                    "acao": check["acao"],
+                    "total": total,
+                    "severidade": "alerta",
+                })
+        return inconsistencias
+    finally:
+        conn.close()
+
+
 def montar_item_diagnostico_auto_suporte(nivel, titulo, mensagem, acao="", detalhes=None):
     nivel = normalizar_texto_campo(nivel) or "info"
     ordem = {"critico": 4, "alerta": 3, "atencao": 2, "info": 1}
@@ -17322,8 +17495,9 @@ def montar_item_diagnostico_auto_suporte(nivel, titulo, mensagem, acao="", detal
     }
 
 
-def montar_diagnostico_auto_suporte(status_sistema, fluxos, planilhas_erro, tempo_resposta, erros_abertos):
+def montar_diagnostico_auto_suporte(status_sistema, fluxos, planilhas_erro, tempo_resposta, erros_abertos, inconsistencias_negocio=None):
     itens = []
+    inconsistencias_negocio = list(inconsistencias_negocio or [])
     itens_status = status_sistema.get("itens") or []
     banco_item = next((item for item in itens_status if item.get("nome") == "Banco online"), {})
     backup_item = next((item for item in itens_status if item.get("nome") == "Backup"), {})
@@ -17393,6 +17567,15 @@ def montar_diagnostico_auto_suporte(status_sistema, fluxos, planilhas_erro, temp
             f"{len(fluxos)} placa(s) aparecem duplicadas em andamento.",
             "marcar_fluxo_suspeito",
         ))
+    if inconsistencias_negocio:
+        total = sum(int(item.get("total") or 0) for item in inconsistencias_negocio)
+        itens.append(montar_item_diagnostico_auto_suporte(
+            "alerta",
+            "Inconsistencia de negocio",
+            f"{total} ponto(s) de regra de negocio precisam de revisao.",
+            inconsistencias_negocio[0].get("acao") or "gerar_pacote_codex",
+            {"inconsistencias": inconsistencias_negocio[:6]},
+        ))
     if licenca_item and not licenca_item.get("ok"):
         itens.append(montar_item_diagnostico_auto_suporte(
             "atencao",
@@ -17428,8 +17611,9 @@ def montar_diagnostico_auto_suporte(status_sistema, fluxos, planilhas_erro, temp
     }
 
 
-def montar_sugestoes_auto_suporte(status_sistema, fluxos, planilhas_erro, tempo_resposta, erros_abertos):
+def montar_sugestoes_auto_suporte(status_sistema, fluxos, planilhas_erro, tempo_resposta, erros_abertos, inconsistencias_negocio=None):
     sugestoes = []
+    inconsistencias_negocio = list(inconsistencias_negocio or [])
     banco_item = next((item for item in status_sistema.get("itens", []) if item.get("nome") == "Banco online"), {})
     backup_item = next((item for item in status_sistema.get("itens", []) if item.get("nome") == "Backup"), {})
     telegram_config = obter_configuracao_empresa(force=False)
@@ -17451,6 +17635,12 @@ def montar_sugestoes_auto_suporte(status_sistema, fluxos, planilhas_erro, tempo_
         sugestoes.append({"titulo": "Atendimento duplicado suspeito", "mensagem": f"{len(fluxos)} placa(s) com duplicidade em andamento.", "acao": "marcar_fluxo_suspeito"})
     if erros_abertos:
         sugestoes.append({"titulo": "Erro 500 aberto", "mensagem": f"{len(erros_abertos)} erro(s) aguardando revisao. Gere o pacote e me envie no Codex.", "acao": "gerar_pacote_codex"})
+    for item in inconsistencias_negocio[:3]:
+        sugestoes.append({
+            "titulo": item.get("titulo") or "Inconsistencia de negocio",
+            "mensagem": f"{item.get('total')} ocorrencia(s). {item.get('mensagem')}",
+            "acao": item.get("acao") or "gerar_pacote_codex",
+        })
     return sugestoes[:8]
 
 
@@ -17504,6 +17694,75 @@ def avaliar_alertas_auto_suporte(status_payload):
     estado["ultimo_nivel"] = nivel
     estado["atualizado_em"] = agora_iso()
     salvar_estado_auto_suporte(estado)
+
+
+def montar_saude_sistema_dono_auto_suporte(status_sistema=None, status_auto=None):
+    status_sistema = status_sistema or montar_status_sistema_dono()
+    status_auto = status_auto or {}
+    itens = {item.get("nome"): item for item in status_sistema.get("itens", [])}
+    ultimo_erro = status_sistema.get("ultimo_erro") or {}
+    return [
+        {
+            "nome": "Sistema online",
+            "ok": bool(status_auto.get("ok", status_sistema.get("resumo", {}).get("ok"))),
+            "valor": "Operando" if status_auto.get("ok", status_sistema.get("resumo", {}).get("ok")) else "Revisar",
+            "detalhe": status_auto.get("mensagem") or "Acompanhamento ativo pelo AutoSuporte.",
+        },
+        {
+            "nome": "Banco online",
+            "ok": bool((itens.get("Banco online") or {}).get("ok")),
+            "valor": (itens.get("Banco online") or {}).get("valor") or "-",
+            "detalhe": (itens.get("Banco online") or {}).get("detalhe") or "-",
+        },
+        {
+            "nome": "Backup",
+            "ok": bool((itens.get("Backup") or {}).get("ok")),
+            "valor": (itens.get("Backup") or {}).get("valor") or "-",
+            "detalhe": (itens.get("Backup") or {}).get("detalhe") or "-",
+        },
+        {
+            "nome": "App instalado",
+            "ok": bool((itens.get("PWA instalado") or {}).get("ok")),
+            "valor": (itens.get("PWA instalado") or {}).get("valor") or "-",
+            "detalhe": (itens.get("PWA instalado") or {}).get("detalhe") or "-",
+        },
+        {
+            "nome": "Licenca",
+            "ok": bool((itens.get("Licenca") or {}).get("ok")),
+            "valor": (itens.get("Licenca") or {}).get("valor") or "-",
+            "detalhe": (itens.get("Licenca") or {}).get("detalhe") or "-",
+        },
+        {
+            "nome": "Bot de alerta",
+            "ok": bool((itens.get("Bot Telegram") or {}).get("ok")),
+            "valor": (itens.get("Bot Telegram") or {}).get("valor") or "-",
+            "detalhe": (itens.get("Bot Telegram") or {}).get("detalhe") or "-",
+        },
+        {
+            "nome": "Ultimo problema",
+            "ok": not bool(ultimo_erro.get("mensagem")),
+            "valor": ultimo_erro.get("tipo") or "Nenhum erro recente",
+            "detalhe": ultimo_erro.get("mensagem") or "Sem falhas recentes registradas.",
+        },
+        {
+            "nome": "Ultima verificacao",
+            "ok": True,
+            "valor": status_auto.get("gerado_em") or status_sistema.get("gerado_em") or "-",
+            "detalhe": "Horario da ultima leitura do painel.",
+        },
+    ]
+
+
+def agrupar_historico_auto_suporte_por_dia(historico=None, limite_dias=7):
+    historico = list(historico or listar_historico_auto_suporte(limite=80))
+    contagem = {}
+    for item in historico:
+        dia = str(item.get("quando") or "")[:10] or "sem_data"
+        contagem[dia] = contagem.get(dia, 0) + 1
+    return [
+        {"dia": dia, "total": total}
+        for dia, total in sorted(contagem.items())[-int(limite_dias or 7):]
+    ]
 
 
 def executar_git_local_auto_suporte(*args):
@@ -17572,6 +17831,12 @@ def montar_pacote_codex_auto_suporte():
         "status_sistema": status_sistema,
         "banco": banco,
         "backup": backup,
+        "inconsistencias_negocio": executar_check_auto_suporte(
+            detectar_inconsistencias_negocio_auto_suporte,
+            [],
+            "pacote_codex_negocio",
+            {"auto_suporte_negocio", "pacote_codex_negocio"},
+        ),
         "fluxos_suspeitos": executar_check_auto_suporte(
             detectar_fluxos_suspeitos_auto_suporte,
             [],
@@ -17628,6 +17893,9 @@ def formatar_pacote_codex_texto(pacote):
             "",
             "ERROS ABERTOS",
             json.dumps(pacote.get("erros_abertos") or [], ensure_ascii=False, indent=2, default=sanitizar_para_json),
+            "",
+            "INCONSISTENCIAS DE NEGOCIO",
+            json.dumps(pacote.get("inconsistencias_negocio") or [], ensure_ascii=False, indent=2, default=sanitizar_para_json),
         ]
     )
     return "\n".join(linhas)
@@ -17660,6 +17928,12 @@ def status_auto_suporte():
         "auto_suporte_planilhas_erro",
         {"auto_suporte_planilhas_erro", "pacote_codex_planilhas"},
     )
+    inconsistencias_negocio = executar_check_auto_suporte(
+        detectar_inconsistencias_negocio_auto_suporte,
+        [],
+        "auto_suporte_negocio",
+        {"auto_suporte_negocio"},
+    )
     tempo_resposta = metricas_tempo_resposta_central_tecnica()
     erros_abertos = listar_erros_producao(apenas_abertos=True, limite=8)
     falhas = list(status.get("resumo", {}).get("falhas") or [])
@@ -17671,8 +17945,10 @@ def status_auto_suporte():
         falhas.append("Pagina demorou")
     if erros_abertos:
         falhas.append("Erro 500 aberto")
+    if inconsistencias_negocio:
+        falhas.append("Inconsistencia de negocio")
 
-    diagnostico = montar_diagnostico_auto_suporte(status, fluxos, planilhas_erro, tempo_resposta, erros_abertos)
+    diagnostico = montar_diagnostico_auto_suporte(status, fluxos, planilhas_erro, tempo_resposta, erros_abertos, inconsistencias_negocio)
     if diagnostico.get("nivel") in {"critico", "alerta"} and diagnostico.get("titulo") not in falhas:
         falhas.insert(0, diagnostico.get("titulo"))
     ok_status = not falhas and diagnostico.get("nivel") not in {"critico", "alerta"}
@@ -17685,8 +17961,9 @@ def status_auto_suporte():
         "erros_abertos": erros_abertos,
         "fluxos_suspeitos": fluxos,
         "planilhas_erro": planilhas_erro,
+        "inconsistencias_negocio": inconsistencias_negocio,
         "tempo_resposta": tempo_resposta,
-        "sugestoes": montar_sugestoes_auto_suporte(status, fluxos, planilhas_erro, tempo_resposta, erros_abertos),
+        "sugestoes": montar_sugestoes_auto_suporte(status, fluxos, planilhas_erro, tempo_resposta, erros_abertos, inconsistencias_negocio),
         "historico": listar_historico_auto_suporte(limite=10),
         "auto_abrir": bool(diagnostico.get("auto_abrir")),
         "acoes": [
@@ -17836,6 +18113,71 @@ def api_auto_suporte_status():
     if not usuario_pode_usar_auto_suporte():
         return jsonify({"erro": "nao_autorizado"}), 403
     return jsonify(json.loads(json.dumps(status_auto_suporte(), ensure_ascii=False, default=str)))
+
+
+@app.route("/auto-suporte")
+def pagina_auto_suporte():
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_pode_usar_auto_suporte():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem acessar o AutoSuporte.")
+        return redirect("/")
+
+    status_auto = status_auto_suporte()
+    status_sistema = montar_status_sistema_dono()
+    historico = listar_historico_auto_suporte(limite=80)
+    return render_template(
+        "auto_suporte.html",
+        status_auto=status_auto,
+        status_sistema=status_sistema,
+        saude_dono=montar_saude_sistema_dono_auto_suporte(status_sistema, status_auto),
+        historico_auto_suporte=historico,
+        incidentes_por_dia=agrupar_historico_auto_suporte_por_dia(historico),
+    )
+
+
+@app.route("/auto-suporte.json")
+def auto_suporte_json():
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_pode_usar_auto_suporte():
+        return jsonify({"erro": "nao_autorizado"}), 403
+    status_auto = status_auto_suporte()
+    status_sistema = montar_status_sistema_dono()
+    historico = listar_historico_auto_suporte(limite=80)
+    payload = {
+        "status_auto": status_auto,
+        "status_sistema": status_sistema,
+        "saude_dono": montar_saude_sistema_dono_auto_suporte(status_sistema, status_auto),
+        "historico": historico,
+        "incidentes_por_dia": agrupar_historico_auto_suporte_por_dia(historico),
+    }
+    return jsonify(json.loads(json.dumps(payload, ensure_ascii=False, default=sanitizar_para_json)))
+
+
+@app.route("/auto-suporte/acao", methods=["POST"])
+def pagina_auto_suporte_acao():
+    if not session.get("usuario"):
+        return redirect("/login")
+    if not usuario_pode_usar_auto_suporte():
+        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem executar o AutoSuporte.")
+        return redirect("/")
+    try:
+        resultado = executar_acao_auto_suporte(
+            request.form.get("acao"),
+            observacao=request.form.get("observacao") or "",
+        )
+        session["diagnostico_feedback"] = {
+            "tipo": "sucesso" if resultado.get("ok") else "erro",
+            "mensagem": resultado.get("mensagem") or "Acao executada pelo AutoSuporte.",
+        }
+    except Exception as erro:
+        registrar_ultimo_erro_producao(erro, descricao="auto_suporte_pagina_acao")
+        session["diagnostico_feedback"] = {
+            "tipo": "erro",
+            "mensagem": f"Nao foi possivel executar a acao: {erro}",
+        }
+    return redirect("/auto-suporte")
 
 
 @app.route("/api/auto-suporte/acao", methods=["POST"])

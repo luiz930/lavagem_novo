@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}AutoSuporte{% endblock %}
+{% block titulo %}AutoSuporte{% endblock %}
+{% block subtitulo %}Central do bot, diagnostico inteligente, historico e reparos seguros{% endblock %}
+
+{% block actions %}
+<a href="/auto-suporte.json" class="button-link"><button type="button">Exportar JSON</button></a>
+<a href="/configuracoes/desenvolvedor" class="button-link"><button type="button">Central Tecnica</button></a>
+<a href="/" class="button-link"><button type="button">Voltar</button></a>
+{% endblock %}
+
+{% block content %}
+
+<div class="page-card {% if status_auto.diagnostico.nivel == 'critico' %}error-banner{% elif status_auto.diagnostico.nivel == 'alerta' %}warning-banner{% else %}success-banner{% endif %}">
+    <p class="pill-label">{{ status_auto.diagnostico.label }}</p>
+    <h2 class="section-title top-spacing">{{ status_auto.diagnostico.titulo }}</h2>
+    <p>{{ status_auto.diagnostico.frase }}</p>
+    <p class="muted-text">Gerado em {{ status_auto.gerado_em }}.</p>
+</div>
+
+<div class="page-grid top-spacing">
+    <div class="page-card">
+        <p class="pill-label">Erros abertos</p>
+        <h2 class="section-title top-spacing">{{ status_auto.erros_abertos|length }}</h2>
+        <p class="muted-text">Falhas tecnicas aguardando revisao.</p>
+    </div>
+    <div class="page-card">
+        <p class="pill-label">Inconsistencias</p>
+        <h2 class="section-title top-spacing">{{ status_auto.inconsistencias_negocio|length }}</h2>
+        <p class="muted-text">Regras de negocio que precisam de atencao.</p>
+    </div>
+    <div class="page-card">
+        <p class="pill-label">Sugestoes</p>
+        <h2 class="section-title top-spacing">{{ status_auto.sugestoes|length }}</h2>
+        <p class="muted-text">Acoes seguras sugeridas pelo bot.</p>
+    </div>
+    <div class="page-card">
+        <p class="pill-label">Historico</p>
+        <h2 class="section-title top-spacing">{{ historico_auto_suporte|length }}</h2>
+        <p class="muted-text">Eventos recentes registrados pelo AutoSuporte.</p>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <p class="pill-label">Acoes seguras</p>
+    <div class="actions-row actions-row--left top-spacing">
+        <form method="post" action="/auto-suporte/acao">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="acao" value="limpar_caches">
+            <button type="submit">Limpar caches</button>
+        </form>
+        <form method="post" action="/auto-suporte/acao">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="acao" value="testar_banco">
+            <button type="submit">Testar banco</button>
+        </form>
+        <form method="post" action="/auto-suporte/acao">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="acao" value="testar_backup">
+            <button type="submit">Testar backup</button>
+        </form>
+        <form method="post" action="/auto-suporte/acao">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="acao" value="testar_telegram">
+            <button type="submit">Testar Telegram</button>
+        </form>
+        <form method="post" action="/auto-suporte/acao">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="acao" value="revalidar_pwa">
+            <button type="submit">Revalidar PWA</button>
+        </form>
+        <form method="post" action="/auto-suporte/acao">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="acao" value="gerar_backup_suporte">
+            <button type="submit">Backup suporte</button>
+        </form>
+        <form method="post" action="/auto-suporte/acao">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="acao" value="gerar_pacote_codex">
+            <button type="submit">Gerar pacote Codex</button>
+        </form>
+        <form method="post" action="/auto-suporte/acao">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="acao" value="registrar_incidente">
+            <input type="hidden" name="observacao" value="Modo suporte remoto solicitado pela pagina AutoSuporte.">
+            <button type="submit">Modo suporte remoto</button>
+        </form>
+    </div>
+</div>
+
+<div class="page-grid top-spacing">
+    <div class="page-card">
+        <p class="pill-label">Saude do sistema para o dono</p>
+        <div class="list-grid top-spacing">
+            {% for item in saude_dono %}
+            <div class="{% if item.ok %}success-banner{% else %}error-banner{% endif %}" style="padding: 12px; border-radius: 8px;">
+                <p><b>{{ item.nome }}</b></p>
+                <p>{{ item.valor }}</p>
+                <p class="muted-text">{{ item.detalhe }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Incidentes por dia</p>
+        <div class="stack-form stack-form--wide top-spacing">
+            {% for item in incidentes_por_dia %}
+            <div>
+                <div class="actions-row actions-row--between">
+                    <span>{{ item.dia }}</span>
+                    <b>{{ item.total }}</b>
+                </div>
+                <div style="height: 8px; border-radius: 999px; background: rgba(148, 163, 184, .22); overflow: hidden;">
+                    <div style="height: 8px; width: {{ [item.total * 12, 100]|min }}%; background: var(--primary);"></div>
+                </div>
+            </div>
+            {% else %}
+            <p class="muted-text">Ainda nao ha incidentes registrados.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<div class="page-grid top-spacing">
+    <div class="page-card">
+        <p class="pill-label">Diagnostico detalhado</p>
+        <div class="stack-form stack-form--wide top-spacing">
+            {% for item in status_auto.diagnostico.itens %}
+            <div class="{% if item.nivel == 'critico' %}error-banner{% elif item.nivel == 'alerta' %}warning-banner{% else %}success-banner{% endif %}" style="padding: 12px; border-radius: 8px;">
+                <p><b>{{ item.label }} - {{ item.titulo }}</b></p>
+                <p class="muted-text">{{ item.mensagem }}</p>
+                {% if item.acao %}
+                <p><b>Acao sugerida:</b> {{ item.acao }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Inconsistencias de negocio</p>
+        <div class="stack-form stack-form--wide top-spacing">
+            {% for item in status_auto.inconsistencias_negocio %}
+            <div class="warning-banner" style="padding: 12px; border-radius: 8px;">
+                <p><b>{{ item.titulo }}: {{ item.total }}</b></p>
+                <p class="muted-text">{{ item.mensagem }}</p>
+            </div>
+            {% else %}
+            <p class="muted-text">Nenhuma inconsistencia de negocio detectada agora.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <p class="pill-label">Historico completo</p>
+    <div class="table-wrap top-spacing">
+        <table>
+            <thead>
+                <tr>
+                    <th>Quando</th>
+                    <th>Evento</th>
+                    <th>Severidade</th>
+                    <th>Usuario</th>
+                    <th>Mensagem</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in historico_auto_suporte %}
+                <tr>
+                    <td>{{ item.quando }}</td>
+                    <td>{{ item.titulo or item.evento }}</td>
+                    <td>{{ item.severidade }}</td>
+                    <td>{{ item.usuario or "-" }}</td>
+                    <td>{{ item.mensagem }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5">Nenhum historico registrado.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}
