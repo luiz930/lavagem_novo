@@ -19,8 +19,6 @@ static/*.xls
 google_drive_service_account.json
 *service_account*.json
 *credentials*.json
-firebase*.json
-*firebase*service*.json
 .venv/
 venv/
 env/
