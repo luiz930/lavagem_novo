@@ -108,12 +108,20 @@
     <p class="pill-label">Auto-reparo seguro</p>
     <div class="page-grid top-spacing">
         <div>
+            <p><b>Modo atual:</b> {{ status_auto.autonomia.modo_label }}</p>
+            <p class="muted-text">{{ status_auto.autonomia.modo_descricao }}</p>
             <p><b>Limite por ciclo:</b> {{ status_auto.autonomia.limite_por_ciclo }}</p>
             <p><b>Cooldown:</b> {{ status_auto.autonomia.cooldown_segundos // 60 }} min</p>
             <p class="muted-text">Ultimo ciclo: {{ status_auto.autonomia.ultimo_ciclo or "Ainda nao executado" }}</p>
         </div>
         <div>
-            <p><b>Acoes autonomas</b></p>
+            <p><b>Niveis de autonomia</b></p>
+            <div class="actions-row actions-row--left top-spacing">
+                {% for modo in status_auto.autonomia.modos %}
+                <span class="pill-label">{{ modo.label }}</span>
+                {% endfor %}
+            </div>
+            <p class="top-spacing"><b>Acoes autonomas</b></p>
             <div class="actions-row actions-row--left top-spacing">
                 {% for acao in status_auto.autonomia.acoes_permitidas %}
                 <span class="pill-label">{{ acao.label }}</span>
@@ -121,6 +129,26 @@
             </div>
         </div>
     </div>
+    {% if status_auto.autonomia.simulacao %}
+    <div class="page-grid top-spacing">
+        <div class="warning-banner" style="padding: 12px; border-radius: 8px;">
+            <p><b>Modo simulacao</b></p>
+            {% for item in status_auto.autonomia.simulacao.detectado %}
+            <p class="muted-text">{{ item }}</p>
+            {% else %}
+            <p class="muted-text">Nenhuma falha pendente detectada.</p>
+            {% endfor %}
+        </div>
+        <div class="success-banner" style="padding: 12px; border-radius: 8px;">
+            <p><b>Antes de executar</b></p>
+            {% for item in status_auto.autonomia.simulacao.pretende_fazer %}
+            <p class="muted-text">{{ item.label }} - risco {{ item.risco }} - {{ "reversivel" if item.reversivel else "exige confirmacao" }}</p>
+            {% else %}
+            <p class="muted-text">Nenhuma acao automatica planejada.</p>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
     {% if status_auto.autonomia.ultimo_resultado %}
     <div class="table-wrap top-spacing">
         <table>
@@ -159,6 +187,30 @@
                     <td>{{ item.label or item.acao }}</td>
                     <td>{{ item.motivo }}</td>
                     <td>{{ item.seguranca }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% if status_auto.autonomia.log %}
+    <div class="table-wrap top-spacing">
+        <table>
+            <thead>
+                <tr>
+                    <th>Quando</th>
+                    <th>Aba</th>
+                    <th>Usuario</th>
+                    <th>Mensagem</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in status_auto.autonomia.log %}
+                <tr>
+                    <td>{{ item.quando }}</td>
+                    <td>{{ item.categoria }}</td>
+                    <td>{{ item.usuario }}</td>
+                    <td>{{ item.mensagem or item.titulo }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

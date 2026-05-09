@@ -1670,6 +1670,65 @@ class AppRegressionTests(unittest.TestCase):
         self.assertNotIn("limpar_caches", bloqueadas)
         self.assertIn("confirmacao", bloqueadas["desativar_planilhas_com_erro"]["seguranca"])
 
+    def test_auto_suporte_modo_observador_simula_sem_executar(self):
+        status_inicial = {
+            "ok": False,
+            "falhas": ["Pagina demorou"],
+            "sugestoes": [{"titulo": "Pagina lenta", "acao": "limpar_caches"}],
+            "diagnostico": {"titulo": "Pagina lenta", "itens": []},
+            "tempo_resposta": [],
+        }
+        with tempfile.TemporaryDirectory(prefix="auto_suporte_observador_") as pasta:
+            estado = os.path.join(pasta, "estado.json")
+            historico = os.path.join(pasta, "historico.json")
+            with app_module.app.test_request_context("/api/auto-suporte/autonomia", method="POST"):
+                session["usuario"] = "admin"
+                with patch.object(app_module, "AUTO_SUPORTE_ESTADO_ARQUIVO", estado), \
+                     patch.object(app_module, "AUTO_SUPORTE_HISTORICO_ARQUIVO", historico), \
+                     patch.object(app_module, "status_auto_suporte", side_effect=[status_inicial, {"ok": True, "sugestoes": [], "diagnostico": {"itens": []}}]), \
+                     patch.object(app_module, "executar_acao_auto_suporte") as acao_mock:
+                    resultado = app_module.executar_autonomia_auto_suporte(modo="observador")
+
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(resultado["modo"], "observador")
+        self.assertEqual(resultado["executadas"], [])
+        self.assertTrue(resultado["simulacao"]["pretende_fazer"])
+        acao_mock.assert_not_called()
+
+    def test_api_auto_suporte_autonomia_salva_modo_e_simula(self):
+        status_inicial = {
+            "ok": False,
+            "sugestoes": [{"titulo": "Pagina lenta", "acao": "limpar_caches"}],
+            "diagnostico": {"titulo": "Pagina lenta", "itens": []},
+            "tempo_resposta": [],
+        }
+        with tempfile.TemporaryDirectory(prefix="auto_suporte_modo_") as pasta:
+            estado = os.path.join(pasta, "estado.json")
+            historico = os.path.join(pasta, "historico.json")
+            with app_module.app.test_request_context("/api/auto-suporte/autonomia", method="POST", json={"modo": "manual", "simular": True}):
+                session["usuario"] = "admin"
+                with patch.object(app_module, "AUTO_SUPORTE_ESTADO_ARQUIVO", estado), \
+                     patch.object(app_module, "AUTO_SUPORTE_HISTORICO_ARQUIVO", historico), \
+                     patch.object(app_module, "usuario_pode_usar_auto_suporte", return_value=True), \
+                     patch.object(app_module, "status_auto_suporte", side_effect=[status_inicial, {"ok": True, "sugestoes": [], "diagnostico": {"itens": []}}]):
+                    response = app_module.api_auto_suporte_autonomia()
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["modo"], "manual")
+        self.assertEqual(payload["executadas"], [])
+
+    def test_auto_suporte_limpa_cache_especifico_da_rota_lenta(self):
+        app_module.CLIENTES_CONTEXT_CACHE["testado_em"] = 999999.0
+        app_module.CLIENTES_CONTEXT_CACHE["resultado"] = {"clientes": [1]}
+
+        resultado = app_module.limpar_cache_rota_lenta_auto_suporte([
+            {"rota": "/clientes", "classe": "lento", "ultimo_ms": 3000}
+        ])
+
+        self.assertEqual(resultado["rota"], "/clientes")
+        self.assertIsNone(app_module.CLIENTES_CONTEXT_CACHE["resultado"])
+
     def test_api_auto_suporte_autonomia_executa_reparo_seguro(self):
         status_inicial = {
             "ok": False,

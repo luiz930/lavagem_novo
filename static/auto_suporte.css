@@ -360,6 +360,30 @@
     margin-top: 8px;
 }
 
+.auto-support-mode-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.auto-support-mode-button {
+    min-height: 30px !important;
+    margin: 0 !important;
+    border: 1px solid rgba(148, 163, 184, .28) !important;
+    border-radius: 8px !important;
+    background: rgba(15, 23, 42, .9) !important;
+    color: #cbd5e1 !important;
+    font-size: 11px !important;
+    font-weight: 800 !important;
+}
+
+.auto-support-mode-button[data-active="true"] {
+    border-color: rgba(250, 204, 21, .72) !important;
+    background: rgba(250, 204, 21, .16) !important;
+    color: #fef08a !important;
+}
+
 .auto-support-quick-actions {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));

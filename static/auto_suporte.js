@@ -138,7 +138,8 @@
             } else {
                 renderizar();
             }
-            if (estado.status && estado.status.ok === false) {
+            const modo = estado.status && estado.status.autonomia ? estado.status.autonomia.modo : "seguro";
+            if (estado.status && estado.status.ok === false && !["manual", "observador"].includes(modo)) {
                 executarAutonomia();
             }
         } catch (erro) {
@@ -147,11 +148,13 @@
         }
     }
 
-    async function executarAutonomia() {
+    async function executarAutonomia(opcoes = {}) {
         if (estado.autonomiaRodando) {
             return;
         }
         estado.autonomiaRodando = true;
+        const simular = Boolean(opcoes.simular);
+        const modo = opcoes.modo || "";
         try {
             const resposta = await fetch("/api/auto-suporte/autonomia", {
                 method: "POST",
@@ -159,7 +162,7 @@
                     "Content-Type": "application/json",
                     "X-CSRF-Token": obterCsrfToken(),
                 },
-                body: JSON.stringify({ origem: "widget" }),
+                body: JSON.stringify({ origem: "widget", simular, modo }),
             });
             const dados = await resposta.json();
             if (!resposta.ok || dados.erro) {
@@ -170,6 +173,9 @@
             if (executadas.length) {
                 adicionarLog("Auto-reparo seguro", dados.mensagem || `${executadas.length} acao(oes) executada(s).`, dados.ok !== false);
                 abrirPainel();
+            } else if (simular) {
+                adicionarLog("Simulacao", dados.mensagem || "Simulacao concluida sem executar reparos.", true);
+                abrirPainel();
             } else {
                 renderizar();
             }
@@ -179,6 +185,10 @@
         } finally {
             estado.autonomiaRodando = false;
         }
+    }
+
+    function atualizarModoAutonomia(modo) {
+        executarAutonomia({ modo, simular: true });
     }
 
     async function executarAcao(acao, label) {
@@ -297,9 +307,24 @@
     function renderizarAutonomia(status) {
         const autonomia = status && status.autonomia ? status.autonomia : {};
         const bloco = criarElemento("div", "auto-support-autonomy");
-        bloco.appendChild(criarElemento("p", "auto-support-section-title", "Auto-reparo seguro"));
+        bloco.appendChild(criarElemento("p", "auto-support-section-title", `Autonomia - ${autonomia.modo_label || "Seguro"}`));
+        bloco.appendChild(criarElemento("p", "auto-support-log-message", autonomia.modo_descricao || "Executa somente reparos seguros."));
+        const modos = Array.isArray(autonomia.modos) ? autonomia.modos : [];
+        if (modos.length) {
+            const seletor = criarElemento("div", "auto-support-mode-actions");
+            modos.forEach((item) => {
+                const btn = criarElemento("button", "auto-support-mode-button", item.label || item.id);
+                btn.type = "button";
+                btn.disabled = estado.autonomiaRodando;
+                btn.setAttribute("data-active", item.id === autonomia.modo ? "true" : "false");
+                btn.addEventListener("click", () => atualizarModoAutonomia(item.id));
+                seletor.appendChild(btn);
+            });
+            bloco.appendChild(seletor);
+        }
         const ultimoResultado = Array.isArray(autonomia.ultimo_resultado) ? autonomia.ultimo_resultado : [];
         const bloqueadas = Array.isArray(autonomia.acoes_bloqueadas) ? autonomia.acoes_bloqueadas : [];
+        const simulacao = autonomia.simulacao || {};
         const resumo = ultimoResultado.length
             ? `${ultimoResultado.length} acao(oes) no ultimo ciclo.`
             : "Acoes simples rodam sozinhas com limite e cooldown.";
@@ -309,8 +334,22 @@
         rodar.type = "button";
         rodar.disabled = estado.autonomiaRodando;
         rodar.addEventListener("click", executarAutonomia);
+        const simular = criarElemento("button", "auto-support-mini-action", "Simular");
+        simular.type = "button";
+        simular.disabled = estado.autonomiaRodando;
+        simular.addEventListener("click", () => executarAutonomia({ simular: true }));
         acoes.appendChild(rodar);
+        acoes.appendChild(simular);
         bloco.appendChild(acoes);
+        if (Array.isArray(simulacao.pretende_fazer) && simulacao.pretende_fazer.length) {
+            simulacao.pretende_fazer.slice(0, 3).forEach((item) => {
+                const linha = criarElemento("div", "auto-support-history-item");
+                linha.setAttribute("data-level", "info");
+                linha.appendChild(criarElemento("p", "auto-support-log-title", `Simula: ${item.label || item.acao}`));
+                linha.appendChild(criarElemento("p", "auto-support-log-message", `${item.risco || "baixo"} risco; ${item.reversivel ? "reversivel" : "confirmar antes"}.`));
+                bloco.appendChild(linha);
+            });
+        }
         ultimoResultado.slice(0, 3).forEach((item) => {
             const linha = criarElemento("div", "auto-support-history-item");
             linha.setAttribute("data-level", item.ok === false ? "alerta" : "info");
@@ -325,6 +364,17 @@
             linha.appendChild(criarElemento("p", "auto-support-log-message", item.seguranca || item.motivo || "Acao mantida manual por seguranca."));
             bloco.appendChild(linha);
         });
+        const log = Array.isArray(autonomia.log) ? autonomia.log : [];
+        if (log.length) {
+            bloco.appendChild(criarElemento("p", "auto-support-section-title", "Log de autonomia"));
+            log.slice(0, 4).forEach((item) => {
+                const linha = criarElemento("div", "auto-support-history-item");
+                linha.setAttribute("data-level", item.severidade || "info");
+                linha.appendChild(criarElemento("p", "auto-support-log-title", `${item.quando || "-"} - ${item.categoria || "log"}`));
+                linha.appendChild(criarElemento("p", "auto-support-log-message", item.mensagem || item.titulo || "-"));
+                bloco.appendChild(linha);
+            });
+        }
         return bloco;
     }
 

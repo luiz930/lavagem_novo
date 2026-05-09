@@ -17138,11 +17138,14 @@ def montar_central_tecnica_desenvolvedor(filtro_erros="abertos"):
 
 ACOES_AUTO_SUPORTE = {
     "limpar_caches": "Limpar caches",
+    "limpar_cache_rota_lenta": "Limpar cache da pagina lenta",
     "validar_ambiente": "Reiniciar validacao",
     "testar_banco": "Testar banco",
     "testar_backup": "Testar backup",
     "testar_telegram": "Testar Telegram",
     "revalidar_pwa": "Revalidar PWA",
+    "revalidar_estaticos": "Revalidar arquivos estaticos",
+    "resolver_erros_com_checks_ok": "Resolver erros com checks OK",
     "gerar_backup_suporte": "Gerar backup de suporte",
     "desativar_planilhas_com_erro": "Pausar planilhas com erro",
     "corrigir_classificacao_clientes": "Corrigir classificacao novo/retorno",
@@ -17157,15 +17160,45 @@ ACOES_AUTO_SUPORTE = {
 
 AUTO_SUPORTE_ACOES_AUTONOMAS = {
     "limpar_caches",
+    "limpar_cache_rota_lenta",
     "validar_ambiente",
     "testar_banco",
     "testar_backup",
     "revalidar_pwa",
+    "revalidar_estaticos",
+    "resolver_erros_com_checks_ok",
     "limpar_erros_resolvidos",
     "gerar_pacote_codex",
 }
 AUTO_SUPORTE_AUTONOMIA_COOLDOWN_SEGUNDOS = 15 * 60
 AUTO_SUPORTE_AUTONOMIA_LIMITE_ACOES = 3
+AUTO_SUPORTE_MODO_AUTONOMIA_PADRAO = "seguro"
+AUTO_SUPORTE_MODOS_AUTONOMIA = {
+    "manual": {
+        "label": "Manual",
+        "descricao": "Nada roda sozinho. O bot apenas registra o que encontrou.",
+        "executa": False,
+        "simula": True,
+    },
+    "observador": {
+        "label": "Observador",
+        "descricao": "Diagnostica, sugere e simula sem executar reparos.",
+        "executa": False,
+        "simula": True,
+    },
+    "seguro": {
+        "label": "Seguro",
+        "descricao": "Executa somente reparos reversiveis e de baixo risco.",
+        "executa": True,
+        "simula": True,
+    },
+    "assistido": {
+        "label": "Assistido",
+        "descricao": "Executa reparos seguros e prepara acoes sensiveis para confirmacao.",
+        "executa": True,
+        "simula": True,
+    },
+}
 
 
 def usuario_pode_usar_auto_suporte():
@@ -17229,6 +17262,29 @@ def carregar_estado_auto_suporte():
 def salvar_estado_auto_suporte(estado):
     with AUTO_SUPORTE_LOCK:
         salvar_json_auto_suporte(AUTO_SUPORTE_ESTADO_ARQUIVO, dict(estado or {}))
+
+
+def normalizar_modo_autonomia_auto_suporte(modo):
+    modo = normalizar_texto_campo(modo).lower()
+    return modo if modo in AUTO_SUPORTE_MODOS_AUTONOMIA else AUTO_SUPORTE_MODO_AUTONOMIA_PADRAO
+
+
+def obter_modo_autonomia_auto_suporte(estado=None):
+    estado = estado or carregar_estado_auto_suporte()
+    autonomia = estado.get("autonomia") if isinstance(estado, dict) else {}
+    autonomia = autonomia if isinstance(autonomia, dict) else {}
+    return normalizar_modo_autonomia_auto_suporte(autonomia.get("modo") or AUTO_SUPORTE_MODO_AUTONOMIA_PADRAO)
+
+
+def salvar_modo_autonomia_auto_suporte(modo):
+    estado = carregar_estado_auto_suporte()
+    autonomia = estado.get("autonomia") if isinstance(estado.get("autonomia"), dict) else {}
+    autonomia["modo"] = normalizar_modo_autonomia_auto_suporte(modo)
+    autonomia["modo_atualizado_em"] = agora_iso()
+    autonomia["modo_atualizado_por"] = normalizar_texto_campo(session.get("usuario")) if has_request_context() else ""
+    estado["autonomia"] = autonomia
+    salvar_estado_auto_suporte(estado)
+    return autonomia["modo"]
 
 
 def registrar_incidente_auto_suporte(titulo, mensagem, detalhes=None, severidade="warning"):
@@ -17697,11 +17753,13 @@ def montar_sugestoes_auto_suporte(status_sistema, fluxos, planilhas_erro, tempo_
         sugestoes.append({"titulo": "Banco indisponivel", "mensagem": "Validar a conexao do banco online agora.", "acao": "testar_banco"})
     if any(item.get("classe") == "lento" for item in tempo_resposta):
         lento = next(item for item in tempo_resposta if item.get("classe") == "lento")
-        sugestoes.append({"titulo": "Pagina demorou", "mensagem": f"{lento.get('rota')} carregou em {lento.get('ultimo_ms')} ms.", "acao": "limpar_caches"})
+        sugestoes.append({"titulo": "Pagina demorou", "mensagem": f"{lento.get('rota')} carregou em {lento.get('ultimo_ms')} ms.", "acao": "limpar_cache_rota_lenta"})
     if not backup_item.get("ok"):
         sugestoes.append({"titulo": "Backup falhou", "mensagem": "Gerar um backup de suporte antes de investigar.", "acao": "gerar_backup_suporte"})
     if pwa_item and not pwa_item.get("ok"):
         sugestoes.append({"titulo": "PWA precisa de revalidacao", "mensagem": pwa_item.get("detalhe") or "Manifest ou service worker precisam ser revisados.", "acao": "revalidar_pwa"})
+    if any(item.get("status") and int(item.get("status") or 0) >= 500 for item in tempo_resposta):
+        sugestoes.append({"titulo": "Rota falhando", "mensagem": "Revalidar arquivos estaticos e gerar pacote tecnico.", "acao": "revalidar_estaticos"})
     if not (token_ok and chat_ok):
         sugestoes.append({"titulo": "Telegram nao configurado", "mensagem": "Configure token e chat ID no Auto teste para receber alertas.", "acao": "registrar_incidente"})
     if planilhas_erro:
@@ -17742,13 +17800,92 @@ def montar_acoes_bloqueadas_auto_suporte(status_payload):
     return bloqueadas[:6]
 
 
+def risco_acao_auto_suporte(acao):
+    if acao in AUTO_SUPORTE_ACOES_AUTONOMAS:
+        return {
+            "risco": "baixo",
+            "reversivel": True,
+            "seguranca": "Reparo reversivel, local ou apenas diagnostico.",
+        }
+    return {
+        "risco": "medio",
+        "reversivel": False,
+        "seguranca": "Exige confirmacao manual porque pode alterar dados, enviar mensagem externa ou ocultar evidencias.",
+    }
+
+
+def montar_simulacao_autonomia_auto_suporte(status_payload, planejadas=None, bloqueadas=None, modo=None):
+    status_payload = status_payload or {}
+    planejadas = list(planejadas if planejadas is not None else planejar_acoes_autonomas_auto_suporte(status_payload))
+    bloqueadas = list(bloqueadas if bloqueadas is not None else montar_acoes_bloqueadas_auto_suporte(status_payload))
+    modo = normalizar_modo_autonomia_auto_suporte(modo or AUTO_SUPORTE_MODO_AUTONOMIA_PADRAO)
+    detectado = []
+    diagnostico = status_payload.get("diagnostico") or {}
+    if diagnostico.get("titulo"):
+        detectado.append(diagnostico.get("titulo"))
+    detectado.extend(status_payload.get("falhas") or [])
+    for item in status_payload.get("tempo_resposta") or []:
+        if item.get("classe") == "lento" or item.get("alerta_2s"):
+            detectado.append(f"{item.get('rota')} lenta ({item.get('ultimo_ms')} ms)")
+
+    return {
+        "modo": modo,
+        "modo_label": AUTO_SUPORTE_MODOS_AUTONOMIA[modo]["label"],
+        "detectado": list(dict.fromkeys([normalizar_texto_campo(item) for item in detectado if normalizar_texto_campo(item)]))[:8],
+        "pretende_fazer": [
+            {
+                **item,
+                **risco_acao_auto_suporte(item.get("acao")),
+            }
+            for item in planejadas
+        ],
+        "precisa_confirmacao": [
+            {
+                **item,
+                **risco_acao_auto_suporte(item.get("acao")),
+            }
+            for item in bloqueadas
+        ],
+    }
+
+
+def listar_log_autonomia_auto_suporte(limite=12):
+    eventos = []
+    for item in listar_historico_auto_suporte(limite=80):
+        evento = normalizar_texto_campo(item.get("evento"))
+        if evento not in {"autonomia", "autonomia_simulacao", "autonomia_bloqueada", "normalizacao", "diagnostico"}:
+            continue
+        categoria = "o bot fez isso" if evento == "autonomia" else "precisa de confirmacao" if evento == "autonomia_bloqueada" else "nao fez isso por seguranca" if evento == "autonomia_simulacao" else "diagnostico"
+        eventos.append({
+            "quando": item.get("quando"),
+            "categoria": categoria,
+            "titulo": item.get("titulo") or item.get("evento"),
+            "mensagem": item.get("mensagem"),
+            "usuario": item.get("usuario") or "auto_suporte",
+            "severidade": item.get("severidade") or "info",
+        })
+        if len(eventos) >= int(limite or 12):
+            break
+    return eventos
+
+
 def montar_autonomia_auto_suporte(estado=None, status_payload=None):
     estado = estado or carregar_estado_auto_suporte()
     autonomia = estado.get("autonomia") if isinstance(estado, dict) else {}
     autonomia = autonomia if isinstance(autonomia, dict) else {}
     status_payload = status_payload or {}
+    modo = obter_modo_autonomia_auto_suporte(estado)
+    bloqueadas = montar_acoes_bloqueadas_auto_suporte(status_payload)
+    planejadas = planejar_acoes_autonomas_auto_suporte(status_payload, estado) if status_payload else []
     return {
         "habilitada": True,
+        "modo": modo,
+        "modo_label": AUTO_SUPORTE_MODOS_AUTONOMIA[modo]["label"],
+        "modo_descricao": AUTO_SUPORTE_MODOS_AUTONOMIA[modo]["descricao"],
+        "modos": [
+            {"id": chave, "label": dados["label"], "descricao": dados["descricao"]}
+            for chave, dados in AUTO_SUPORTE_MODOS_AUTONOMIA.items()
+        ],
         "cooldown_segundos": AUTO_SUPORTE_AUTONOMIA_COOLDOWN_SEGUNDOS,
         "limite_por_ciclo": AUTO_SUPORTE_AUTONOMIA_LIMITE_ACOES,
         "acoes_permitidas": [
@@ -17758,7 +17895,9 @@ def montar_autonomia_auto_suporte(estado=None, status_payload=None):
         ],
         "ultimo_ciclo": autonomia.get("ultimo_ciclo"),
         "ultimo_resultado": autonomia.get("ultimo_resultado") or [],
-        "acoes_bloqueadas": montar_acoes_bloqueadas_auto_suporte(status_payload),
+        "acoes_bloqueadas": bloqueadas,
+        "simulacao": montar_simulacao_autonomia_auto_suporte(status_payload, planejadas, bloqueadas, modo) if status_payload else {},
+        "log": listar_log_autonomia_auto_suporte(limite=10),
     }
 
 
@@ -17801,11 +17940,111 @@ def planejar_acoes_autonomas_auto_suporte(status_payload, estado=None):
     return planejadas
 
 
-def executar_autonomia_auto_suporte(status_payload=None):
+def limpar_cache_rota_lenta_auto_suporte(tempo_resposta=None):
+    tempo_resposta = list(tempo_resposta or metricas_tempo_resposta_central_tecnica())
+    lentas = [item for item in tempo_resposta if item.get("classe") == "lento" or item.get("alerta_2s")]
+    if not lentas:
+        return {"rota": "", "caches_limpos": [], "mensagem": "Nenhuma rota lenta detectada agora."}
+    rota = sorted(lentas, key=lambda item: int(item.get("ultimo_ms") or 0), reverse=True)[0].get("rota")
+    caches = []
+    if rota == "/":
+        HOME_SNAPSHOT_CACHE["testado_em"] = 0.0
+        HOME_SNAPSHOT_CACHE["resultado"] = None
+        HUD_CACHE["testado_em"] = 0.0
+        HUD_CACHE["resultado"] = None
+        caches.extend(["home_snapshot", "hud"])
+    elif rota == "/clientes":
+        limpar_cache_clientes()
+        caches.append("clientes")
+    elif rota == "/painel":
+        PAINEL_CONTEXT_CACHE["testado_em"] = 0.0
+        PAINEL_CONTEXT_CACHE["resultado"] = None
+        caches.append("painel")
+    elif rota in {"/financeiro", "/relatorios"}:
+        RELATORIOS_CONTEXT_CACHE["testado_em"] = 0.0
+        RELATORIOS_CONTEXT_CACHE["resultado"] = None
+        caches.append("relatorios")
+    elif rota == "/configuracoes":
+        limpar_cache_configuracao_empresa()
+        caches.append("configuracoes")
+    else:
+        limpar_caches_operacionais_leves()
+        caches.append("operacionais_leves")
+    return {"rota": rota, "caches_limpos": caches, "mensagem": f"Cache especifico da rota {rota} foi limpo."}
+
+
+def revalidar_estaticos_auto_suporte():
+    checks = [
+        testar_rota_interna_status("CSS principal", "/static/responsive.css", 200),
+        testar_rota_interna_status("CSS AutoSuporte", "/static/auto_suporte.css", 200),
+        testar_rota_interna_status("JS AutoSuporte", "/static/auto_suporte.js", 200),
+        testar_rota_interna_status("Service worker", "/sw.js", 200),
+        testar_rota_interna_status("Manifest PWA", "/site.webmanifest", 200),
+    ]
+    falhas = [item.get("nome") for item in checks if not item.get("ok")]
+    return {
+        "ok": not falhas,
+        "checks": checks,
+        "falhas": falhas,
+        "mensagem": "Arquivos estaticos e service worker revalidados." if not falhas else "Falhas em: " + ", ".join(falhas),
+    }
+
+
+def resolver_erros_com_checks_ok_auto_suporte():
+    total = 0
+    total += executar_check_auto_suporte(
+        detectar_fluxos_suspeitos_auto_suporte,
+        [],
+        "auto_suporte_fluxos",
+        {"auto_suporte_fluxos", "pacote_codex_fluxos"},
+    ) == []
+    total += executar_check_auto_suporte(
+        listar_planilhas_com_erro_auto_suporte,
+        [],
+        "auto_suporte_planilhas_erro",
+        {"auto_suporte_planilhas_erro", "pacote_codex_planilhas"},
+    ) == []
+    total += executar_check_auto_suporte(
+        detectar_inconsistencias_negocio_auto_suporte,
+        [],
+        "auto_suporte_negocio",
+        {"auto_suporte_negocio"},
+    ) == []
+    return {
+        "checks_ok": int(total),
+        "mensagem": "Erros ligados a checks saudaveis foram marcados como resolvidos quando aplicavel.",
+    }
+
+
+def executar_autonomia_auto_suporte(status_payload=None, modo=None, simular=False):
     status_payload = status_payload or status_auto_suporte()
     estado = carregar_estado_auto_suporte()
+    modo = normalizar_modo_autonomia_auto_suporte(modo or obter_modo_autonomia_auto_suporte(estado))
     planejadas = planejar_acoes_autonomas_auto_suporte(status_payload, estado)
+    bloqueadas = montar_acoes_bloqueadas_auto_suporte(status_payload)
+    simulacao = montar_simulacao_autonomia_auto_suporte(status_payload, planejadas, bloqueadas, modo)
     resultados = []
+
+    if simular or not AUTO_SUPORTE_MODOS_AUTONOMIA[modo]["executa"]:
+        registrar_historico_auto_suporte(
+            "autonomia_simulacao",
+            "Simulacao de autonomia",
+            f"Modo {AUTO_SUPORTE_MODOS_AUTONOMIA[modo]['label']}: nenhuma acao automatica executada.",
+            severidade="info",
+            detalhes={"modo": modo, "simulacao": simulacao},
+        )
+        status_atualizado = status_auto_suporte()
+        status_atualizado["autonomia"] = montar_autonomia_auto_suporte(status_payload=status_atualizado)
+        return {
+            "ok": True,
+            "modo": modo,
+            "simulacao": simulacao,
+            "executadas": [],
+            "planejadas": planejadas,
+            "pendentes_confirmacao": bloqueadas,
+            "mensagem": "Simulacao concluida. Nenhum reparo foi executado.",
+            "status": status_atualizado,
+        }
 
     for item in planejadas:
         acao = item.get("acao")
@@ -17854,6 +18093,14 @@ def executar_autonomia_auto_suporte(status_payload=None):
             severidade="info" if all(item.get("ok") for item in resultados) else "warning",
             detalhes={"resultados": resultados},
         )
+    if modo == "assistido" and bloqueadas:
+        registrar_historico_auto_suporte(
+            "autonomia_bloqueada",
+            "Acoes exigem confirmacao",
+            f"{len(bloqueadas)} acao(oes) sensivel(is) preparada(s), mas nao executada(s).",
+            severidade="warning",
+            detalhes={"acoes": bloqueadas},
+        )
 
     status_atualizado = status_auto_suporte()
     status_atualizado["autonomia"] = montar_autonomia_auto_suporte(status_payload=status_atualizado)
@@ -17861,6 +18108,9 @@ def executar_autonomia_auto_suporte(status_payload=None):
         "ok": all(item.get("ok") for item in resultados) if resultados else True,
         "executadas": resultados,
         "planejadas": planejadas,
+        "pendentes_confirmacao": bloqueadas,
+        "simulacao": simulacao,
+        "modo": modo,
         "mensagem": (
             f"AutoSuporte executou {len(resultados)} reparo(s) seguro(s)."
             if resultados else
@@ -17898,6 +18148,13 @@ def avaliar_alertas_auto_suporte(status_payload):
                 intervalo=1800,
             )
         elif estado_anterior and nivel == "info":
+            registrar_historico_auto_suporte(
+                "normalizacao",
+                "Status normalizado",
+                "AutoSuporte confirmou que os checks criticos voltaram ao normal.",
+                severidade="info",
+                detalhes={"estado_anterior": estado_anterior},
+            )
             enviar_alerta_estabilidade_assincrono(
                 "AutoSuporte Wagen Estetica\nStatus normalizado.\nNenhum incidente critico no momento.",
                 chave="auto_suporte_normalizou",
@@ -18217,6 +18474,10 @@ def executar_acao_auto_suporte(acao, observacao=""):
     if acao == "limpar_caches":
         limpar_caches_interface()
         mensagem = "Caches da interface, painel, clientes, relatorios, banco e configuracoes foram limpos."
+    elif acao == "limpar_cache_rota_lenta":
+        resultado = limpar_cache_rota_lenta_auto_suporte()
+        detalhes["cache_rota_lenta"] = resultado
+        mensagem = resultado.get("mensagem") or "Cache especifico da rota lenta foi limpo."
     elif acao == "validar_ambiente":
         checklist = montar_pre_deploy_checklist()
         falhas = [item["nome"] for item in checklist if not item.get("ok")]
@@ -18264,6 +18525,15 @@ def executar_acao_auto_suporte(acao, observacao=""):
         falhas = [item.get("nome") for item in checks if not item.get("ok")]
         mensagem = "PWA, manifest e service worker revalidados." if not falhas else "Falhas PWA: " + ", ".join(falhas)
         severidade = "info" if not falhas else "warning"
+    elif acao == "revalidar_estaticos":
+        resultado = revalidar_estaticos_auto_suporte()
+        detalhes["estaticos"] = resultado
+        mensagem = resultado.get("mensagem") or "Arquivos estaticos revalidados."
+        severidade = "info" if resultado.get("ok") else "warning"
+    elif acao == "resolver_erros_com_checks_ok":
+        resultado = resolver_erros_com_checks_ok_auto_suporte()
+        detalhes["checks_resolvidos"] = resultado
+        mensagem = resultado.get("mensagem") or "Checks saudaveis foram reavaliados."
     elif acao == "gerar_backup_suporte":
         sucesso, msg, destino = criar_backup_banco(force=True, tipo_backup="completo")
         detalhes.update({"sucesso": bool(sucesso), "destino": destino})
@@ -18441,8 +18711,15 @@ def api_auto_suporte_autonomia():
     if not usuario_pode_usar_auto_suporte():
         return jsonify({"erro": "nao_autorizado"}), 403
 
+    payload = request.get_json(silent=True) or request.form or {}
     try:
-        resultado = executar_autonomia_auto_suporte()
+        modo = payload.get("modo")
+        if modo:
+            modo = salvar_modo_autonomia_auto_suporte(modo)
+        resultado = executar_autonomia_auto_suporte(
+            modo=modo,
+            simular=bool(payload.get("simular")),
+        )
         return jsonify(json.loads(json.dumps(resultado, ensure_ascii=False, default=sanitizar_para_json)))
     except Exception as erro:
         registrar_ultimo_erro_producao(erro, descricao="auto_suporte_autonomia")
