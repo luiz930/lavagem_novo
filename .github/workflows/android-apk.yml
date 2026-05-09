@@ -10,10 +10,14 @@ on:
       - ".github/workflows/android-apk.yml"
   workflow_dispatch:
     inputs:
-      app_base_url:
-        description: "URL do servidor Flask que o APK deve abrir"
+      supabase_url:
+        description: "URL do projeto Supabase"
         required: false
-        default: "https://wagenestetica.duckdns.org"
+        default: ""
+      supabase_anon_key:
+        description: "Anon key publica do Supabase"
+        required: false
+        default: ""
 
 jobs:
   build:
@@ -36,7 +40,10 @@ jobs:
 
       - name: Build debug APK
         working-directory: mobile/android
-        run: gradle :app:assembleDebug -PappBaseUrl="${{ github.event.inputs.app_base_url || 'https://wagenestetica.duckdns.org' }}"
+        env:
+          SUPABASE_URL: ${{ github.event.inputs.supabase_url || secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ github.event.inputs.supabase_anon_key || secrets.SUPABASE_ANON_KEY }}
+        run: gradle :app:assembleDebug -PsupabaseUrl="$SUPABASE_URL" -PsupabaseAnonKey="$SUPABASE_ANON_KEY"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

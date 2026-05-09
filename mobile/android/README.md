@@ -1,22 +1,40 @@
-# Wagen Banco Android
+# Wagen Estetica Android Nativo
 
-APK Android do sistema Wagen Estetica.
+APK Android nativo do sistema Wagen Estetica.
 
-O app nao conecta diretamente no Supabase. Ele abre o proprio sistema Flask em WebView, com `?source=android_app`, e usa as mesmas telas, sidebar, login, sessao e regras de usuario do site. Assim, a senha do banco continua protegida no backend.
+Este app nao usa WebView e nao depende do Flask. Ele conversa diretamente com o Supabase usando:
 
-## URL do servidor
+- Supabase Auth para login.
+- PostgREST para `clientes`, `veiculos`, `servicos` e `fotos`.
+- Supabase Storage para upload de fotos no bucket `fotos`.
 
-A URL padrao fica em `app/build.gradle`:
+## Seguranca
 
-```gradle
-resValue "string", "app_base_url", "https://wagenestetica.duckdns.org"
+Nao coloque `DATABASE_URL`, senha PostgreSQL, service role key ou senha do pooler dentro do APK. Um APK pode ser extraido por qualquer pessoa que o instalar.
+
+O build usa somente:
+
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+
+As permissoes reais devem ser controladas no Supabase por RLS.
+
+## Configurar build no GitHub
+
+Cadastre os secrets em:
+
+```text
+Settings > Secrets and variables > Actions
 ```
 
-Para buildar apontando para outro servidor:
+Secrets esperados:
 
-```powershell
-gradle :app:assembleDebug -PappBaseUrl=https://seu-dominio.com
+```text
+SUPABASE_URL=https://SEU-PROJETO.supabase.co
+SUPABASE_ANON_KEY=SUA_ANON_KEY
 ```
+
+Depois rode o workflow `Build Android APK` ou faça push em `mobile/android/**`.
 
 ## Build local
 
@@ -30,7 +48,7 @@ Com os requisitos instalados:
 
 ```powershell
 cd mobile/android
-gradle :app:assembleDebug
+gradle :app:assembleDebug -PsupabaseUrl=https://SEU-PROJETO.supabase.co -PsupabaseAnonKey=SUA_ANON_KEY
 ```
 
 O APK sai em:
@@ -39,6 +57,11 @@ O APK sai em:
 mobile/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-## Build no GitHub
+## Telas nativas iniciais
 
-O workflow `Build Android APK` gera o APK como artefato em cada push que alterar `mobile/android/**` ou em execucao manual.
+- Login Supabase Auth.
+- Painel com contagens.
+- Cadastro e lista de clientes.
+- Cadastro e lista de atendimentos.
+- Captura de foto com camera nativa e upload para Supabase Storage.
+- Tela de conexao/configuracao.

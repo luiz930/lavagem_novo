@@ -3838,7 +3838,6 @@ def inject_global_template_context():
         "csrf_token": lambda: issue_csrf_token(session),
         "licenca_atual": licenca_atual,
         "pode_gerenciar_empresas": usuario_gerencia_empresas() if session.get("usuario") else False,
-        "pode_gerenciar_configuracao_sistema": usuario_gerencia_configuracao_sistema() if session.get("usuario") else False,
         "auto_suporte_disponivel": bool(auto_suporte_perfil),
         "auto_suporte_perfil": auto_suporte_perfil,
         "pagina_menu_habilitada": pagina_menu_habilitada,
@@ -7789,13 +7788,6 @@ PAGINAS_MENU_CONFIGURAVEIS = [
         "titulo": "Status do sistema",
         "descricao": "Resumo simples de saude operacional para o dono.",
         "endpoints": {"pagina_status_sistema", "status_sistema_json"},
-    },
-    {
-        "id": "app_banco",
-        "grupo": "Apoio / Administracao",
-        "titulo": "App banco",
-        "descricao": "App interno para acompanhar a conexao com Supabase/PostgreSQL e os dados principais.",
-        "endpoints": {"pagina_app_banco", "api_app_banco_status"},
     },
     {
         "id": "auto_suporte",
@@ -19054,150 +19046,6 @@ def status_sistema_json():
     if not usuario_gerencia_configuracao_sistema():
         return jsonify({"erro": "nao_autorizado"}), 403
     return jsonify(json.loads(json.dumps(montar_status_sistema_dono(), ensure_ascii=False, default=str)))
-
-
-APP_BANCO_TABELAS = [
-    {"nome": "clientes", "titulo": "Clientes", "empresa": True},
-    {"nome": "veiculos", "titulo": "Veiculos", "empresa": True},
-    {"nome": "servicos", "titulo": "Servicos", "empresa": True},
-    {"nome": "fotos", "titulo": "Fotos", "empresa": True},
-    {"nome": "usuarios", "titulo": "Usuarios", "empresa": True},
-    {"nome": "notificacoes", "titulo": "Notificacoes", "empresa": True},
-    {"nome": "retornos_clientes", "titulo": "Retornos", "empresa": True},
-    {"nome": "orcamentos", "titulo": "Orcamentos", "empresa": True},
-    {"nome": "notas_fiscais", "titulo": "Notas fiscais", "empresa": True},
-    {"nome": "sincronizacoes_clientes", "titulo": "Sincronizacoes", "empresa": True},
-]
-
-
-def linha_para_dict(row, cursor=None):
-    if not row:
-        return {}
-    if isinstance(row, dict):
-        return dict(row)
-    if hasattr(row, "keys"):
-        return {chave: row[chave] for chave in row.keys()}
-    colunas = [item[0] for item in (getattr(cursor, "description", None) or [])]
-    return dict(zip(colunas, row)) if colunas else {}
-
-
-def contar_registros_app_banco(cursor, tabela, empresa_id=None):
-    try:
-        if empresa_id is not None:
-            cursor.execute(f"SELECT COUNT(*) AS total FROM {tabela} WHERE empresa_id=?", (empresa_id,))
-        else:
-            cursor.execute(f"SELECT COUNT(*) AS total FROM {tabela}")
-        row = linha_para_dict(cursor.fetchone(), cursor)
-        return {"ok": True, "total": int(row.get("total") or 0), "erro": ""}
-    except Exception as erro:
-        return {"ok": False, "total": 0, "erro": str(erro)}
-
-
-def listar_registros_recentes_app_banco(cursor, tabela, empresa_id, campos, limite=6):
-    try:
-        campos_sql = ", ".join(campos)
-        cursor.execute(
-            f"""
-            SELECT {campos_sql}
-            FROM {tabela}
-            WHERE empresa_id=?
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (empresa_id, int(limite)),
-        )
-        return [linha_para_dict(row, cursor) for row in cursor.fetchall()]
-    except Exception:
-        return []
-
-
-def montar_contexto_app_banco():
-    empresa_id = normalize_empresa_id(empresa_atual_id())
-    status = diagnosticar_banco_online()
-    contexto = {
-        "gerado_em": agora_iso(),
-        "empresa_id": empresa_id,
-        "backend_ativo": "desconhecido",
-        "banco_status": status,
-        "tabelas": [],
-        "recentes": {
-            "servicos": [],
-            "clientes": [],
-            "notificacoes": [],
-        },
-        "ok": False,
-        "mensagem": "",
-    }
-
-    conn = None
-    try:
-        conn = conectar()
-        contexto["backend_ativo"] = getattr(conn, "backend", "desconhecido")
-        c = conn.cursor()
-
-        tabelas = []
-        for item in APP_BANCO_TABELAS:
-            contagem = contar_registros_app_banco(
-                c,
-                item["nome"],
-                empresa_id if item.get("empresa") else None,
-            )
-            tabelas.append({**item, **contagem})
-        contexto["tabelas"] = tabelas
-
-        contexto["recentes"]["servicos"] = listar_registros_recentes_app_banco(
-            c,
-            "servicos",
-            empresa_id,
-            ["id", "status", "entrada", "entrega", "valor", "veiculo_id"],
-        )
-        contexto["recentes"]["clientes"] = listar_registros_recentes_app_banco(
-            c,
-            "clientes",
-            empresa_id,
-            ["id", "nome", "telefone", "placa_principal"],
-        )
-        contexto["recentes"]["notificacoes"] = listar_registros_recentes_app_banco(
-            c,
-            "notificacoes",
-            empresa_id,
-            ["id", "tipo", "categoria", "mensagem", "criada_em", "lida"],
-        )
-        contexto["ok"] = True
-        contexto["mensagem"] = "App banco conectado ao conector principal do sistema."
-    except Exception as erro:
-        contexto["ok"] = False
-        contexto["mensagem"] = f"Nao foi possivel consultar o banco: {erro}"
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    return contexto
-
-
-@app.route("/app-banco")
-def pagina_app_banco():
-    if not session.get("usuario"):
-        return redirect("/login")
-    if not usuario_gerencia_configuracao_sistema():
-        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem acessar o app banco.")
-        return redirect("/configuracoes")
-
-    preparar_rotinas_interface_logada()
-    return render_template("app_banco.html", app_banco=montar_contexto_app_banco())
-
-
-@app.route("/api/app-banco/status")
-def api_app_banco_status():
-    if not session.get("usuario"):
-        return jsonify({"ok": False, "erro": "login_necessario"}), 401
-    if not usuario_gerencia_configuracao_sistema():
-        return jsonify({"ok": False, "erro": "acesso_negado"}), 403
-
-    return jsonify(json.loads(json.dumps(montar_contexto_app_banco(), ensure_ascii=False, default=str)))
 
 
 @app.route("/diagnostico/backup-suporte", methods=["POST"])

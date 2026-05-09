@@ -6,6 +6,10 @@ android {
     namespace "br.com.wagenestetica.banco"
     compileSdk 35
 
+    buildFeatures {
+        buildConfig true
+    }
+
     defaultConfig {
         applicationId "br.com.wagenestetica.banco"
         minSdk 23
@@ -13,7 +17,13 @@ android {
         versionCode 1
         versionName "0.1.0"
 
-        def baseUrl = (project.findProperty("appBaseUrl") ?: "https://wagenestetica.duckdns.org").toString().trim()
-        resValue "string", "app_base_url", baseUrl
+        def supabaseUrl = (project.findProperty("supabaseUrl") ?: "").toString().trim()
+        def supabaseAnonKey = (project.findProperty("supabaseAnonKey") ?: "").toString().trim()
+        buildConfigField "String", "SUPABASE_URL", "\"${supabaseUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+        buildConfigField "String", "SUPABASE_ANON_KEY", "\"${supabaseAnonKey.replace("\\", "\\\\").replace("\"", "\\\"")}\""
     }
+}
+
+dependencies {
+    implementation "androidx.core:core:1.13.1"
 }
