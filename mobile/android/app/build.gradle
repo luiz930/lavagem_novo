@@ -1,0 +1,19 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "br.com.wagenestetica.banco"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "br.com.wagenestetica.banco"
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName "0.1.0"
+
+        def baseUrl = (project.findProperty("appBaseUrl") ?: "https://wagenestetica.duckdns.org").toString().trim()
+        resValue "string", "app_base_url", baseUrl
+    }
+}

@@ -408,6 +408,51 @@ class AppRegressionTests(unittest.TestCase):
         montar.assert_called_once()
         render_mock.assert_called_once()
 
+    def test_app_banco_requires_login(self):
+        with patch.object(app_module, "INIT_DB_EXECUTADO", True):
+            response = self.client.get("/app-banco")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response.headers.get("Location", ""))
+
+    def test_api_app_banco_requires_login(self):
+        with patch.object(app_module, "INIT_DB_EXECUTADO", True):
+            response = self.client.get("/api/app-banco/status")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["erro"], "login_necessario")
+
+    def test_app_banco_renderiza_para_admin_sem_expor_credenciais(self):
+        contexto = {
+            "gerado_em": "2026-05-09T12:00:00",
+            "empresa_id": 1,
+            "backend_ativo": "postgres",
+            "banco_status": {
+                "backend_label": "Supabase / PostgreSQL",
+                "mensagem": "Conectado",
+                "host": "db.example.supabase.co",
+                "database": "postgres",
+            },
+            "tabelas": [],
+            "recentes": {"servicos": [], "clientes": [], "notificacoes": []},
+            "ok": True,
+            "mensagem": "ok",
+        }
+
+        with app_module.app.test_request_context("/app-banco", method="GET"):
+            session["usuario"] = "admin"
+            session["usuario_perfil"] = "admin"
+            session["empresa_id"] = 1
+            with patch.object(app_module, "preparar_rotinas_interface_logada"), \
+                 patch.object(app_module, "usuario_gerencia_configuracao_sistema", return_value=True), \
+                 patch.object(app_module, "montar_contexto_app_banco", return_value=contexto) as montar, \
+                 patch.object(app_module, "render_template", return_value="ok") as render_mock:
+                response = app_module.pagina_app_banco()
+
+        self.assertEqual(response, "ok")
+        montar.assert_called_once()
+        render_mock.assert_called_once_with("app_banco.html", app_banco=contexto)
+
     def test_auto_suporte_limpa_caches_com_acao_segura(self):
         app_module.CLIENTES_CONTEXT_CACHE["testado_em"] = 9999999999.0
         app_module.CLIENTES_CONTEXT_CACHE["chave"] = "admin|1|"

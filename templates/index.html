@@ -1425,6 +1425,9 @@ input[type="file"] {
 {% if pagina_menu_habilitada('diagnostico') %}
 <a href="/diagnostico"><button><span>&#128736;</span> Diagnostico</button></a>
 {% endif %}
+{% if pode_gerenciar_configuracao_sistema and pagina_menu_habilitada('app_banco') %}
+<a href="/app-banco"><button><span>&#9635;</span> App banco</button></a>
+{% endif %}
 {% if pagina_menu_habilitada('configuracoes_site') %}
 <a href="/configuracoes/site"><button><span>&#127912;</span> Configuracoes do site</button></a>
 {% endif %}

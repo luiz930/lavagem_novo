@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block title %}App banco{% endblock %}
+{% block titulo %}App banco{% endblock %}
+{% block subtitulo %}Conexao, tabelas e leitura rapida do banco principal{% endblock %}
+
+{% block actions %}
+<button type="button" class="button-secondary" id="app-banco-refresh">Atualizar</button>
+<a href="/diagnostico" class="button-link"><button type="button">Diagnostico</button></a>
+<a href="/configuracoes/banco?detalhar_banco=1" class="button-link"><button type="button">Configurar banco</button></a>
+{% endblock %}
+
+{% block content %}
+<div class="page-grid">
+    <div class="page-card">
+        <p class="pill-label">Conexao</p>
+        <h2 class="section-title top-spacing" id="app-banco-backend">{{ app_banco.banco_status.backend_label }}</h2>
+        <p><b>Status:</b> <span id="app-banco-mensagem">{{ app_banco.banco_status.mensagem }}</span></p>
+        <p><b>Backend em uso:</b> <span id="app-banco-backend-ativo">{{ app_banco.backend_ativo }}</span></p>
+        <p><b>Host:</b> <span id="app-banco-host">{{ app_banco.banco_status.host or "-" }}</span></p>
+        <p><b>Banco:</b> <span id="app-banco-database">{{ app_banco.banco_status.database or "-" }}</span></p>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Escopo</p>
+        <h2 class="section-title top-spacing">Empresa {{ app_banco.empresa_id }}</h2>
+        <p><b>Gerado em:</b> <span id="app-banco-gerado">{{ app_banco.gerado_em }}</span></p>
+        <p><b>Resultado:</b> <span id="app-banco-resultado">{{ app_banco.mensagem }}</span></p>
+        <p class="muted-text">A leitura usa o conector principal do Flask e nao mostra senha, token ou connection string.</p>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <div class="actions-row actions-row--between">
+        <div>
+            <p class="pill-label">Tabelas principais</p>
+            <h2 class="section-title top-spacing">Contagem por tabela</h2>
+        </div>
+    </div>
+    <div class="table-wrap top-spacing">
+        <table>
+            <thead>
+                <tr>
+                    <th>Tabela</th>
+                    <th>Registros</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="app-banco-tabelas">
+                {% for tabela in app_banco.tabelas %}
+                <tr>
+                    <td>{{ tabela.titulo }}</td>
+                    <td>{{ tabela.total }}</td>
+                    <td>{% if tabela.ok %}OK{% else %}{{ tabela.erro }}{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="page-grid top-spacing">
+    <div class="page-card">
+        <p class="pill-label">Atendimentos</p>
+        <h2 class="section-title top-spacing">Ultimos servicos</h2>
+        <div class="list-grid" id="app-banco-servicos">
+            {% for item in app_banco.recentes.servicos %}
+            <div class="document-card">
+                <p><b>#{{ item.id }}</b> {{ item.status or "-" }}</p>
+                <p class="muted-text">Entrada: {{ item.entrada or "-" }} | Valor: {{ item.valor or 0 }}</p>
+            </div>
+            {% else %}
+            <p class="muted-text">Nenhum servico recente encontrado.</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="page-card">
+        <p class="pill-label">Clientes</p>
+        <h2 class="section-title top-spacing">Ultimos clientes</h2>
+        <div class="list-grid" id="app-banco-clientes">
+            {% for item in app_banco.recentes.clientes %}
+            <div class="document-card">
+                <p><b>#{{ item.id }}</b> {{ item.nome or "-" }}</p>
+                <p class="muted-text">{{ item.telefone or "-" }} | {{ item.placa_principal or "-" }}</p>
+            </div>
+            {% else %}
+            <p class="muted-text">Nenhum cliente recente encontrado.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
+    <p class="pill-label">Notificacoes</p>
+    <h2 class="section-title top-spacing">Ultimas mensagens do sistema</h2>
+    <div class="list-grid" id="app-banco-notificacoes">
+        {% for item in app_banco.recentes.notificacoes %}
+        <div class="document-card">
+            <p><b>#{{ item.id }}</b> {{ item.tipo or "info" }}{% if item.categoria %} / {{ item.categoria }}{% endif %}</p>
+            <p class="muted-text">{{ item.mensagem or "-" }}</p>
+        </div>
+        {% else %}
+        <p class="muted-text">Nenhuma notificacao recente encontrada.</p>
+        {% endfor %}
+    </div>
+</div>
+
+<script>
+(function () {
+    const refreshButton = document.getElementById("app-banco-refresh");
+    const tabelasBody = document.getElementById("app-banco-tabelas");
+
+    function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, function (char) {
+            return ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;"
+            })[char];
+        });
+    }
+
+    function cardList(items, renderer, emptyText) {
+        if (!items || !items.length) {
+            return `<p class="muted-text">${escapeHtml(emptyText)}</p>`;
+        }
+        return items.map((item) => `<div class="document-card">${renderer(item)}</div>`).join("");
+    }
+
+    async function refresh() {
+        if (!refreshButton) {
+            return;
+        }
+        refreshButton.disabled = true;
+        try {
+            const response = await fetch("/api/app-banco/status", { cache: "no-store" });
+            const data = await response.json();
+            if (!response.ok || !data.ok) {
+                throw new Error(data.erro || data.mensagem || "Falha ao consultar o app banco.");
+            }
+
+            document.getElementById("app-banco-backend").textContent = data.banco_status.backend_label || "-";
+            document.getElementById("app-banco-mensagem").textContent = data.banco_status.mensagem || "-";
+            document.getElementById("app-banco-backend-ativo").textContent = data.backend_ativo || "-";
+            document.getElementById("app-banco-host").textContent = data.banco_status.host || "-";
+            document.getElementById("app-banco-database").textContent = data.banco_status.database || "-";
+            document.getElementById("app-banco-gerado").textContent = data.gerado_em || "-";
+            document.getElementById("app-banco-resultado").textContent = data.mensagem || "-";
+
+            tabelasBody.innerHTML = (data.tabelas || []).map((tabela) => `
+                <tr>
+                    <td>${escapeHtml(tabela.titulo || tabela.nome || "-")}</td>
+                    <td>${escapeHtml(tabela.total || 0)}</td>
+                    <td>${escapeHtml(tabela.ok ? "OK" : (tabela.erro || "Erro"))}</td>
+                </tr>
+            `).join("");
+
+            document.getElementById("app-banco-servicos").innerHTML = cardList(
+                data.recentes.servicos,
+                (item) => `<p><b>#${escapeHtml(item.id)}</b> ${escapeHtml(item.status || "-")}</p><p class="muted-text">Entrada: ${escapeHtml(item.entrada || "-")} | Valor: ${escapeHtml(item.valor || 0)}</p>`,
+                "Nenhum servico recente encontrado."
+            );
+            document.getElementById("app-banco-clientes").innerHTML = cardList(
+                data.recentes.clientes,
+                (item) => `<p><b>#${escapeHtml(item.id)}</b> ${escapeHtml(item.nome || "-")}</p><p class="muted-text">${escapeHtml(item.telefone || "-")} | ${escapeHtml(item.placa_principal || "-")}</p>`,
+                "Nenhum cliente recente encontrado."
+            );
+            document.getElementById("app-banco-notificacoes").innerHTML = cardList(
+                data.recentes.notificacoes,
+                (item) => `<p><b>#${escapeHtml(item.id)}</b> ${escapeHtml(item.tipo || "info")}${item.categoria ? " / " + escapeHtml(item.categoria) : ""}</p><p class="muted-text">${escapeHtml(item.mensagem || "-")}</p>`,
+                "Nenhuma notificacao recente encontrada."
+            );
+        } catch (error) {
+            document.getElementById("app-banco-resultado").textContent = error.message || "Falha ao atualizar.";
+        } finally {
+            refreshButton.disabled = false;
+        }
+    }
+
+    if (refreshButton) {
+        refreshButton.addEventListener("click", refresh);
+    }
+}());
+</script>
+{% endblock %}
