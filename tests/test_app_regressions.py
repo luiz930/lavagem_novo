@@ -1964,6 +1964,10 @@ class AppRegressionTests(unittest.TestCase):
             self.assertEqual(status["perfil"], "administrador")
             self.assertEqual(status["modo_interface"], "simples")
             self.assertTrue(status["acoes_simples"])
+            acoes = {item["id"]: item for item in status["acoes"]}
+            self.assertIn("limpar_cache_rota_lenta", acoes)
+            self.assertEqual(acoes["limpar_todos_erros"]["confirmacao"], "LIMPAR TODOS OS ERROS")
+            self.assertTrue(acoes["limpar_todos_erros"]["confirmacao_obrigatoria"])
 
     def test_auto_suporte_acao_limpa_erros_resolvidos(self):
         with tempfile.TemporaryDirectory(prefix="auto_suporte_limpa_erros_") as pasta:
@@ -2252,6 +2256,8 @@ class AppRegressionTests(unittest.TestCase):
         self.assertIn("AutoSuporte", html)
         self.assertIn("Saude do sistema para o dono", html)
         self.assertIn("Modo suporte remoto", html)
+        self.assertIn('data-confirmacao="LIMPAR TODOS OS ERROS"', html)
+        self.assertIn('data-confirmacao="CORRIGIR CLASSIFICACAO"', html)
 
     def test_pagina_auto_suporte_admin_renderiza_fluxo_simples(self):
         status_auto = {

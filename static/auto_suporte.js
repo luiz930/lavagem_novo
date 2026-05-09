@@ -120,7 +120,12 @@
         const autonomia = estado.status && estado.status.autonomia ? estado.status.autonomia : {};
         const bloqueadas = Array.isArray(autonomia.acoes_bloqueadas) ? autonomia.acoes_bloqueadas : [];
         const item = bloqueadas.find((entrada) => entrada.acao === acao);
-        return item && item.confirmacao ? item : null;
+        if (item && item.confirmacao) {
+            return item;
+        }
+        const acoes = estado.status && Array.isArray(estado.status.acoes) ? estado.status.acoes : [];
+        const acaoCatalogo = acoes.find((entrada) => entrada.id === acao || entrada.acao === acao);
+        return acaoCatalogo && acaoCatalogo.confirmacao ? acaoCatalogo : null;
     }
 
     function abrirPainel() {
@@ -533,28 +538,36 @@
         atalhos.appendChild(ocultar);
         body.appendChild(atalhos);
 
-        const acoes = [
-            ["limpar_caches", "Caches"],
-            ["validar_ambiente", "Ambiente"],
-            ["testar_banco", "Banco"],
-            ["testar_backup", "Backup"],
-            ["testar_telegram", "Telegram"],
-            ["revalidar_pwa", "PWA"],
-            ["gerar_backup_suporte", "Backup suporte"],
-            ["desativar_planilhas_com_erro", "Pausar planilhas"],
-            ["corrigir_classificacao_clientes", "Novo/retorno"],
-            ["limpar_erros_resolvidos", "Erros resolvidos"],
-            ["limpar_todos_erros", "Limpar todos"],
-            ["gerar_pacote_codex", "Pacote Codex"],
-            ["enviar_relatorio_telegram", "Relatorio"],
-            ["marcar_fluxo_suspeito", "Fluxos"],
-            ["registrar_incidente", "Incidente"],
-            ["enviar_alerta_telegram", "Alerta"],
-        ];
+        const acoes = Array.isArray(status.acoes) && status.acoes.length
+            ? status.acoes.map((item) => [item.id || item.acao, item.label || item.id || item.acao, item])
+            : [
+                ["limpar_caches", "Caches"],
+                ["limpar_cache_rota_lenta", "Tela lenta"],
+                ["validar_ambiente", "Ambiente"],
+                ["testar_banco", "Banco"],
+                ["testar_backup", "Backup"],
+                ["testar_telegram", "Telegram"],
+                ["revalidar_pwa", "PWA"],
+                ["revalidar_estaticos", "Estaticos"],
+                ["resolver_erros_com_checks_ok", "Checks OK"],
+                ["gerar_backup_suporte", "Backup suporte"],
+                ["desativar_planilhas_com_erro", "Pausar planilhas"],
+                ["corrigir_classificacao_clientes", "Novo/retorno"],
+                ["limpar_erros_resolvidos", "Erros resolvidos"],
+                ["limpar_todos_erros", "Limpar todos"],
+                ["gerar_pacote_codex", "Pacote Codex"],
+                ["enviar_relatorio_telegram", "Relatorio"],
+                ["registrar_incidente", "Incidente"],
+                ["enviar_alerta_telegram", "Alerta"],
+                ["marcar_fluxo_suspeito", "Fluxos"],
+            ];
         const actions = criarElemento("div", "auto-support-actions");
-        acoes.forEach(([acao, label]) => {
+        acoes.forEach(([acao, label, meta]) => {
             const btn = criarElemento("button", "auto-support-action", label);
             btn.type = "button";
+            if (meta && meta.confirmacao) {
+                btn.title = `Exige confirmacao: ${meta.confirmacao}`;
+            }
             btn.addEventListener("click", () => executarAcao(acao, label));
             actions.appendChild(btn);
         });

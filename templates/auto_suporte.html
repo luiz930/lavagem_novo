@@ -140,13 +140,13 @@
             <input type="hidden" name="acao" value="gerar_pacote_codex">
             <button type="submit">Gerar pacote Codex</button>
         </form>
-        <form method="post" action="/auto-suporte/acao">
+        <form method="post" action="/auto-suporte/acao" class="auto-suporte-confirmacao-form" data-confirmacao="LIMPAR TODOS OS ERROS" data-label="Limpar todos os erros">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="acao" value="limpar_todos_erros">
             <input type="hidden" name="confirmacao" value="">
             <button type="submit" class="button-danger">Limpar erros</button>
         </form>
-        <form method="post" action="/auto-suporte/acao">
+        <form method="post" action="/auto-suporte/acao" class="auto-suporte-confirmacao-form" data-confirmacao="CORRIGIR CLASSIFICACAO" data-label="Corrigir classificacao de clientes">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="acao" value="corrigir_classificacao_clientes">
             <input type="hidden" name="confirmacao" value="">
@@ -374,4 +374,25 @@
 </div>
 
 {% endif %}
+{% endblock %}
+
+{% block page_scripts %}
+{{ super() }}
+<script>
+document.querySelectorAll(".auto-suporte-confirmacao-form").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+        const esperado = form.dataset.confirmacao || "";
+        if (!esperado) return;
+        const label = form.dataset.label || "Acao sensivel";
+        const informado = window.prompt(`${label}\nDigite exatamente: ${esperado}`) || "";
+        if (informado !== esperado) {
+            event.preventDefault();
+            window.alert("Confirmacao cancelada ou incorreta.");
+            return;
+        }
+        const input = form.querySelector('input[name="confirmacao"]');
+        if (input) input.value = informado;
+    });
+});
+</script>
 {% endblock %}

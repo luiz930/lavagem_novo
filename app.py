@@ -17884,6 +17884,18 @@ def risco_acao_auto_suporte(acao):
     }
 
 
+def montar_acoes_auto_suporte_payload():
+    return [
+        {
+            "id": chave,
+            "label": label,
+            **risco_acao_auto_suporte(chave),
+            "confirmacao_obrigatoria": chave in AUTO_SUPORTE_ACOES_EXIGEM_CONFIRMACAO,
+        }
+        for chave, label in ACOES_AUTO_SUPORTE.items()
+    ]
+
+
 def validar_confirmacao_acao_auto_suporte(acao, confirmacao=""):
     requisitos = AUTO_SUPORTE_ACOES_EXIGEM_CONFIRMACAO.get(acao)
     if not requisitos:
@@ -18568,10 +18580,7 @@ def status_auto_suporte():
         "sugestoes": montar_sugestoes_auto_suporte(status, fluxos, planilhas_erro, tempo_resposta, erros_abertos, inconsistencias_negocio),
         "historico": listar_historico_auto_suporte(limite=10),
         "auto_abrir": bool(diagnostico.get("auto_abrir")),
-        "acoes": [
-            {"id": chave, "label": label}
-            for chave, label in ACOES_AUTO_SUPORTE.items()
-        ],
+        "acoes": montar_acoes_auto_suporte_payload(),
         "mensagem": diagnostico.get("frase") or ("Sistema sem incidentes criticos." if not falhas else "AutoSuporte encontrou pontos para revisar."),
     }
     resposta["autonomia"] = montar_autonomia_auto_suporte(status_payload=resposta)
