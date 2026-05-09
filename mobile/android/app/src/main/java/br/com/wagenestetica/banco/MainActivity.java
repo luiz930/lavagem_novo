@@ -3,6 +3,7 @@ package br.com.wagenestetica.banco;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
@@ -53,6 +54,7 @@ public class MainActivity extends Activity {
     private static final int DANGER = Color.rgb(239, 68, 68);
 
     private final SupabaseClient supabase = new SupabaseClient();
+    private SharedPreferences preferences;
     private LinearLayout root;
     private LinearLayout sidebar;
     private FrameLayout content;
@@ -66,12 +68,28 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         configureSystemBars();
         requestRuntimePermissions();
+        preferences = getSharedPreferences("supabase", MODE_PRIVATE);
+        loadSupabaseConfig();
 
         if (!supabase.isConfigured()) {
-            showMissingConfig();
+            showConfigSetup();
             return;
         }
         showLogin();
+    }
+
+    private void loadSupabaseConfig() {
+        String url = preferences.getString("url", BuildConfig.SUPABASE_URL);
+        String anonKey = preferences.getString("anon_key", BuildConfig.SUPABASE_ANON_KEY);
+        supabase.configure(url, anonKey);
+    }
+
+    private void saveSupabaseConfig(String url, String anonKey) {
+        preferences.edit()
+            .putString("url", url.trim())
+            .putString("anon_key", anonKey.trim())
+            .apply();
+        supabase.configure(url, anonKey);
     }
 
     private void configureSystemBars() {
@@ -160,10 +178,26 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void showMissingConfig() {
-        LinearLayout box = page("Configuracao pendente");
-        box.addView(paragraph("Este APK nativo precisa ser compilado com SUPABASE_URL e SUPABASE_ANON_KEY."));
-        box.addView(paragraph("No GitHub, cadastre esses valores em Settings > Secrets and variables > Actions e rode o workflow Build Android APK."));
+    private void showConfigSetup() {
+        LinearLayout box = page("Configurar Supabase");
+        EditText url = input("SUPABASE_URL");
+        EditText anonKey = input("SUPABASE_ANON_KEY");
+        url.setText(supabase.getBaseUrl());
+        anonKey.setText(supabase.hasAnonKey() ? supabase.getAnonKey() : "");
+        Button save = button("Salvar e entrar", GOLD);
+        save.setOnClickListener(v -> {
+            saveSupabaseConfig(url.getText().toString(), anonKey.getText().toString());
+            if (!supabase.isConfigured()) {
+                toast("Informe a URL e a anon key do Supabase.");
+                return;
+            }
+            showLogin();
+        });
+        box.addView(paragraph("Informe os dados publicos do seu projeto Supabase. O app salva isso no celular e nao depende do Flask."));
+        box.addView(url);
+        box.addView(anonKey);
+        box.addView(save);
+        box.addView(paragraph("Use a anon public key. Nao use service role key nem senha do banco no aplicativo."));
         setContentView(wrap(box));
     }
 
@@ -350,10 +384,20 @@ public class MainActivity extends Activity {
 
     private void showConfig() {
         LinearLayout page = page("Conexao");
-        page.addView(metric("Supabase URL", empty(BuildConfig.SUPABASE_URL) ? "nao configurada" : BuildConfig.SUPABASE_URL));
-        page.addView(metric("Anon key", empty(BuildConfig.SUPABASE_ANON_KEY) ? "nao configurada" : "configurada"));
+        EditText url = input("SUPABASE_URL");
+        EditText anonKey = input("SUPABASE_ANON_KEY");
+        url.setText(supabase.getBaseUrl());
+        anonKey.setText(supabase.hasAnonKey() ? supabase.getAnonKey() : "");
+        Button save = button("Salvar conexao", GOLD);
+        save.setOnClickListener(v -> {
+            saveSupabaseConfig(url.getText().toString(), anonKey.getText().toString());
+            toast("Conexao salva.");
+        });
+        page.addView(url);
+        page.addView(anonKey);
+        page.addView(save);
         page.addView(paragraph("Este APK nao usa Flask. Ele chama Supabase Auth, PostgREST e Storage diretamente."));
-        page.addView(paragraph("Para dados reais, configure RLS no Supabase e compile com SUPABASE_URL e SUPABASE_ANON_KEY."));
+        page.addView(paragraph("Para dados reais, configure RLS no Supabase. Use anon key, nunca service role key."));
         setContent(page);
     }
 
@@ -540,12 +584,30 @@ public class MainActivity extends Activity {
     }
 
     private static class SupabaseClient {
-        private final String baseUrl = trimTrailingSlash(BuildConfig.SUPABASE_URL);
-        private final String anonKey = BuildConfig.SUPABASE_ANON_KEY == null ? "" : BuildConfig.SUPABASE_ANON_KEY.trim();
+        private String baseUrl = "";
+        private String anonKey = "";
         private String accessToken = "";
+
+        void configure(String url, String key) {
+            baseUrl = trimTrailingSlash(url);
+            anonKey = key == null ? "" : key.trim();
+            accessToken = "";
+        }
 
         boolean isConfigured() {
             return !baseUrl.isEmpty() && !anonKey.isEmpty();
+        }
+
+        String getBaseUrl() {
+            return baseUrl;
+        }
+
+        String getAnonKey() {
+            return anonKey;
+        }
+
+        boolean hasAnonKey() {
+            return !anonKey.isEmpty();
         }
 
         void login(String email, String password) throws Exception {
