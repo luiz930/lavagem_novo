@@ -655,8 +655,8 @@ document.addEventListener("storage", (evento) => {
 <script src="/static/photo_upload.js"></script>
 <script src="/static/pwa_install.js"></script>
 {% if auto_suporte_disponivel %}
-<link rel="stylesheet" href="/static/auto_suporte.css">
-<script src="/static/auto_suporte.js"></script>
+<link rel="stylesheet" href="/static/auto_suporte.css?v={{ app_version }}">
+<script src="/static/auto_suporte.js?v={{ app_version }}"></script>
 {% endif %}
 {% block page_scripts %}{% endblock %}
 

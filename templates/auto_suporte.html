@@ -40,6 +40,11 @@
         <h2 class="section-title top-spacing">{{ historico_auto_suporte|length }}</h2>
         <p class="muted-text">Eventos recentes registrados pelo AutoSuporte.</p>
     </div>
+    <div class="page-card">
+        <p class="pill-label">Autonomia</p>
+        <h2 class="section-title top-spacing">{{ status_auto.autonomia.acoes_permitidas|length }}</h2>
+        <p class="muted-text">Reparos simples liberados para execucao automatica.</p>
+    </div>
 </div>
 
 <div class="page-card top-spacing">
@@ -97,6 +102,69 @@
             <button type="submit">Modo suporte remoto</button>
         </form>
     </div>
+</div>
+
+<div class="page-card top-spacing">
+    <p class="pill-label">Auto-reparo seguro</p>
+    <div class="page-grid top-spacing">
+        <div>
+            <p><b>Limite por ciclo:</b> {{ status_auto.autonomia.limite_por_ciclo }}</p>
+            <p><b>Cooldown:</b> {{ status_auto.autonomia.cooldown_segundos // 60 }} min</p>
+            <p class="muted-text">Ultimo ciclo: {{ status_auto.autonomia.ultimo_ciclo or "Ainda nao executado" }}</p>
+        </div>
+        <div>
+            <p><b>Acoes autonomas</b></p>
+            <div class="actions-row actions-row--left top-spacing">
+                {% for acao in status_auto.autonomia.acoes_permitidas %}
+                <span class="pill-label">{{ acao.label }}</span>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% if status_auto.autonomia.ultimo_resultado %}
+    <div class="table-wrap top-spacing">
+        <table>
+            <thead>
+                <tr>
+                    <th>Acao</th>
+                    <th>Status</th>
+                    <th>Mensagem</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in status_auto.autonomia.ultimo_resultado %}
+                <tr>
+                    <td>{{ item.label or item.acao }}</td>
+                    <td>{{ "OK" if item.ok else "Falhou" }}</td>
+                    <td>{{ item.mensagem }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% if status_auto.autonomia.acoes_bloqueadas %}
+    <div class="table-wrap top-spacing">
+        <table>
+            <thead>
+                <tr>
+                    <th>Acao manual</th>
+                    <th>Motivo</th>
+                    <th>Seguranca</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in status_auto.autonomia.acoes_bloqueadas %}
+                <tr>
+                    <td>{{ item.label or item.acao }}</td>
+                    <td>{{ item.motivo }}</td>
+                    <td>{{ item.seguranca }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
 </div>
 
 <div class="page-grid top-spacing">

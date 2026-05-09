@@ -9,6 +9,7 @@
         aberto: localStorage.getItem("wagen_auto_suporte_aberto") === "1",
         logs: [],
         pacoteCodex: null,
+        autonomiaRodando: false,
     };
 
     function criarElemento(tag, classe, texto) {
@@ -137,9 +138,46 @@
             } else {
                 renderizar();
             }
+            if (estado.status && estado.status.ok === false) {
+                executarAutonomia();
+            }
         } catch (erro) {
             adicionarLog("Falha no AutoSuporte", String(erro), false);
             renderizar();
+        }
+    }
+
+    async function executarAutonomia() {
+        if (estado.autonomiaRodando) {
+            return;
+        }
+        estado.autonomiaRodando = true;
+        try {
+            const resposta = await fetch("/api/auto-suporte/autonomia", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRF-Token": obterCsrfToken(),
+                },
+                body: JSON.stringify({ origem: "widget" }),
+            });
+            const dados = await resposta.json();
+            if (!resposta.ok || dados.erro) {
+                throw new Error(dados.erro || "Falha ao executar autonomia.");
+            }
+            estado.status = dados.status || estado.status;
+            const executadas = Array.isArray(dados.executadas) ? dados.executadas : [];
+            if (executadas.length) {
+                adicionarLog("Auto-reparo seguro", dados.mensagem || `${executadas.length} acao(oes) executada(s).`, dados.ok !== false);
+                abrirPainel();
+            } else {
+                renderizar();
+            }
+        } catch (erro) {
+            adicionarLog("Auto-reparo seguro", String(erro), false);
+            renderizar();
+        } finally {
+            estado.autonomiaRodando = false;
         }
     }
 
@@ -256,6 +294,40 @@
         return bloco;
     }
 
+    function renderizarAutonomia(status) {
+        const autonomia = status && status.autonomia ? status.autonomia : {};
+        const bloco = criarElemento("div", "auto-support-autonomy");
+        bloco.appendChild(criarElemento("p", "auto-support-section-title", "Auto-reparo seguro"));
+        const ultimoResultado = Array.isArray(autonomia.ultimo_resultado) ? autonomia.ultimo_resultado : [];
+        const bloqueadas = Array.isArray(autonomia.acoes_bloqueadas) ? autonomia.acoes_bloqueadas : [];
+        const resumo = ultimoResultado.length
+            ? `${ultimoResultado.length} acao(oes) no ultimo ciclo.`
+            : "Acoes simples rodam sozinhas com limite e cooldown.";
+        bloco.appendChild(criarElemento("p", "auto-support-log-message", resumo));
+        const acoes = criarElemento("div", "auto-support-package-actions");
+        const rodar = criarElemento("button", "auto-support-mini-action", estado.autonomiaRodando ? "Rodando..." : "Rodar agora");
+        rodar.type = "button";
+        rodar.disabled = estado.autonomiaRodando;
+        rodar.addEventListener("click", executarAutonomia);
+        acoes.appendChild(rodar);
+        bloco.appendChild(acoes);
+        ultimoResultado.slice(0, 3).forEach((item) => {
+            const linha = criarElemento("div", "auto-support-history-item");
+            linha.setAttribute("data-level", item.ok === false ? "alerta" : "info");
+            linha.appendChild(criarElemento("p", "auto-support-log-title", item.label || item.acao || "Auto-reparo"));
+            linha.appendChild(criarElemento("p", "auto-support-log-message", item.mensagem || "-"));
+            bloco.appendChild(linha);
+        });
+        bloqueadas.slice(0, 3).forEach((item) => {
+            const linha = criarElemento("div", "auto-support-history-item");
+            linha.setAttribute("data-level", "warning");
+            linha.appendChild(criarElemento("p", "auto-support-log-title", `${item.label || item.acao} precisa de confirmacao`));
+            linha.appendChild(criarElemento("p", "auto-support-log-message", item.seguranca || item.motivo || "Acao mantida manual por seguranca."));
+            bloco.appendChild(linha);
+        });
+        return bloco;
+    }
+
     function renderizar() {
         let raiz = document.querySelector("[data-auto-suporte-widget]");
         if (!raiz) {
@@ -314,6 +386,7 @@
             body.appendChild(sugestoes);
         }
 
+        body.appendChild(renderizarAutonomia(status));
         body.appendChild(renderizarPacoteCodex());
 
         const atalhos = criarElemento("div", "auto-support-quick-actions");
@@ -325,12 +398,17 @@
         const pacote = criarElemento("button", "auto-support-primary-action", "Pacote Codex");
         pacote.type = "button";
         pacote.addEventListener("click", carregarPacoteCodex);
+        const autonomo = criarElemento("button", "auto-support-primary-action", "Auto-reparo");
+        autonomo.type = "button";
+        autonomo.disabled = estado.autonomiaRodando;
+        autonomo.addEventListener("click", executarAutonomia);
         const central = criarElemento("a", "auto-support-primary-link", "Central");
         central.href = "/configuracoes?aba=desenvolvedor";
         const ocultar = criarElemento("button", "auto-support-primary-action", "Silenciar hoje");
         ocultar.type = "button";
         ocultar.addEventListener("click", ocultarPorHoje);
         atalhos.appendChild(corrigir);
+        atalhos.appendChild(autonomo);
         atalhos.appendChild(pacote);
         atalhos.appendChild(central);
         atalhos.appendChild(ocultar);

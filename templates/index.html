@@ -13,7 +13,7 @@
 <meta name="theme-color" content="{{ brand_primary_color }}">
 <link rel="stylesheet" href="/static/responsive.css">
 {% if auto_suporte_disponivel %}
-<link rel="stylesheet" href="/static/auto_suporte.css">
+<link rel="stylesheet" href="/static/auto_suporte.css?v={{ app_version }}">
 {% endif %}
 
 <script>
@@ -2853,7 +2853,7 @@ async function limparNotificacoes() {
 
 <script src="/static/photo_upload.js"></script>
 {% if auto_suporte_disponivel %}
-<script src="/static/auto_suporte.js"></script>
+<script src="/static/auto_suporte.js?v={{ app_version }}"></script>
 {% endif %}
 
 </body>

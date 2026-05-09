@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -1617,6 +1618,81 @@ class AppRegressionTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["pacote_codex"]["texto_para_codex"], "PACOTE")
+
+    def test_auto_suporte_planeja_somente_acoes_autonomas_seguras(self):
+        status = {
+            "sugestoes": [
+                {"titulo": "Pagina lenta", "acao": "limpar_caches"},
+                {"titulo": "Planilha com erro", "acao": "desativar_planilhas_com_erro"},
+                {"titulo": "Erro aberto", "acao": "gerar_pacote_codex"},
+            ],
+            "diagnostico": {"itens": [{"titulo": "Banco", "acao": "testar_banco"}]},
+        }
+
+        planejadas = app_module.planejar_acoes_autonomas_auto_suporte(status, estado={})
+
+        self.assertEqual([item["acao"] for item in planejadas], ["limpar_caches", "gerar_pacote_codex", "testar_banco"])
+
+    def test_auto_suporte_autonomia_respeita_cooldown(self):
+        status = {
+            "sugestoes": [
+                {"titulo": "Pagina lenta", "acao": "limpar_caches"},
+                {"titulo": "Banco", "acao": "testar_banco"},
+            ],
+            "diagnostico": {"itens": []},
+        }
+        estado = {
+            "autonomia": {
+                "acoes": {
+                    "limpar_caches": {"ultimo_ts": time.time()},
+                }
+            }
+        }
+
+        planejadas = app_module.planejar_acoes_autonomas_auto_suporte(status, estado=estado)
+
+        self.assertEqual([item["acao"] for item in planejadas], ["testar_banco"])
+
+    def test_auto_suporte_autonomia_lista_acoes_que_exigem_confirmacao(self):
+        status = {
+            "sugestoes": [
+                {"titulo": "Planilha com erro", "acao": "desativar_planilhas_com_erro"},
+                {"titulo": "Pagina lenta", "acao": "limpar_caches"},
+            ],
+            "diagnostico": {"itens": [{"titulo": "Telegram", "acao": "enviar_alerta_telegram"}]},
+        }
+
+        autonomia = app_module.montar_autonomia_auto_suporte(estado={}, status_payload=status)
+
+        bloqueadas = {item["acao"]: item for item in autonomia["acoes_bloqueadas"]}
+        self.assertIn("desativar_planilhas_com_erro", bloqueadas)
+        self.assertIn("enviar_alerta_telegram", bloqueadas)
+        self.assertNotIn("limpar_caches", bloqueadas)
+        self.assertIn("confirmacao", bloqueadas["desativar_planilhas_com_erro"]["seguranca"])
+
+    def test_api_auto_suporte_autonomia_executa_reparo_seguro(self):
+        status_inicial = {
+            "ok": False,
+            "sugestoes": [{"titulo": "Pagina lenta", "acao": "limpar_caches"}],
+            "diagnostico": {"itens": []},
+        }
+        with tempfile.TemporaryDirectory(prefix="auto_suporte_autonomia_") as pasta:
+            estado = os.path.join(pasta, "estado.json")
+            historico = os.path.join(pasta, "historico.json")
+            with app_module.app.test_request_context("/api/auto-suporte/autonomia", method="POST"):
+                session["usuario"] = "admin"
+                with patch.object(app_module, "AUTO_SUPORTE_ESTADO_ARQUIVO", estado), \
+                     patch.object(app_module, "AUTO_SUPORTE_HISTORICO_ARQUIVO", historico), \
+                     patch.object(app_module, "usuario_pode_usar_auto_suporte", return_value=True), \
+                     patch.object(app_module, "status_auto_suporte", side_effect=[status_inicial, {"ok": True, "sugestoes": [], "diagnostico": {"itens": []}}]), \
+                     patch.object(app_module, "executar_acao_auto_suporte", return_value={"ok": True, "mensagem": "Caches limpos."}) as acao_mock:
+                    response = app_module.api_auto_suporte_autonomia()
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["executadas"][0]["acao"], "limpar_caches")
+        acao_mock.assert_called_once()
 
     def test_auto_suporte_fluxos_usa_agregacao_compativel_com_postgres(self):
         class CursorFake:

@@ -17155,6 +17155,18 @@ ACOES_AUTO_SUPORTE = {
     "marcar_fluxo_suspeito": "Marcar fluxo suspeito",
 }
 
+AUTO_SUPORTE_ACOES_AUTONOMAS = {
+    "limpar_caches",
+    "validar_ambiente",
+    "testar_banco",
+    "testar_backup",
+    "revalidar_pwa",
+    "limpar_erros_resolvidos",
+    "gerar_pacote_codex",
+}
+AUTO_SUPORTE_AUTONOMIA_COOLDOWN_SEGUNDOS = 15 * 60
+AUTO_SUPORTE_AUTONOMIA_LIMITE_ACOES = 3
+
 
 def usuario_pode_usar_auto_suporte():
     return bool(session.get("usuario") and usuario_gerencia_configuracao_sistema())
@@ -17676,6 +17688,7 @@ def montar_sugestoes_auto_suporte(status_sistema, fluxos, planilhas_erro, tempo_
     inconsistencias_negocio = list(inconsistencias_negocio or [])
     banco_item = next((item for item in status_sistema.get("itens", []) if item.get("nome") == "Banco online"), {})
     backup_item = next((item for item in status_sistema.get("itens", []) if item.get("nome") == "Backup"), {})
+    pwa_item = next((item for item in status_sistema.get("itens", []) if item.get("nome") == "PWA instalado"), {})
     telegram_config = obter_configuracao_empresa(force=False)
     token_ok = bool(normalizar_texto_campo(telegram_config.get("auto_teste_telegram_bot_token")))
     chat_ok = bool(normalizar_texto_campo(telegram_config.get("auto_teste_telegram_chat_id")))
@@ -17687,6 +17700,8 @@ def montar_sugestoes_auto_suporte(status_sistema, fluxos, planilhas_erro, tempo_
         sugestoes.append({"titulo": "Pagina demorou", "mensagem": f"{lento.get('rota')} carregou em {lento.get('ultimo_ms')} ms.", "acao": "limpar_caches"})
     if not backup_item.get("ok"):
         sugestoes.append({"titulo": "Backup falhou", "mensagem": "Gerar um backup de suporte antes de investigar.", "acao": "gerar_backup_suporte"})
+    if pwa_item and not pwa_item.get("ok"):
+        sugestoes.append({"titulo": "PWA precisa de revalidacao", "mensagem": pwa_item.get("detalhe") or "Manifest ou service worker precisam ser revisados.", "acao": "revalidar_pwa"})
     if not (token_ok and chat_ok):
         sugestoes.append({"titulo": "Telegram nao configurado", "mensagem": "Configure token e chat ID no Auto teste para receber alertas.", "acao": "registrar_incidente"})
     if planilhas_erro:
@@ -17702,6 +17717,157 @@ def montar_sugestoes_auto_suporte(status_sistema, fluxos, planilhas_erro, tempo_
             "acao": item.get("acao") or "gerar_pacote_codex",
         })
     return sugestoes[:8]
+
+
+def montar_acoes_bloqueadas_auto_suporte(status_payload):
+    bloqueadas = []
+    vistos = set()
+    status_payload = status_payload or {}
+    origem = list(status_payload.get("sugestoes") or [])
+    origem.extend((status_payload.get("diagnostico") or {}).get("itens") or [])
+
+    for item in origem:
+        acao = normalizar_texto_campo(item.get("acao"))
+        if not acao or acao in vistos or acao in AUTO_SUPORTE_ACOES_AUTONOMAS:
+            continue
+        if acao not in ACOES_AUTO_SUPORTE:
+            continue
+        bloqueadas.append({
+            "acao": acao,
+            "label": ACOES_AUTO_SUPORTE.get(acao, acao),
+            "motivo": normalizar_texto_campo(item.get("titulo") or item.get("mensagem") or "Exige confirmacao manual."),
+            "seguranca": "Requer confirmacao manual porque pode alterar dados, enviar mensagem externa ou ocultar evidencias.",
+        })
+        vistos.add(acao)
+    return bloqueadas[:6]
+
+
+def montar_autonomia_auto_suporte(estado=None, status_payload=None):
+    estado = estado or carregar_estado_auto_suporte()
+    autonomia = estado.get("autonomia") if isinstance(estado, dict) else {}
+    autonomia = autonomia if isinstance(autonomia, dict) else {}
+    status_payload = status_payload or {}
+    return {
+        "habilitada": True,
+        "cooldown_segundos": AUTO_SUPORTE_AUTONOMIA_COOLDOWN_SEGUNDOS,
+        "limite_por_ciclo": AUTO_SUPORTE_AUTONOMIA_LIMITE_ACOES,
+        "acoes_permitidas": [
+            {"id": acao, "label": ACOES_AUTO_SUPORTE.get(acao, acao)}
+            for acao in ACOES_AUTO_SUPORTE
+            if acao in AUTO_SUPORTE_ACOES_AUTONOMAS
+        ],
+        "ultimo_ciclo": autonomia.get("ultimo_ciclo"),
+        "ultimo_resultado": autonomia.get("ultimo_resultado") or [],
+        "acoes_bloqueadas": montar_acoes_bloqueadas_auto_suporte(status_payload),
+    }
+
+
+def planejar_acoes_autonomas_auto_suporte(status_payload, estado=None):
+    status_payload = status_payload or {}
+    estado = estado or carregar_estado_auto_suporte()
+    autonomia = estado.get("autonomia") if isinstance(estado, dict) else {}
+    autonomia = autonomia if isinstance(autonomia, dict) else {}
+    acoes_estado = autonomia.get("acoes") if isinstance(autonomia.get("acoes"), dict) else {}
+    agora_ts = time.time()
+    candidatos = []
+
+    for sugestao in status_payload.get("sugestoes") or []:
+        acao = normalizar_texto_campo(sugestao.get("acao"))
+        if acao:
+            candidatos.append((acao, sugestao.get("titulo") or ACOES_AUTO_SUPORTE.get(acao, acao)))
+
+    diagnostico = status_payload.get("diagnostico") or {}
+    for item in diagnostico.get("itens") or []:
+        acao = normalizar_texto_campo(item.get("acao"))
+        if acao:
+            candidatos.append((acao, item.get("titulo") or ACOES_AUTO_SUPORTE.get(acao, acao)))
+
+    if status_payload.get("erros_abertos"):
+        candidatos.append(("gerar_pacote_codex", "Erro aberto exige pacote tecnico"))
+
+    planejadas = []
+    vistos = set()
+    for acao, motivo in candidatos:
+        if acao in vistos or acao not in AUTO_SUPORTE_ACOES_AUTONOMAS:
+            continue
+        visto_acao = acoes_estado.get(acao) if isinstance(acoes_estado, dict) else {}
+        ultimo_ts = float((visto_acao or {}).get("ultimo_ts") or 0.0)
+        if agora_ts - ultimo_ts < AUTO_SUPORTE_AUTONOMIA_COOLDOWN_SEGUNDOS:
+            continue
+        planejadas.append({"acao": acao, "label": ACOES_AUTO_SUPORTE.get(acao, acao), "motivo": normalizar_texto_campo(motivo)})
+        vistos.add(acao)
+        if len(planejadas) >= AUTO_SUPORTE_AUTONOMIA_LIMITE_ACOES:
+            break
+    return planejadas
+
+
+def executar_autonomia_auto_suporte(status_payload=None):
+    status_payload = status_payload or status_auto_suporte()
+    estado = carregar_estado_auto_suporte()
+    planejadas = planejar_acoes_autonomas_auto_suporte(status_payload, estado)
+    resultados = []
+
+    for item in planejadas:
+        acao = item.get("acao")
+        try:
+            resultado = executar_acao_auto_suporte(
+                acao,
+                observacao=f"Executado automaticamente pelo AutoSuporte: {item.get('motivo') or ACOES_AUTO_SUPORTE.get(acao, acao)}",
+            )
+            resultados.append({
+                "acao": acao,
+                "label": item.get("label"),
+                "ok": bool(resultado.get("ok")),
+                "mensagem": resultado.get("mensagem") or "",
+            })
+        except Exception as erro:
+            registrar_ultimo_erro_producao(erro, descricao=f"auto_suporte_autonomia_{acao}")
+            resultados.append({
+                "acao": acao,
+                "label": item.get("label"),
+                "ok": False,
+                "mensagem": str(erro),
+            })
+
+    estado = carregar_estado_auto_suporte()
+    autonomia = estado.get("autonomia") if isinstance(estado.get("autonomia"), dict) else {}
+    acoes_estado = autonomia.get("acoes") if isinstance(autonomia.get("acoes"), dict) else {}
+    agora_ts = time.time()
+    for resultado in resultados:
+        acoes_estado[resultado["acao"]] = {
+            "ultimo_ts": agora_ts,
+            "ultimo_em": agora_iso(),
+            "ok": bool(resultado.get("ok")),
+            "mensagem": resultado.get("mensagem") or "",
+        }
+    autonomia["acoes"] = acoes_estado
+    autonomia["ultimo_ciclo"] = agora_iso()
+    autonomia["ultimo_resultado"] = resultados
+    estado["autonomia"] = autonomia
+    salvar_estado_auto_suporte(estado)
+
+    if resultados:
+        registrar_historico_auto_suporte(
+            "autonomia",
+            "Auto-reparo seguro",
+            f"{len(resultados)} acao(oes) autonoma(s) executada(s).",
+            severidade="info" if all(item.get("ok") for item in resultados) else "warning",
+            detalhes={"resultados": resultados},
+        )
+
+    status_atualizado = status_auto_suporte()
+    status_atualizado["autonomia"] = montar_autonomia_auto_suporte(status_payload=status_atualizado)
+    return {
+        "ok": all(item.get("ok") for item in resultados) if resultados else True,
+        "executadas": resultados,
+        "planejadas": planejadas,
+        "mensagem": (
+            f"AutoSuporte executou {len(resultados)} reparo(s) seguro(s)."
+            if resultados else
+            "Nenhuma acao autonoma pendente ou cooldown ainda ativo."
+        ),
+        "status": status_atualizado,
+    }
 
 
 def avaliar_alertas_auto_suporte(status_payload):
@@ -18032,6 +18198,7 @@ def status_auto_suporte():
         ],
         "mensagem": diagnostico.get("frase") or ("Sistema sem incidentes criticos." if not falhas else "AutoSuporte encontrou pontos para revisar."),
     }
+    resposta["autonomia"] = montar_autonomia_auto_suporte(status_payload=resposta)
     avaliar_alertas_auto_suporte(resposta)
     resposta["historico"] = listar_historico_auto_suporte(limite=10)
     return resposta
@@ -18194,6 +18361,7 @@ def pagina_auto_suporte():
         return redirect("/")
 
     status_auto = status_auto_suporte()
+    status_auto.setdefault("autonomia", montar_autonomia_auto_suporte())
     status_sistema = montar_status_sistema_dono()
     historico = listar_historico_auto_suporte(limite=80)
     return render_template(
@@ -18213,6 +18381,7 @@ def auto_suporte_json():
     if not usuario_pode_usar_auto_suporte():
         return jsonify({"erro": "nao_autorizado"}), 403
     status_auto = status_auto_suporte()
+    status_auto.setdefault("autonomia", montar_autonomia_auto_suporte())
     status_sistema = montar_status_sistema_dono()
     historico = listar_historico_auto_suporte(limite=80)
     payload = {
@@ -18264,6 +18433,19 @@ def api_auto_suporte_acao():
         return jsonify(json.loads(json.dumps(resultado, ensure_ascii=False, default=str)))
     except Exception as erro:
         registrar_ultimo_erro_producao(erro, descricao="auto_suporte_acao")
+        return jsonify({"ok": False, "erro": str(erro)}), 400
+
+
+@app.route("/api/auto-suporte/autonomia", methods=["POST"])
+def api_auto_suporte_autonomia():
+    if not usuario_pode_usar_auto_suporte():
+        return jsonify({"erro": "nao_autorizado"}), 403
+
+    try:
+        resultado = executar_autonomia_auto_suporte()
+        return jsonify(json.loads(json.dumps(resultado, ensure_ascii=False, default=sanitizar_para_json)))
+    except Exception as erro:
+        registrar_ultimo_erro_producao(erro, descricao="auto_suporte_autonomia")
         return jsonify({"ok": False, "erro": str(erro)}), 400
 
 
