@@ -742,6 +742,11 @@ public class MainActivity extends Activity {
             InputStream stream = status >= 200 && status < 300 ? conn.getInputStream() : conn.getErrorStream();
             String body = readAll(stream);
             if (status < 200 || status >= 300) {
+                if (status == 402) {
+                    throw new Exception(
+                        "Projeto Supabase restrito. Verifique Billing/Usage no painel do Supabase: pode ser cota excedida ou pagamento pendente."
+                    );
+                }
                 throw new Exception("Supabase HTTP " + status + ": " + body);
             }
             return new HttpResult(body, conn.getHeaderField("Content-Range"));
