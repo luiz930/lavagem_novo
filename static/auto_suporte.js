@@ -13,6 +13,7 @@
         logs: [],
         pacoteCodex: null,
         autonomiaRodando: false,
+        dialogoEscolha: "",
     };
 
     function criarElemento(tag, classe, texto) {
@@ -492,6 +493,171 @@
         body.appendChild(renderizarHistorico(status));
     }
 
+    function obterMetaAcao(status, acao) {
+        const catalogo = status && Array.isArray(status.acoes) ? status.acoes : [];
+        const meta = catalogo.find((item) => item.id === acao || item.acao === acao);
+        if (meta) return meta;
+        const simples = status && Array.isArray(status.acoes_simples) ? status.acoes_simples : [];
+        const itemSimples = simples.find((item) => item.acao === acao || item.id === acao);
+        return itemSimples ? { id: acao, label: itemSimples.label, descricao: itemSimples.descricao } : { id: acao, label: acao };
+    }
+
+    function criarBotaoAcaoGuiada(status, acao, label) {
+        const meta = obterMetaAcao(status, acao);
+        const texto = label || meta.label || acao;
+        const btn = criarElemento("button", meta.confirmacao ? "auto-support-guided-action auto-support-guided-action--danger" : "auto-support-guided-action");
+        btn.type = "button";
+        btn.appendChild(criarElemento("span", "", texto));
+        const detalhe = meta.descricao || meta.seguranca || (meta.confirmacao ? `Exige: ${meta.confirmacao}` : "Acao segura do AutoSuporte.");
+        btn.appendChild(criarElemento("small", "", detalhe));
+        btn.addEventListener("click", () => executarAcao(acao, texto));
+        return btn;
+    }
+
+    function opcoesDialogo(status) {
+        const tecnico = status.modo_interface !== "simples";
+        const opcoes = [
+            {
+                id: "diagnostico",
+                label: "Diagnosticar",
+                resposta: [
+                    "Vou conferir os sinais principais sem alterar dados.",
+                    "Depois eu mostro se banco, backup, PWA ou arquivos estaticos precisam de atencao.",
+                ],
+                acoes: ["testar_banco", "testar_backup", "revalidar_pwa", "revalidar_estaticos"],
+            },
+            {
+                id: "velocidade",
+                label: "Velocidade",
+                resposta: [
+                    "Vou focar em carregamento e rotas lentas.",
+                    "Se a lentidao vier do banco, eu aviso em vez de mascarar o problema.",
+                ],
+                acoes: ["limpar_caches", "limpar_cache_rota_lenta", "revalidar_rota_lenta"],
+            },
+            {
+                id: "relatorio",
+                label: "Relatorio",
+                resposta: [
+                    "Vou preparar evidencias tecnicas para manutencao.",
+                    "Use isso quando quiser trazer o problema aqui para o Codex.",
+                ],
+                acoes: ["gerar_pacote_codex", "gerar_backup_suporte"],
+            },
+        ];
+        if (tecnico) {
+            opcoes.push(
+                {
+                    id: "reparo",
+                    label: "Reparo seguro",
+                    resposta: [
+                        "Vou executar apenas reparos reversiveis e de baixo risco.",
+                        "Acoes sensiveis continuam bloqueadas ate confirmacao manual.",
+                    ],
+                    acoes: ["resolver_erros_com_checks_ok", "limpar_erros_resolvidos", "validar_ambiente"],
+                    extras: ["auto_reparo", "simular"],
+                },
+                {
+                    id: "sensivel",
+                    label: "Sensivel",
+                    resposta: [
+                        "Aqui ficam acoes que podem alterar dados, enviar mensagem externa ou limpar evidencias.",
+                        "Cada botao sensivel pede a frase de confirmacao do backend antes de executar.",
+                    ],
+                    acoes: ["registrar_incidente", "corrigir_classificacao_clientes", "desativar_planilhas_com_erro", "limpar_todos_erros", "enviar_relatorio_telegram"],
+                }
+            );
+        }
+        return opcoes;
+    }
+
+    function renderizarDialogoGuiado(status, body) {
+        const diagnostico = status.diagnostico || {};
+        const narrativa = status.narrativa || {};
+        const plano = status.plano_acao || {};
+        const linhas = Array.isArray(narrativa.linhas) && narrativa.linhas.length
+            ? narrativa.linhas.slice(0, 3)
+            : [diagnostico.frase || status.mensagem || "Estou lendo o sistema e preparando a melhor acao."];
+        const escolhaAtual = estado.dialogoEscolha || "diagnostico";
+        const opcoes = opcoesDialogo(status);
+        const selecionada = opcoes.find((item) => item.id === escolhaAtual) || opcoes[0];
+
+        const resumo = criarElemento("div", "auto-support-guided-summary");
+        resumo.setAttribute("data-ok", status.ok === false ? "false" : "true");
+        resumo.appendChild(criarElemento("p", "auto-support-message", diagnostico.titulo || "AutoSuporte IA"));
+        resumo.appendChild(criarElemento("p", "auto-support-log-message", diagnostico.frase || status.mensagem || "Sistema em monitoramento."));
+        body.appendChild(resumo);
+
+        const chat = criarElemento("div", "auto-support-guided-chat");
+        const bot = criarElemento("div", "auto-support-guided-message auto-support-guided-message--bot");
+        bot.appendChild(criarElemento("p", "", "Estou analisando o que acontece agora."));
+        linhas.forEach((linha) => bot.appendChild(criarElemento("p", "", linha)));
+        if (plano.titulo) {
+            bot.appendChild(criarElemento("p", "", `Proxima recomendacao: ${plano.titulo}.`));
+        }
+        chat.appendChild(bot);
+        const user = criarElemento("div", "auto-support-guided-message auto-support-guided-message--user", selecionada.label);
+        chat.appendChild(user);
+        const resposta = criarElemento("div", "auto-support-guided-message auto-support-guided-message--bot");
+        selecionada.resposta.forEach((linha) => resposta.appendChild(criarElemento("p", "", linha)));
+        chat.appendChild(resposta);
+        body.appendChild(chat);
+
+        const opcoesBox = criarElemento("div", "auto-support-guided-options");
+        opcoes.forEach((opcao) => {
+            const btn = criarElemento("button", "auto-support-guided-option", opcao.label);
+            btn.type = "button";
+            btn.setAttribute("data-active", opcao.id === selecionada.id ? "true" : "false");
+            btn.addEventListener("click", () => {
+                estado.dialogoEscolha = opcao.id;
+                renderizar();
+            });
+            opcoesBox.appendChild(btn);
+        });
+        body.appendChild(opcoesBox);
+
+        const acoesBox = criarElemento("div", "auto-support-guided-actions");
+        acoesBox.appendChild(criarElemento("p", "auto-support-section-title", "Botoes desta escolha"));
+        if (Array.isArray(selecionada.extras) && selecionada.extras.includes("auto_reparo")) {
+            const rodar = criarElemento("button", "auto-support-guided-action", estado.autonomiaRodando ? "Rodando..." : "Rodar auto-reparo");
+            rodar.type = "button";
+            rodar.disabled = estado.autonomiaRodando;
+            rodar.addEventListener("click", executarAutonomia);
+            acoesBox.appendChild(rodar);
+        }
+        if (Array.isArray(selecionada.extras) && selecionada.extras.includes("simular")) {
+            const simular = criarElemento("button", "auto-support-guided-action", "Simular antes");
+            simular.type = "button";
+            simular.disabled = estado.autonomiaRodando;
+            simular.addEventListener("click", () => executarAutonomia({ simular: true }));
+            acoesBox.appendChild(simular);
+        }
+        selecionada.acoes.forEach((acao) => acoesBox.appendChild(criarBotaoAcaoGuiada(status, acao)));
+        body.appendChild(acoesBox);
+
+        const rodape = criarElemento("div", "auto-support-guided-footer");
+        const abrir = criarElemento("a", "auto-support-primary-link", "Abrir tela completa");
+        abrir.href = "/auto-suporte";
+        const silenciar = criarElemento("button", "auto-support-primary-action", "Silenciar hoje");
+        silenciar.type = "button";
+        silenciar.addEventListener("click", ocultarPorHoje);
+        rodape.appendChild(abrir);
+        rodape.appendChild(silenciar);
+        body.appendChild(rodape);
+
+        if (estado.logs.length) {
+            const logs = criarElemento("div", "auto-support-log");
+            estado.logs.slice(0, 3).forEach((item) => {
+                const log = criarElemento("div", "auto-support-log-item");
+                log.setAttribute("data-ok", item.ok ? "true" : "false");
+                log.appendChild(criarElemento("p", "auto-support-log-title", `${item.quando} - ${item.titulo}`));
+                log.appendChild(criarElemento("p", "auto-support-log-message", item.mensagem));
+                logs.appendChild(log);
+            });
+            body.appendChild(logs);
+        }
+    }
+
     function renderizar() {
         let raiz = document.querySelector("[data-auto-suporte-widget]");
         if (!raiz) {
@@ -530,8 +696,8 @@
 
         const header = criarElemento("div", "auto-support-header");
         const headerText = criarElemento("div");
-        headerText.appendChild(criarElemento("p", "auto-support-kicker", tecnico ? `[${(diagnostico.label || (status.ok === false ? "WARN" : "OK")).toUpperCase()}] AUTO-REPARO` : "AUTOSUPORTE"));
-        headerText.appendChild(criarElemento("h3", "auto-support-title", tecnico ? "AutoSuporte Seguro" : "Ajuda rapida"));
+        headerText.appendChild(criarElemento("p", "auto-support-kicker", `[${(diagnostico.label || (status.ok === false ? "WARN" : "OK")).toUpperCase()}] IA GUIADA`));
+        headerText.appendChild(criarElemento("h3", "auto-support-title", "AutoSuporte IA"));
         const close = criarElemento("button", "auto-support-close", "x");
         close.type = "button";
         close.addEventListener("click", fecharPainel);
@@ -539,102 +705,7 @@
         header.appendChild(close);
 
         const body = criarElemento("div", "auto-support-body");
-        if (!tecnico) {
-            renderizarPainelSimples(status, body);
-            panel.appendChild(header);
-            panel.appendChild(body);
-            raiz.appendChild(panel);
-            raiz.appendChild(bubble);
-            return;
-        }
-
-        const statusBox = criarElemento("div", "auto-support-status");
-        statusBox.setAttribute("data-ok", status.ok === false ? "false" : "true");
-        statusBox.appendChild(criarElemento("p", "auto-support-message", status.mensagem || "AutoSuporte pronto para acoes seguras."));
-        statusBox.appendChild(criarElemento("pre", "auto-support-terminal", textoFalhas(status)));
-        body.appendChild(statusBox);
-        body.appendChild(renderizarNarrativa(status));
-        body.appendChild(renderizarDiagnostico(status));
-        body.appendChild(renderizarPlanoAcao(status));
-
-        const sugestoes = renderizarSugestoes(status);
-        if (sugestoes) {
-            body.appendChild(sugestoes);
-        }
-
-        body.appendChild(renderizarAutonomia(status));
-        body.appendChild(renderizarPacoteCodex());
-
-        const atalhos = criarElemento("div", "auto-support-quick-actions");
-        const primeiraSugestao = Array.isArray(status.sugestoes) ? status.sugestoes.find((item) => item.acao) : null;
-        const corrigir = criarElemento("button", "auto-support-primary-action", "Corrigir agora");
-        corrigir.type = "button";
-        corrigir.disabled = !primeiraSugestao;
-        corrigir.addEventListener("click", () => primeiraSugestao && executarAcao(primeiraSugestao.acao, primeiraSugestao.titulo || "Corrigir agora"));
-        const pacote = criarElemento("button", "auto-support-primary-action", "Pacote Codex");
-        pacote.type = "button";
-        pacote.addEventListener("click", carregarPacoteCodex);
-        const autonomo = criarElemento("button", "auto-support-primary-action", "Auto-reparo");
-        autonomo.type = "button";
-        autonomo.disabled = estado.autonomiaRodando;
-        autonomo.addEventListener("click", executarAutonomia);
-        const central = criarElemento("a", "auto-support-primary-link", "Central");
-        central.href = "/configuracoes?aba=desenvolvedor";
-        const ocultar = criarElemento("button", "auto-support-primary-action", "Silenciar hoje");
-        ocultar.type = "button";
-        ocultar.addEventListener("click", ocultarPorHoje);
-        atalhos.appendChild(corrigir);
-        atalhos.appendChild(autonomo);
-        atalhos.appendChild(pacote);
-        atalhos.appendChild(central);
-        atalhos.appendChild(ocultar);
-        body.appendChild(atalhos);
-
-        const acoes = Array.isArray(status.acoes) && status.acoes.length
-            ? status.acoes.map((item) => [item.id || item.acao, item.label || item.id || item.acao, item])
-            : [
-                ["limpar_caches", "Caches"],
-                ["limpar_cache_rota_lenta", "Tela lenta"],
-                ["validar_ambiente", "Ambiente"],
-                ["testar_banco", "Banco"],
-                ["testar_backup", "Backup"],
-                ["testar_telegram", "Telegram"],
-                ["revalidar_pwa", "PWA"],
-                ["revalidar_estaticos", "Estaticos"],
-                ["resolver_erros_com_checks_ok", "Checks OK"],
-                ["gerar_backup_suporte", "Backup suporte"],
-                ["desativar_planilhas_com_erro", "Pausar planilhas"],
-                ["corrigir_classificacao_clientes", "Novo/retorno"],
-                ["limpar_erros_resolvidos", "Erros resolvidos"],
-                ["limpar_todos_erros", "Limpar todos"],
-                ["gerar_pacote_codex", "Pacote Codex"],
-                ["enviar_relatorio_telegram", "Relatorio"],
-                ["registrar_incidente", "Incidente"],
-                ["enviar_alerta_telegram", "Alerta"],
-                ["marcar_fluxo_suspeito", "Fluxos"],
-            ];
-        const actions = criarElemento("div", "auto-support-actions");
-        acoes.forEach(([acao, label, meta]) => {
-            const btn = criarElemento("button", "auto-support-action", label);
-            btn.type = "button";
-            if (meta && meta.confirmacao) {
-                btn.title = `Exige confirmacao: ${meta.confirmacao}`;
-            }
-            btn.addEventListener("click", () => executarAcao(acao, label));
-            actions.appendChild(btn);
-        });
-        body.appendChild(actions);
-        body.appendChild(renderizarHistorico(status));
-
-        const logs = criarElemento("div", "auto-support-log");
-        estado.logs.forEach((item) => {
-            const log = criarElemento("div", "auto-support-log-item");
-            log.setAttribute("data-ok", item.ok ? "true" : "false");
-            log.appendChild(criarElemento("p", "auto-support-log-title", `${item.quando} - ${item.titulo}`));
-            log.appendChild(criarElemento("p", "auto-support-log-message", item.mensagem));
-            logs.appendChild(log);
-        });
-        body.appendChild(logs);
+        renderizarDialogoGuiado(status, body);
 
         panel.appendChild(header);
         panel.appendChild(body);
