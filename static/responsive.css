@@ -280,6 +280,10 @@ body.responsive-page {
     font-weight: 700;
 }
 
+.auto-suporte-narrativa p {
+    margin-top: 0;
+}
+
 .actions-row--left {
     justify-content: flex-start;
 }

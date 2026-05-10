@@ -12,6 +12,20 @@
 
 {% block content %}
 {% set plano_auto = status_auto.get('plano_acao', {}) if status_auto else {} %}
+{% set narrativa_auto = status_auto.get('narrativa', {}) if status_auto else {} %}
+
+{% if narrativa_auto %}
+<div class="page-card auto-suporte-narrativa {% if narrativa_auto.prioridade == 'alta' %}error-banner{% elif narrativa_auto.prioridade == 'media' %}warning-banner{% else %}success-banner{% endif %}">
+    <p class="pill-label">Leitura inteligente</p>
+    <h2 class="section-title top-spacing">{{ narrativa_auto.titulo }}</h2>
+    <div class="stack-form stack-form--wide top-spacing">
+        {% for linha in narrativa_auto.linhas %}
+        <p>{{ linha }}</p>
+        {% endfor %}
+    </div>
+    <p class="muted-text">Status: {{ narrativa_auto.status }} | Gerado em {{ narrativa_auto.gerado_em }}</p>
+</div>
+{% endif %}
 
 {% if modo_auto_suporte == "administrador" %}
 <div class="page-card {% if status_auto.diagnostico.nivel == 'critico' %}error-banner{% elif status_auto.diagnostico.nivel == 'alerta' %}warning-banner{% else %}success-banner{% endif %}">

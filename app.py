@@ -18648,6 +18648,77 @@ def montar_plano_acao_auto_suporte(status_payload):
     }
 
 
+def montar_narrativa_auto_suporte(status_payload):
+    status_payload = status_payload or {}
+    diagnostico = status_payload.get("diagnostico") or {}
+    plano = status_payload.get("plano_acao") or {}
+    autonomia = status_payload.get("autonomia") or {}
+    simulacao = autonomia.get("simulacao") or {}
+    tempo_resposta = list(status_payload.get("tempo_resposta") or [])
+    erros_abertos = list(status_payload.get("erros_abertos") or [])
+    falhas = list(status_payload.get("falhas") or [])
+    sugestoes = list(status_payload.get("sugestoes") or [])
+    planejadas = list(simulacao.get("pretende_fazer") or [])
+    bloqueadas = list(autonomia.get("acoes_bloqueadas") or simulacao.get("precisa_confirmacao") or [])
+    ultimo_resultado = list(autonomia.get("ultimo_resultado") or [])
+    rotas_lentas = [
+        item
+        for item in tempo_resposta
+        if item.get("alerta_2s") or item.get("classe") == "lento"
+    ]
+
+    linhas = []
+    nivel = normalizar_texto_campo(diagnostico.get("nivel") or "info")
+    titulo = diagnostico.get("titulo") or "Monitoramento ativo"
+    frase = diagnostico.get("frase") or status_payload.get("mensagem") or "Sistema em leitura."
+
+    if nivel in {"critico", "alerta"}:
+        abertura = f"Encontrei um ponto de atencao: {titulo}. {frase}"
+    else:
+        abertura = f"Nesta leitura, o sistema esta operacional. {frase}"
+    linhas.append(abertura)
+
+    if rotas_lentas:
+        pior = sorted(rotas_lentas, key=lambda item: int(item.get("ultimo_ms") or 0), reverse=True)[0]
+        linhas.append(
+            f"Estou acompanhando lentidao em {pior.get('rota')} ({pior.get('ultimo_ms')} ms) e posso revalidar a rota ou limpar o cache especifico."
+        )
+    elif tempo_resposta:
+        linhas.append("As rotas monitoradas nao mostram lentidao critica nesta medicao.")
+
+    if erros_abertos:
+        linhas.append(f"Ha {len(erros_abertos)} erro(s) aberto(s); antes de reparo sensivel, o ideal e gerar o pacote Codex.")
+    elif "Erro 500 aberto" not in falhas:
+        linhas.append("Nao encontrei erro 500 aberto nesta leitura.")
+
+    if planejadas:
+        nomes = ", ".join((item.get("label") or item.get("acao") or "acao segura") for item in planejadas[:3])
+        linhas.append(f"Posso executar reparo seguro agora: {nomes}.")
+    elif ultimo_resultado:
+        nomes = ", ".join((item.get("label") or item.get("acao") or "acao") for item in ultimo_resultado[:3])
+        linhas.append(f"No ultimo ciclo, registrei resultado para: {nomes}.")
+    elif sugestoes:
+        nomes = ", ".join((item.get("titulo") or item.get("acao") or "revisao") for item in sugestoes[:3])
+        linhas.append(f"Minha proxima recomendacao e revisar: {nomes}.")
+    else:
+        linhas.append("No momento estou apenas monitorando e mantendo os caches e checks sob observacao.")
+
+    if bloqueadas:
+        linhas.append(f"{len(bloqueadas)} acao(oes) ficaram bloqueadas por seguranca e precisam de confirmacao manual.")
+
+    if plano.get("acao_label"):
+        linhas.append(f"Proxima melhor acao: {plano.get('acao_label')} ({plano.get('prioridade') or 'normal'}).")
+
+    return {
+        "titulo": titulo,
+        "resumo": linhas[0],
+        "linhas": linhas[:6],
+        "status": "atuando" if planejadas or ultimo_resultado else "monitorando",
+        "prioridade": plano.get("prioridade") or ("alta" if nivel == "critico" else "media" if nivel == "alerta" else "normal"),
+        "gerado_em": agora_iso(),
+    }
+
+
 def planejar_acoes_autonomas_auto_suporte(status_payload, estado=None):
     status_payload = status_payload or {}
     estado = estado or carregar_estado_auto_suporte()
@@ -19283,6 +19354,7 @@ def status_auto_suporte(force=False):
     resposta["acoes_simples"] = montar_acoes_simples_auto_suporte(resposta)
     avaliar_alertas_auto_suporte(resposta)
     resposta["historico"] = listar_historico_auto_suporte(limite=10)
+    resposta["narrativa"] = montar_narrativa_auto_suporte(resposta)
     AUTO_SUPORTE_STATUS_CACHE["testado_em"] = agora_cache_ts
     AUTO_SUPORTE_STATUS_CACHE["chave"] = chave_cache
     AUTO_SUPORTE_STATUS_CACHE["resultado"] = deepcopy(resposta)

@@ -115,6 +115,24 @@
         return bloco;
     }
 
+    function renderizarNarrativa(status) {
+        const narrativa = status && status.narrativa ? status.narrativa : {};
+        const linhas = Array.isArray(narrativa.linhas) ? narrativa.linhas : [];
+        const bloco = criarElemento("div", "auto-support-ai-narrative");
+        bloco.setAttribute("data-priority", narrativa.prioridade || "normal");
+        bloco.appendChild(criarElemento("p", "auto-support-section-title", "Leitura inteligente"));
+        bloco.appendChild(criarElemento("p", "auto-support-diagnostic-title", narrativa.titulo || "AutoSuporte em tempo real"));
+        if (linhas.length) {
+            linhas.slice(0, 5).forEach((linha) => {
+                bloco.appendChild(criarElemento("p", "auto-support-narrative-line", linha));
+            });
+        } else {
+            bloco.appendChild(criarElemento("p", "auto-support-narrative-line", "Estou lendo o status do sistema e preparando o diagnostico."));
+        }
+        bloco.appendChild(criarElemento("p", "auto-support-log-message", `Status: ${narrativa.status || "monitorando"}`));
+        return bloco;
+    }
+
     function renderizarHistorico(status) {
         const historico = Array.isArray(status.historico) ? status.historico : [];
         const bloco = criarElemento("div", "auto-support-history");
@@ -450,6 +468,7 @@
         statusBox.appendChild(criarElemento("p", "auto-support-message", status.mensagem || "AutoSuporte pronto para acoes seguras."));
         statusBox.appendChild(criarElemento("p", "auto-support-log-message", textoFalhas(status).replace(/\n/g, " ")));
         body.appendChild(statusBox);
+        body.appendChild(renderizarNarrativa(status));
         body.appendChild(renderizarDiagnostico(status));
         body.appendChild(renderizarPlanoAcao(status));
         body.appendChild(renderizarAcoesSimples(status));
@@ -531,6 +550,7 @@
         statusBox.appendChild(criarElemento("p", "auto-support-message", status.mensagem || "AutoSuporte pronto para acoes seguras."));
         statusBox.appendChild(criarElemento("pre", "auto-support-terminal", textoFalhas(status)));
         body.appendChild(statusBox);
+        body.appendChild(renderizarNarrativa(status));
         body.appendChild(renderizarDiagnostico(status));
         body.appendChild(renderizarPlanoAcao(status));
 
