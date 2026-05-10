@@ -402,6 +402,16 @@ class AppRegressionTests(unittest.TestCase):
         self.assertIn('avatar.href = "/configuracoes/meu-acesso"', conteudo)
         self.assertIn('avatar.setAttribute("aria-label", "Abrir minhas configuracoes de usuario")', conteudo)
 
+    def test_index_carrega_notificacoes_e_agenda_sem_clique(self):
+        with open(os.path.join(app_module.app.root_path, "templates", "index.html"), encoding="utf-8") as arquivo:
+            conteudo = arquivo.read()
+
+        self.assertIn("function iniciarCarregamentoCabecalhoOperacional()", conteudo)
+        self.assertIn("carregarNotificacoes(true);", conteudo)
+        self.assertIn("carregarAgendaRetorno(true);", conteudo)
+        self.assertIn("setInterval(() => carregarNotificacoes(true), NOTIFICACOES_REFRESH_MS)", conteudo)
+        self.assertIn("setInterval(() => carregarAgendaRetorno(true), AGENDA_REFRESH_MS)", conteudo)
+
     def test_changelog_monta_links_github_automaticos(self):
         commit_hash = "1234567890abcdef1234567890abcdef12345678"
 

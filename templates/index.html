@@ -2234,54 +2234,58 @@ function renderizarAgendaRetorno() {
 }
 
 async function carregarNotificacoes(force = false) {
-    const dropdown = document.getElementById("dropdown-notificacoes");
-    if (!dropdown) return;
-    const agora = Date.now();
-    if (
-        !force &&
-        dropdown &&
-        dropdown.childElementCount > 0 &&
-        (agora - notificacoesCarregadasEm) < NOTIFICACOES_REFRESH_MS
-    ) {
-        return;
-    }
+    try {
+        const dropdown = document.getElementById("dropdown-notificacoes");
+        if (!dropdown) return;
+        const agora = Date.now();
+        if (
+            !force &&
+            dropdown &&
+            dropdown.childElementCount > 0 &&
+            (agora - notificacoesCarregadasEm) < NOTIFICACOES_REFRESH_MS
+        ) {
+            return;
+        }
 
-    const res = await fetch("/api/notificacoes");
-    const dados = await res.json();
+        const res = await fetch("/api/notificacoes");
+        const dados = await res.json();
 
-    notificacoesCarregadasEm = agora;
-    const badge = document.getElementById("badge");
+        notificacoesCarregadasEm = agora;
+        const badge = document.getElementById("badge");
 
-    dropdown.innerHTML = "";
-    montarAcoesNotificacoes(dropdown, dados.length);
+        dropdown.innerHTML = "";
+        montarAcoesNotificacoes(dropdown, dados.length);
 
-    let naoLidas = 0;
+        let naoLidas = 0;
 
-    dados.forEach(n => {
-        if (n.lida === 0) naoLidas++;
+        dados.forEach(n => {
+            if (n.lida === 0) naoLidas++;
 
-        const div = document.createElement("div");
-        div.className = "notificacao " + (n.lida === 0 ? "nao-lida" : "");
+            const div = document.createElement("div");
+            div.className = "notificacao " + (n.lida === 0 ? "nao-lida" : "");
 
-        div.innerText = n.mensagem;
+            div.innerText = n.mensagem;
 
-        div.onclick = async () => {
-            await fetch(`/api/notificacoes/lida/${n.id}`, { method: "POST" });
-            carregarNotificacoes(true);
-        };
+            div.onclick = async () => {
+                await fetch(`/api/notificacoes/lida/${n.id}`, { method: "POST" });
+                carregarNotificacoes(true);
+            };
 
-        dropdown.appendChild(div);
-    });
+            dropdown.appendChild(div);
+        });
 
-    if (!dados.length) {
-        const vazio = document.createElement("div");
-        vazio.className = "notificacao";
-        vazio.innerText = "Nenhuma notificacao registrada.";
-        dropdown.appendChild(vazio);
-    }
+        if (!dados.length) {
+            const vazio = document.createElement("div");
+            vazio.className = "notificacao";
+            vazio.innerText = "Nenhuma notificacao registrada.";
+            dropdown.appendChild(vazio);
+        }
 
-    if (badge) {
-        badge.innerText = naoLidas;
+        if (badge) {
+            badge.innerText = naoLidas;
+        }
+    } catch (e) {
+        console.log("Erro notificacoes");
     }
 }
 
@@ -2351,7 +2355,25 @@ document.addEventListener("click", (event) => {
     fecharDropdownsCabecalho();
 });
 
-garantirAgendaRetornoUI();
+function iniciarCarregamentoCabecalhoOperacional() {
+    garantirAgendaRetornoUI();
+
+    const carregarInicial = () => {
+        carregarNotificacoes(true);
+        carregarAgendaRetorno(true);
+    };
+
+    if ("requestIdleCallback" in window) {
+        requestIdleCallback(carregarInicial, { timeout: 1200 });
+    } else {
+        setTimeout(carregarInicial, 600);
+    }
+
+    setInterval(() => carregarNotificacoes(true), NOTIFICACOES_REFRESH_MS);
+    setInterval(() => carregarAgendaRetorno(true), AGENDA_REFRESH_MS);
+}
+
+iniciarCarregamentoCabecalhoOperacional();
 </script>
 
 <script>
