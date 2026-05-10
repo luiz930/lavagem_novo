@@ -473,13 +473,6 @@ body.responsive-page.sidebar-open {
             </div>
         </div>
 
-        {% if session.get("usuario") and not request.path.startswith("/configuracoes") %}
-        <form class="global-search" role="search" autocomplete="off">
-            <input id="globalSearchInput" name="q" type="search" placeholder="Buscar placa, cliente ou telefone" aria-label="Buscar placa, cliente ou telefone">
-            <div id="globalSearchResults" class="global-search-results" hidden></div>
-        </form>
-        {% endif %}
-
         <div class="actions-row">
             {% block actions %}{% endblock %}
         </div>

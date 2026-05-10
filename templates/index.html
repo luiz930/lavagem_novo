@@ -890,6 +890,8 @@ input[type="file"] {
     font-weight: 800;
     letter-spacing: 0.8px;
     text-transform: uppercase;
+    text-decoration: none;
+    cursor: pointer;
 }
 
 #hud-usuario-avatar img {
@@ -2426,8 +2428,13 @@ function atualizarAvatarUsuario() {
         document.getElementById("btn-sino");
 
     if (!avatar) {
-        avatar = document.createElement("div");
+        avatar = document.createElement("a");
         avatar.id = "hud-usuario-avatar";
+    } else if (avatar.tagName !== "A") {
+        const linkAvatar = document.createElement("a");
+        linkAvatar.id = "hud-usuario-avatar";
+        avatar.replaceWith(linkAvatar);
+        avatar = linkAvatar;
     }
 
     if (referencia) {
@@ -2436,7 +2443,9 @@ function atualizarAvatarUsuario() {
         container.prepend(avatar);
     }
 
-    avatar.title = hudData.usuario_nome || "Usuario logado";
+    avatar.href = "/configuracoes/meu-acesso";
+    avatar.title = "Abrir minhas configuracoes";
+    avatar.setAttribute("aria-label", "Abrir minhas configuracoes de usuario");
     avatar.innerHTML = "";
 
     if (hudData.usuario_foto_url) {

@@ -372,7 +372,7 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response.headers.get("Location", ""))
 
-    def test_base_nao_mostra_busca_global_em_configuracoes(self):
+    def test_base_nao_mostra_busca_global_no_header(self):
         template = (
             '{% extends "base.html" %}'
             '{% block title %}Teste{% endblock %}'
@@ -392,7 +392,15 @@ class AppRegressionTests(unittest.TestCase):
 
         self.assertNotIn('<form class="global-search"', html_config)
         self.assertNotIn('id="globalSearchInput"', html_config)
-        self.assertIn('<form class="global-search"', html_clientes)
+        self.assertNotIn('<form class="global-search"', html_clientes)
+        self.assertNotIn('id="globalSearchInput"', html_clientes)
+
+    def test_index_avatar_usuario_abre_meu_acesso(self):
+        with open(os.path.join(app_module.app.root_path, "templates", "index.html"), encoding="utf-8") as arquivo:
+            conteudo = arquivo.read()
+
+        self.assertIn('avatar.href = "/configuracoes/meu-acesso"', conteudo)
+        self.assertIn('avatar.setAttribute("aria-label", "Abrir minhas configuracoes de usuario")', conteudo)
 
     def test_changelog_monta_links_github_automaticos(self):
         commit_hash = "1234567890abcdef1234567890abcdef12345678"
