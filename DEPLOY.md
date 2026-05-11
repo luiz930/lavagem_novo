@@ -48,6 +48,7 @@ gunicorn app:app --bind 0.0.0.0:5000
 
 ## Checklist de producao
 
+- `FLASK_SECRET_KEY` preenchida com valor unico fora do Git
 - `CSRF_PROTECTION=1`
 - `SESSION_COOKIE_SECURE=1` em HTTPS
 - `DATABASE_BACKEND=postgres`
@@ -56,3 +57,7 @@ gunicorn app:app --bind 0.0.0.0:5000
 - backup manual validado antes de migracoes ou importacoes grandes
 - destino externo do backup configurado quando houver backup online contratado
 - empresa, plano, status e validade revisados em `/empresas`
+
+## Release 1.0.0
+
+Para sair do beta, use a porta de saida em `RELEASE_1_0_0.md`. O bump para `1.0.0` deve acontecer somente depois da validacao no ambiente real, com backup novo e smoke test concluido.

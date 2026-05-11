@@ -246,7 +246,7 @@ STRICT_ONLINE_DATABASE_RAW = (os.environ.get("STRICT_ONLINE_DATABASE") or "").st
 SESSION_COOKIE_SECURE_RAW = (os.environ.get("SESSION_COOKIE_SECURE") or "").strip().lower()
 CSRF_PROTECTION_RAW = (os.environ.get("CSRF_PROTECTION") or "0").strip().lower()
 FLASK_SECRET_KEY_RAW = (os.environ.get("FLASK_SECRET_KEY") or "").strip()
-FLASK_SECRET_KEY_FALLBACK = "wagen-estetica-local-secret"
+FLASK_SECRET_KEY_FALLBACK = ""
 TELEMETRIA_ATIVA_RAW = (os.environ.get("TELEMETRIA_ATIVA") or "1").strip().lower()
 
 UPLOAD_FOLDER = "static/uploads"
@@ -2175,6 +2175,8 @@ def restaurar_backup_banco(nome_arquivo_backup):
         return False, validacao.get("mensagem") or "O backup selecionado falhou na validacao."
 
     if not sync_lock.acquire(blocking=False):
+        if backup_drive_temp:
+            remover_arquivo_se_existir(backup_drive_temp.name)
         return False, "Existe uma sincronizacao em andamento. Tente restaurar novamente em alguns segundos."
 
     origem = None
@@ -11507,6 +11509,18 @@ def listar_itens_checklist(apenas_ativos=False):
 def normalizar_texto_campo(valor):
     return str(valor or "").strip()
 
+def normalizar_redirect_interno(destino, fallback="/"):
+    texto = normalizar_texto_campo(destino)
+    if not texto:
+        return fallback
+
+    partes = urlparse(texto)
+    if partes.scheme or partes.netloc:
+        return fallback
+    if not texto.startswith("/") or texto.startswith("//"):
+        return fallback
+    return texto
+
 def normalizar_flag_sim_nao(valor):
     return "Sim" if normalizar_texto_comparacao(valor) == "sim" else "Nao"
 
@@ -16113,7 +16127,7 @@ def atualizar_status_servico_legado(id):
     if not session.get("usuario"):
         return redirect("/login")
 
-    redirect_to = normalizar_texto_campo(request.form.get("redirect_to")) or "/historico"
+    redirect_to = normalizar_redirect_interno(request.form.get("redirect_to"), "/historico")
     status_destino = normalizar_texto_campo(request.form.get("status")).upper() or "EM ANDAMENTO"
     if status_destino not in {"EM ANDAMENTO", "FINALIZADO"}:
         definir_feedback_por_destino(redirect_to, "erro", "Status de atendimento invalido.")
@@ -16727,6 +16741,12 @@ def montar_checklist_producao():
         "credenciais_google_drive",
     )
     itens = [
+        {
+            "nome": "Chave secreta configurada",
+            "ok": bool(FLASK_SECRET_KEY_RAW),
+            "detalhe": "FLASK_SECRET_KEY definida no ambiente." if FLASK_SECRET_KEY_RAW else "Defina FLASK_SECRET_KEY com valor unico antes de vender.",
+            "acao": "Manter segredo fora do Git." if FLASK_SECRET_KEY_RAW else "Configurar FLASK_SECRET_KEY no deploy.",
+        },
         {
             "nome": "CSRF ativo",
             "ok": csrf_protection_ativa(),
@@ -19726,9 +19746,7 @@ def auto_suporte_json():
 def pagina_auto_suporte_acao():
     if not session.get("usuario"):
         return redirect("/login")
-    redirect_to = normalizar_texto_campo(request.form.get("redirect_to")) or "/auto-suporte"
-    if not redirect_to.startswith("/"):
-        redirect_to = "/auto-suporte"
+    redirect_to = normalizar_redirect_interno(request.form.get("redirect_to"), "/auto-suporte")
     if not usuario_pode_usar_auto_suporte():
         definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem executar o AutoSuporte.")
         return redirect("/")
@@ -21999,10 +22017,10 @@ def editar_cliente():
 
     placa_original = (request.form.get("placa_original") or request.form.get("placa") or "").strip()
     placa = (request.form.get("placa") or placa_original).strip()
-    redirect_to = (request.form.get("redirect_to") or "").strip()
-
-    if not redirect_to:
-        redirect_to = f"/?placa={placa.upper()}"
+    redirect_to = normalizar_redirect_interno(
+        request.form.get("redirect_to"),
+        f"/?placa={placa.upper()}",
+    )
 
     try:
         resultado = salvar_cliente_veiculo(
@@ -23267,7 +23285,7 @@ def editar_atendimento_historico(id):
         if request.method == "POST"
         else request.args.get("redirect_to")
     )
-    redirect_to = normalizar_texto_campo(redirect_to) or "/historico"
+    redirect_to = normalizar_redirect_interno(redirect_to, "/historico")
 
     conn = conectar()
     c = conn.cursor()
@@ -23392,7 +23410,7 @@ def enviar_fotos_historico(id):
     if not session.get("usuario"):
         return redirect("/login")
 
-    redirect_to = normalizar_texto_campo(request.form.get("redirect_to")) or "/historico"
+    redirect_to = normalizar_redirect_interno(request.form.get("redirect_to"), "/historico")
     tipo_foto = normalizar_texto_campo(request.form.get("tipo_foto")).lower()
     if tipo_foto not in {"entrada", "detalhe", "saida"}:
         definir_feedback_por_destino(redirect_to, "erro", "Tipo de foto invalido.")
@@ -23433,7 +23451,10 @@ def excluir_foto_historico(id, foto_id):
     if not session.get("usuario"):
         return redirect("/login")
 
-    redirect_to = normalizar_texto_campo(request.form.get("redirect_to")) or f"/historico/servico/{id}/editar"
+    redirect_to = normalizar_redirect_interno(
+        request.form.get("redirect_to"),
+        f"/historico/servico/{id}/editar",
+    )
     servico = buscar_servico_operacional(id)
     if not servico:
         definir_feedback_por_destino(redirect_to, "erro", "Atendimento nao encontrado.")
@@ -23491,7 +23512,7 @@ def reabrir_atendimento_historico(id):
         return redirect("/login")
 
     servico = buscar_servico_operacional(id)
-    redirect_to = normalizar_texto_campo(request.form.get("redirect_to")) or "/historico"
+    redirect_to = normalizar_redirect_interno(request.form.get("redirect_to"), "/historico")
 
     if not servico:
         definir_feedback_por_destino(redirect_to, "erro", "Atendimento nao encontrado.")
@@ -23542,7 +23563,7 @@ def excluir_atendimento_historico(id):
     if not session.get("usuario"):
         return redirect("/login")
 
-    redirect_to = normalizar_texto_campo(request.form.get("redirect_to")) or "/historico"
+    redirect_to = normalizar_redirect_interno(request.form.get("redirect_to"), "/historico")
     servico = buscar_servico_operacional(id)
     if not servico:
         definir_feedback_por_destino(redirect_to, "erro", "Atendimento nao encontrado.")

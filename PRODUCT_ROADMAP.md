@@ -37,3 +37,8 @@
 3. aplicar filtros de `empresa_id` nas consultas
 4. mover uploads para provider unico
 5. fechar CSRF em todos os formularios
+
+## Corte de release atual
+
+- o produto pode sair do beta quando a porta de saida de `RELEASE_1_0_0.md` estiver verde no ambiente real
+- o bump para `1.0.0` deve ser o ultimo passo do corte, nao o primeiro

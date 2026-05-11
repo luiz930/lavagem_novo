@@ -162,6 +162,75 @@ class AppRegressionTests(unittest.TestCase):
         self.assertIsNone(app_module.CLIENTES_CONTEXT_CACHE["resultado"])
         conn.close()
 
+    def test_normalizar_redirect_interno_bloqueia_destinos_externos(self):
+        self.assertEqual(
+            app_module.normalizar_redirect_interno("https://example.com/phish", "/historico"),
+            "/historico",
+        )
+        self.assertEqual(
+            app_module.normalizar_redirect_interno("//example.com/phish", "/historico"),
+            "/historico",
+        )
+        self.assertEqual(
+            app_module.normalizar_redirect_interno("/historico?filtro=abertos", "/historico"),
+            "/historico?filtro=abertos",
+        )
+
+    def test_atualizar_status_servico_legado_nao_redireciona_para_dominio_externo(self):
+        with app_module.app.test_request_context(
+            "/servico/1/status",
+            method="POST",
+            data={"status": "INVALIDO", "redirect_to": "https://example.com/phish"},
+        ):
+            session["usuario"] = "admin"
+            resposta = app_module.atualizar_status_servico_legado(1)
+
+        self.assertEqual(resposta.status_code, 302)
+        self.assertEqual(resposta.headers["Location"], "/historico")
+
+    def test_chave_secreta_nao_usa_fallback_estatico_previsivel(self):
+        self.assertEqual(app_module.FLASK_SECRET_KEY_FALLBACK, "")
+        self.assertNotEqual(app_module.app.secret_key, "wagen-estetica-local-secret")
+
+    def test_checklist_producao_exige_chave_secreta_configurada(self):
+        with patch.object(app_module, "FLASK_SECRET_KEY_RAW", ""):
+            itens = app_module.montar_checklist_producao()
+
+        item = next(entrada for entrada in itens if entrada["nome"] == "Chave secreta configurada")
+        self.assertFalse(item["ok"])
+        self.assertIn("FLASK_SECRET_KEY", item["detalhe"])
+
+    def test_restaurar_backup_drive_remove_temporario_quando_sync_esta_ocupado(self):
+        item_backup = {
+            "nome": "database_v2_20260511_120000.zip",
+            "caminho": "drive://arquivo-123",
+            "tipo_backup": "banco",
+        }
+        caminhos_baixados = []
+
+        def baixar_fake(_file_id, destino):
+            with open(destino, "wb") as arquivo:
+                arquivo.write(b"backup")
+            caminhos_baixados.append(destino)
+
+        class LockOcupadoFake:
+            def acquire(self, blocking=False):
+                return False
+
+            def release(self):
+                return None
+
+        with patch.object(app_module, "listar_arquivos_backup_banco", return_value=[item_backup]), \
+             patch.object(app_module, "baixar_arquivo_google_drive", side_effect=baixar_fake), \
+             patch.object(app_module, "validar_arquivo_backup_local", return_value={"ok": True}), \
+             patch.object(app_module, "sync_lock", LockOcupadoFake()):
+            sucesso, mensagem = app_module.restaurar_backup_banco(item_backup["nome"])
+
+        self.assertFalse(sucesso)
+        self.assertIn("sincronizacao em andamento", mensagem)
+        self.assertEqual(len(caminhos_baixados), 1)
+        self.assertFalse(os.path.exists(caminhos_baixados[0]))
+
     def _criar_banco_admin_memoria(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row

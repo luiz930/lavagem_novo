@@ -33,4 +33,4 @@ Esta base agora possui:
 - `INSTALL.md`
 - `DEPLOY.md`
 - `PRODUCT_ROADMAP.md`
-
+- `RELEASE_1_0_0.md`
