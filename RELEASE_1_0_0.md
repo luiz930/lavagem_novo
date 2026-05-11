@@ -47,8 +47,8 @@ Confirmar no ambiente real:
 
 Depois da porta de saida ficar verde:
 
-1. atualizar `VERSAO_SISTEMA_PADRAO` em `app.py` para `1.0.0`
-2. atualizar a versao exibida em `/configuracoes/sistema` para `1.0.0`
+1. confirmar `VERSAO_SISTEMA_PADRAO=1.0.0` em `app.py`
+2. confirmar a versao exibida em `/configuracoes/sistema` como `1.0.0`
 3. revisar `/changelog`
 4. rodar novamente os testes
 5. publicar

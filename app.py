@@ -3230,7 +3230,7 @@ app.config.update(
 app.config["SESSION_TYPE"] = "filesystem"
 app.secret_key = app.config["SECRET_KEY"]
 
-VERSAO_SISTEMA_PADRAO = "0.13.0 - Beta"
+VERSAO_SISTEMA_PADRAO = "1.0.0"
 APP_VERSION = f"Versao: {VERSAO_SISTEMA_PADRAO}"
 VERSOES_SISTEMA_LEGADAS = {
     "0.7.5-alpha (Em Desenvolvimento)",
