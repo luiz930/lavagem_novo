@@ -439,6 +439,43 @@
 </div>
 
 <div class="page-card top-spacing">
+    <p class="pill-label">Metricas por rota</p>
+    <h2 class="section-title top-spacing">Resumo tecnico das telas</h2>
+    <div style="overflow:auto;">
+        <table class="data-table" style="min-width:820px;">
+            <thead>
+                <tr>
+                    <th>Rota</th>
+                    <th>Ultimo trecho</th>
+                    <th>Media</th>
+                    <th>Pico</th>
+                    <th>Gargalo</th>
+                    <th>Amostras</th>
+                    <th>Cache</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in central_tecnica.metricas_sql.por_pagina %}
+                <tr>
+                    <td><code>{{ item.pagina }}</code></td>
+                    <td>{{ item.ultimo_ms }} ms</td>
+                    <td>{{ item.media_ms }} ms</td>
+                    <td>{% if item.max_ms > 1500 %}<span style="color:#fca5a5;">{{ item.max_ms }} ms</span>{% else %}{{ item.max_ms }} ms{% endif %}</td>
+                    <td>{{ item.gargalo }} <span class="muted-text">({{ item.gargalo_ms }} ms)</span></td>
+                    <td>{{ item.amostras }}</td>
+                    <td>{{ item.cache_hits }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="muted-text">Abra as telas principais para coletar as primeiras medicoes por rota.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="page-card top-spacing">
     <p class="pill-label">Consultas SQL</p>
     <h2 class="section-title top-spacing">O que mais custou no banco</h2>
     <div style="overflow:auto;">

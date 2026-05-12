@@ -1633,6 +1633,36 @@ class AppRegressionTests(unittest.TestCase):
         finally:
             app_module.METRICAS_TEMPO_RESPOSTA[rota] = estado_original
 
+    def test_metricas_sql_resumem_por_pagina_e_gargalo(self):
+        with app_module.SQL_METRICAS_LOCK:
+            app_module.SQL_METRICAS_CONSULTAS.clear()
+
+        try:
+            app_module.registrar_metrica_consulta_sql("/financeiro", "banco", 120, origem="banco")
+            app_module.registrar_metrica_consulta_sql("/financeiro", "render", 40, origem="template", cache_hit=True)
+
+            metricas = app_module.obter_metricas_consultas_sql(limite=10)
+            financeiro = next(item for item in metricas["por_pagina"] if item["pagina"] == "/financeiro")
+
+            self.assertEqual(financeiro["amostras"], 2)
+            self.assertEqual(financeiro["max_ms"], 120)
+            self.assertEqual(financeiro["gargalo"], "banco")
+            self.assertEqual(financeiro["cache_hits"], 1)
+        finally:
+            with app_module.SQL_METRICAS_LOCK:
+                app_module.SQL_METRICAS_CONSULTAS.clear()
+
+    def test_resumo_retornos_hud_somente_cache_nao_recalcula(self):
+        app_module.RETORNOS_HUD_CACHE["testado_em"] = 0.0
+        app_module.RETORNOS_HUD_CACHE["usuario"] = ""
+        app_module.RETORNOS_HUD_CACHE["resultado"] = None
+
+        with patch.object(app_module, "montar_itens_retornos_comerciais") as montar_mock:
+            resumo = app_module.obter_resumo_retornos_hud("admin", app_module.time.time(), somente_cache=True)
+
+        self.assertEqual(resumo["acao_agora"], 0)
+        montar_mock.assert_not_called()
+
     def test_banco_online_falha_registra_rota_atingida(self):
         with app_module.app.test_request_context("/clientes"):
             with patch.object(app_module, "modo_banco_preferido", return_value="postgres"), \
@@ -1767,6 +1797,7 @@ class AppRegressionTests(unittest.TestCase):
         app_module.RELATORIOS_CONTEXT_CACHE["testado_em"] = 0.0
         app_module.RELATORIOS_CONTEXT_CACHE["chave"] = ""
         app_module.RELATORIOS_CONTEXT_CACHE["resultado"] = None
+        app_module.RELATORIOS_CONTEXT_CACHE["entradas"] = {}
 
         with app_module.app.test_request_context("/financeiro?periodo=mes", method="GET"):
             session["usuario"] = "admin"
@@ -1780,6 +1811,26 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(segundo["quantidade_periodo"], 0)
         leitura_mock.assert_called_once()
         self.assertEqual(app_module.RELATORIOS_CONTEXT_CACHE["chave"], "1|mes|det:0")
+        self.assertIn("1|mes|det:0", app_module.RELATORIOS_CONTEXT_CACHE["entradas"])
+
+    def test_financeiro_mantem_cache_separado_por_detalhe(self):
+        app_module.RELATORIOS_CONTEXT_CACHE["testado_em"] = 0.0
+        app_module.RELATORIOS_CONTEXT_CACHE["chave"] = ""
+        app_module.RELATORIOS_CONTEXT_CACHE["resultado"] = None
+        app_module.RELATORIOS_CONTEXT_CACHE["entradas"] = {}
+
+        with app_module.app.test_request_context("/financeiro?periodo=mes", method="GET"):
+            session["usuario"] = "admin"
+            session["empresa_id"] = 1
+            with patch.object(app_module, "executar_leitura_resiliente", return_value={"servicos_raw": [], "orcamentos_raw": [], "notas_raw": []}) as leitura_mock, \
+                 patch.object(app_module, "agora", return_value=app_module.datetime(2026, 5, 4, 10, 0)):
+                app_module.carregar_contexto_relatorios("mes", detalhado=False)
+                app_module.carregar_contexto_relatorios("mes", detalhado=True)
+                app_module.carregar_contexto_relatorios("mes", detalhado=False)
+
+        self.assertEqual(leitura_mock.call_count, 2)
+        self.assertIn("1|mes|det:0", app_module.RELATORIOS_CONTEXT_CACHE["entradas"])
+        self.assertIn("1|mes|det:1", app_module.RELATORIOS_CONTEXT_CACHE["entradas"])
 
     def test_auto_suporte_sugere_pacote_codex_para_erro_500(self):
         sugestoes = app_module.montar_sugestoes_auto_suporte(

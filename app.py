@@ -64,6 +64,11 @@ from domains.clientes import (
     salvar_cliente_veiculo_cursor as salvar_cliente_veiculo_cursor_domain,
 )
 from domains.changelog import carregar_contexto_changelog as carregar_contexto_changelog_domain
+from domains.documentos_fiscais import (
+    calcular_totais_nota_fiscal,
+    calcular_totais_orcamento,
+    montar_prefill_nota_por_orcamento as montar_prefill_nota_por_orcamento_domain,
+)
 from domains.empresas import (
     PLANOS_LICENCA,
     STATUS_LICENCA,
@@ -82,9 +87,14 @@ from domains.empresas import (
     validar_licenca_assinada as validar_licenca_assinada_domain,
 )
 from domains.financeiro import (
+    dias_do_periodo_financeiro,
+    filtrar_registros_por_periodo,
+    filtrar_servicos_por_periodo,
     montar_chave_cache_relatorios,
     montar_periodo_descricao,
+    montar_ranking_equipe_relatorios as montar_ranking_equipe_relatorios_domain,
     montar_resumo_operacional_financeiro,
+    normalizar_periodo_financeiro,
 )
 from domains.historico import (
     carregar_recursos_edicao_historico as carregar_recursos_edicao_historico_domain,
@@ -4024,6 +4034,7 @@ RELATORIOS_CONTEXT_CACHE = {
     "testado_em": 0.0,
     "chave": "",
     "resultado": None,
+    "entradas": {},
 }
 RELATORIOS_CONTEXT_CACHE_TTL = 45
 CLIENTES_LISTA_INICIAL_LIMITE = 80
@@ -4161,6 +4172,7 @@ def limpar_caches_interface():
     RELATORIOS_CONTEXT_CACHE["testado_em"] = 0.0
     RELATORIOS_CONTEXT_CACHE["chave"] = ""
     RELATORIOS_CONTEXT_CACHE["resultado"] = None
+    RELATORIOS_CONTEXT_CACHE["entradas"] = {}
     AUDITORIA_CONTEXT_CACHE["testado_em"] = 0.0
     AUDITORIA_CONTEXT_CACHE["chave"] = ""
     AUDITORIA_CONTEXT_CACHE["resultado"] = None
@@ -5206,14 +5218,39 @@ def cache_consulta_valido(cache, chave, ttl):
 
 
 def obter_cache_consulta(cache, chave, ttl):
+    entradas = cache.get("entradas")
+    if isinstance(entradas, dict):
+        entrada = entradas.get(str(chave or ""))
+        if not entrada:
+            return None
+        if time.time() - float(entrada.get("testado_em") or 0.0) >= ttl:
+            return None
+        cache["testado_em"] = entrada.get("testado_em") or 0.0
+        cache["chave"] = str(chave or "")
+        cache["resultado"] = entrada.get("resultado")
+        return copiar_estrutura_cache(entrada.get("resultado"))
+
     if not cache_consulta_valido(cache, chave, ttl):
         return None
     return copiar_estrutura_cache(cache.get("resultado"))
 
 
 def salvar_cache_consulta(cache, chave, resultado):
+    chave_normalizada = str(chave or "")
+    entradas = cache.get("entradas")
+    if isinstance(entradas, dict):
+        entradas[chave_normalizada] = {
+            "testado_em": time.time(),
+            "resultado": copiar_estrutura_cache(resultado),
+        }
+        agora_cache = entradas[chave_normalizada]["testado_em"]
+        cache["testado_em"] = agora_cache
+        cache["chave"] = chave_normalizada
+        cache["resultado"] = copiar_estrutura_cache(resultado)
+        return
+
     cache["testado_em"] = time.time()
-    cache["chave"] = str(chave or "")
+    cache["chave"] = chave_normalizada
     cache["resultado"] = copiar_estrutura_cache(resultado)
 
 
@@ -5258,6 +5295,7 @@ def obter_metricas_consultas_sql(limite=40):
         registros = [dict(item) for item in SQL_METRICAS_CONSULTAS[: int(limite or 40)]]
 
     agregados = {}
+    paginas = {}
     for item in registros:
         chave = f"{item.get('pagina')}|{item.get('nome')}"
         resumo = agregados.setdefault(
@@ -5275,18 +5313,53 @@ def obter_metricas_consultas_sql(limite=40):
                 "ultima_medicao": item.get("quando"),
             },
         )
+        if not resumo["amostras"]:
+            resumo["ultimo_ms"] = item.get("tempo_ms") or 0
+            resumo["ultima_medicao"] = item.get("quando")
         resumo["amostras"] += 1
-        resumo["ultimo_ms"] = item.get("tempo_ms") or 0
         resumo["max_ms"] = max(int(resumo.get("max_ms") or 0), int(item.get("tempo_ms") or 0))
         resumo["total_ms"] += int(item.get("tempo_ms") or 0)
         resumo["cache_hits"] += 1 if item.get("cache_hit") else 0
         resumo["media_ms"] = int(resumo["total_ms"] / resumo["amostras"]) if resumo["amostras"] else 0
         resumo["classe"] = classificar_latencia_ms(resumo["ultimo_ms"])
 
+        pagina_chave = item.get("pagina") or "-"
+        pagina = paginas.setdefault(
+            pagina_chave,
+            {
+                "pagina": pagina_chave,
+                "amostras": 0,
+                "ultimo_ms": 0,
+                "max_ms": 0,
+                "media_ms": 0,
+                "total_ms": 0,
+                "cache_hits": 0,
+                "gargalo": "",
+                "gargalo_ms": 0,
+                "ultima_medicao": item.get("quando"),
+            },
+        )
+        tempo_item = int(item.get("tempo_ms") or 0)
+        if not pagina["amostras"]:
+            pagina["ultimo_ms"] = tempo_item
+            pagina["ultima_medicao"] = item.get("quando")
+        pagina["amostras"] += 1
+        pagina["max_ms"] = max(int(pagina.get("max_ms") or 0), tempo_item)
+        pagina["total_ms"] += tempo_item
+        pagina["cache_hits"] += 1 if item.get("cache_hit") else 0
+        pagina["media_ms"] = int(pagina["total_ms"] / pagina["amostras"]) if pagina["amostras"] else 0
+        if tempo_item >= int(pagina.get("gargalo_ms") or 0):
+            pagina["gargalo"] = item.get("nome") or "consulta"
+            pagina["gargalo_ms"] = tempo_item
+
     ranking = sorted(agregados.values(), key=lambda item: int(item.get("max_ms") or 0), reverse=True)
+    por_pagina = sorted(paginas.values(), key=lambda item: int(item.get("max_ms") or 0), reverse=True)
+    for item in por_pagina:
+        item["classe"] = classificar_latencia_ms(item.get("max_ms") or 0)
     return {
         "recentes": registros,
         "ranking": ranking[:20],
+        "por_pagina": por_pagina[:12],
         "total_registros": len(registros),
     }
 
@@ -8304,67 +8377,6 @@ def endpoint_liberado_com_licenca_bloqueada(endpoint):
     }
 
 
-def normalizar_periodo_financeiro(valor):
-    periodo = str(valor or "mes").strip().lower()
-    return periodo if periodo in MAPA_PERIODOS_FINANCEIRO else "mes"
-
-def filtrar_servicos_por_periodo(servicos, periodo, data_referencia):
-    if periodo == "hoje":
-        return [
-            item for item in servicos
-            if item["entrega_dt"].date() == data_referencia
-        ]
-
-    if periodo == "7dias":
-        inicio = data_referencia - timedelta(days=6)
-        return [
-            item for item in servicos
-            if inicio <= item["entrega_dt"].date() <= data_referencia
-        ]
-
-    if periodo == "30dias":
-        inicio = data_referencia - timedelta(days=29)
-        return [
-            item for item in servicos
-            if inicio <= item["entrega_dt"].date() <= data_referencia
-        ]
-
-    return [
-        item for item in servicos
-        if (
-            item["entrega_dt"].year == data_referencia.year and
-            item["entrega_dt"].month == data_referencia.month
-        )
-    ]
-
-def dias_do_periodo_financeiro(periodo, data_referencia):
-    if periodo == "hoje":
-        return 1
-    if periodo == "7dias":
-        return 7
-    if periodo == "30dias":
-        return 30
-    return max(1, data_referencia.day)
-
-
-def filtrar_registros_por_periodo(registros, periodo, data_referencia, campo_data):
-    resultado = []
-    for item in registros or []:
-        datahora = item.get(campo_data)
-        if not datahora:
-            continue
-        data_item = datahora.date()
-        if periodo == "hoje" and data_item == data_referencia:
-            resultado.append(item)
-        elif periodo == "7dias" and data_referencia - timedelta(days=6) <= data_item <= data_referencia:
-            resultado.append(item)
-        elif periodo == "30dias" and data_referencia - timedelta(days=29) <= data_item <= data_referencia:
-            resultado.append(item)
-        elif periodo == "mes" and data_item.year == data_referencia.year and data_item.month == data_referencia.month:
-            resultado.append(item)
-    return resultado
-
-
 def formatar_taxa_percentual(parte, total):
     if not total:
         return "0%"
@@ -8449,42 +8461,6 @@ def normalizar_notas_relatorios(registros):
         resultado.append(item)
     resultado.sort(key=lambda row: row.get("criado_em_dt") or datetime.min.replace(tzinfo=ZoneInfo("America/Sao_Paulo")), reverse=True)
     return resultado
-
-
-def montar_ranking_equipe_relatorios(servicos):
-    ranking = {}
-    for item in servicos or []:
-        responsavel = (
-            normalizar_texto_campo(item.get("finalizado_por_nome"))
-            or normalizar_texto_campo(item.get("operacional_por_nome"))
-            or normalizar_texto_campo(item.get("criado_por_nome"))
-            or normalizar_texto_campo(item.get("usuario"))
-            or "Equipe"
-        )
-        resumo = ranking.setdefault(
-            responsavel,
-            {"nome": responsavel, "quantidade": 0, "valor_total": 0.0, "tempo_total_segundos": 0},
-        )
-        resumo["quantidade"] += 1
-        resumo["valor_total"] += converter_valor_numerico(item.get("valor_num"))
-        resumo["tempo_total_segundos"] += max(
-            0,
-            int(item.get("lavagem_segundos") or 0) + int(item.get("finalizacao_segundos") or 0),
-        )
-
-    itens = sorted(
-        ranking.values(),
-        key=lambda row: (row["quantidade"], row["valor_total"]),
-        reverse=True,
-    )
-    referencia = itens[0]["quantidade"] if itens else 0
-    for item in itens:
-        item["valor_exibicao"] = formatar_valor_monetario(item["valor_total"])
-        item["tempo_medio_exibicao"] = formatar_duracao_segundos(
-            item["tempo_total_segundos"] / item["quantidade"] if item["quantidade"] else 0
-        )
-        item["percentual"] = round((item["quantidade"] / referencia) * 100) if referencia else 0
-    return itens[:5]
 
 
 def construir_linhas_csv_relatorio_servicos(servicos):
@@ -8812,8 +8788,25 @@ def carregar_contexto_relatorios(periodo_atual=None, detalhado=False):
                 entregas_fora_prazo += 1
 
     resumo_fluxo_aberto = montar_resumo_fluxo_atendimento(servicos_em_andamento)
-    ranking_equipe = montar_ranking_equipe_relatorios(finalizados_periodo)
-    resumo_retornos = obter_resumo_retornos_hud(str(session.get("usuario") or ""), time.time(), agora_atual)
+    ranking_equipe = montar_ranking_equipe_relatorios_domain(
+        finalizados_periodo,
+        normalizar_texto_campo,
+        converter_valor_numerico,
+        formatar_valor_monetario,
+        formatar_duracao_segundos,
+    )
+    resumo_retornos = medir_consulta_sql(
+        "/financeiro",
+        "resumo_retornos_financeiro",
+        lambda: obter_resumo_retornos_hud(
+            str(session.get("usuario") or ""),
+            time.time(),
+            agora_atual,
+            somente_cache=True,
+        ),
+        origem="memoria",
+        detalhes="retornos hud cache",
+    )
     orcamentos_valor_total = sum(item["valor_num"] for item in orcamentos_periodo)
     notas_emitidas_periodo = [item for item in notas_periodo if item.get("emitida")]
     notas_pendentes_periodo = [item for item in notas_periodo if not item.get("emitida")]
@@ -10934,9 +10927,10 @@ def salvar_orcamento(dados, itens, empresa):
     c = conn.cursor()
     numero = proximo_numero_documento_sql(c, "orcamentos", "numero")
     criado_em = agora_iso()
-    subtotal = round(sum(item["valor_total"] for item in itens), 2)
-    desconto = max(0.0, converter_valor_numerico(dados.get("desconto")))
-    total = max(subtotal - desconto, 0.0)
+    totais = calcular_totais_orcamento(itens, converter_valor_numerico(dados.get("desconto")))
+    subtotal = totais["subtotal"]
+    desconto = totais["desconto"]
+    total = totais["total"]
     empresa_snapshot = serializar_empresa_snapshot(montar_empresa_snapshot(empresa))
 
     c.execute("""
@@ -11057,12 +11051,16 @@ def salvar_nota_fiscal(dados, itens, empresa):
     c = conn.cursor()
     rps_numero = proximo_numero_documento_sql(c, "notas_fiscais", "rps_numero")
     criado_em = agora_iso()
-    valor_servicos = round(sum(item["valor_total"] for item in itens), 2)
-    desconto = max(0.0, converter_valor_numerico(dados.get("desconto")))
-    base_calculo = max(valor_servicos - desconto, 0.0)
-    aliquota_iss = max(0.0, converter_valor_numerico(dados.get("aliquota_iss")))
-    valor_iss = round((base_calculo * aliquota_iss) / 100, 2)
-    valor_total = base_calculo
+    totais = calcular_totais_nota_fiscal(
+        itens,
+        converter_valor_numerico(dados.get("desconto")),
+        converter_valor_numerico(dados.get("aliquota_iss")),
+    )
+    valor_servicos = totais["valor_servicos"]
+    desconto = totais["desconto"]
+    aliquota_iss = totais["aliquota_iss"]
+    valor_iss = totais["valor_iss"]
+    valor_total = totais["valor_total"]
     numero_nota = normalizar_texto_campo(dados.get("numero_nota"))
     empresa_snapshot = serializar_empresa_snapshot(montar_empresa_snapshot(empresa))
 
@@ -11132,25 +11130,7 @@ def salvar_nota_fiscal(dados, itens, empresa):
     return buscar_nota_fiscal_completa(nota_id)
 
 def montar_prefill_nota_por_orcamento(orcamento):
-    if not orcamento:
-        return None
-
-    empresa = obter_configuracao_empresa()
-    discriminacao = "; ".join(item["descricao"] for item in orcamento.get("itens", []))
-    return {
-        "origem_orcamento_id": orcamento["id"],
-        "cliente_nome": orcamento.get("cliente_nome", ""),
-        "cliente_documento": orcamento.get("cliente_documento", ""),
-        "email": orcamento.get("email", ""),
-        "telefone": orcamento.get("telefone", ""),
-        "placa": orcamento.get("placa", ""),
-        "modelo": orcamento.get("modelo", ""),
-        "codigo_servico": empresa.get("codigo_servico_padrao", ""),
-        "aliquota_iss": empresa.get("aliquota_padrao", 0),
-        "discriminacao": discriminacao,
-        "desconto": orcamento.get("desconto", 0),
-        "itens": orcamento.get("itens", []),
-    }
+    return montar_prefill_nota_por_orcamento_domain(orcamento, obter_configuracao_empresa())
 
 def carregar_branding_documento(empresa=None):
     empresa = dict(empresa or {})
@@ -15637,7 +15617,15 @@ def montar_resultado_hud_basico(sync_token="init-pendente"):
     }
 
 
-def obter_resumo_retornos_hud(usuario_cache, agora_cache_ts, referencia=None):
+def resumo_retornos_hud_vazio():
+    return {
+        "acao_agora": 0,
+        "reagendados_vencidos": 0,
+        "contatados_hoje": 0,
+    }
+
+
+def obter_resumo_retornos_hud(usuario_cache, agora_cache_ts, referencia=None, somente_cache=False):
     if (
         RETORNOS_HUD_CACHE.get("resultado") is not None
         and RETORNOS_HUD_CACHE.get("usuario") == usuario_cache
@@ -15645,12 +15633,11 @@ def obter_resumo_retornos_hud(usuario_cache, agora_cache_ts, referencia=None):
     ):
         return dict(RETORNOS_HUD_CACHE["resultado"])
 
+    if somente_cache:
+        return resumo_retornos_hud_vazio()
+
     referencia = referencia or agora()
-    resultado = {
-        "acao_agora": 0,
-        "reagendados_vencidos": 0,
-        "contatados_hoje": 0,
-    }
+    resultado = resumo_retornos_hud_vazio()
 
     try:
         itens_retornos = montar_itens_retornos_comerciais()
@@ -18776,6 +18763,7 @@ def limpar_cache_rota_lenta_auto_suporte(tempo_resposta=None):
     elif rota in {"/financeiro", "/relatorios"}:
         RELATORIOS_CONTEXT_CACHE["testado_em"] = 0.0
         RELATORIOS_CONTEXT_CACHE["resultado"] = None
+        RELATORIOS_CONTEXT_CACHE["entradas"] = {}
         caches.append("relatorios")
     elif rota == "/configuracoes":
         limpar_cache_configuracao_empresa()
@@ -21451,6 +21439,7 @@ def index():
 
 def renderizar_pagina_clientes(busca="", limpar=False):
     detalhar_sincronizacoes = bool(request.args.get("detalhar_sincronizacoes") or request.args.get("sync"))
+    cliente_em_edicao = normalizar_texto_campo(request.args.get("editar"))
     clientes_lista, sincronizacoes = carregar_contexto_clientes(
         busca=busca,
         limpar=limpar,
@@ -21469,6 +21458,7 @@ def renderizar_pagina_clientes(busca="", limpar=False):
         busca=busca,
         limite_inicial_clientes=CLIENTES_LISTA_INICIAL_LIMITE,
         clientes_limitados=(not busca and len(clientes_lista) >= CLIENTES_LISTA_INICIAL_LIMITE),
+        cliente_em_edicao=cliente_em_edicao,
     )
 
 @app.route("/clientes/sincronizacao/preview", methods=["POST"])

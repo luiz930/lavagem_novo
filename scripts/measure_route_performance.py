@@ -71,7 +71,11 @@ def main():
     parser.add_argument("--rotas", nargs="*", default=DEFAULT_ROUTES)
     parser.add_argument("--sem-bypass", action="store_true", help="Nao ignora sincronizacao de sessao/licenca nos before_request.")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--metricas-internas", action="store_true", help="Inclui metricas internas de consultas/contexto coletadas durante a medicao.")
     args = parser.parse_args()
+
+    if args.metricas_internas:
+        app_module.SQL_METRICAS_CONSULTAS.clear()
 
     resultados = medir_rotas(
         args.rotas,
@@ -80,7 +84,10 @@ def main():
     )
 
     if args.json:
-        print(json.dumps(resultados, ensure_ascii=False, indent=2))
+        payload = {"rotas": resultados}
+        if args.metricas_internas:
+            payload["metricas_internas"] = app_module.obter_metricas_consultas_sql(limite=80)
+        print(json.dumps(payload if args.metricas_internas else resultados, ensure_ascii=False, indent=2))
         return
 
     print("Rota | Status | Min | Media | Max | KB | Destino")
@@ -90,6 +97,15 @@ def main():
             f"{item['rota']} | {item['status']} | {item['min_ms']} ms | "
             f"{item['media_ms']} ms | {item['max_ms']} ms | {item['tamanho_kb']} | {item['destino']}"
         )
+
+    if args.metricas_internas:
+        print("\nTrecho | Rota | Media | Pico | Amostras | Cache")
+        print("--- | --- | ---: | ---: | ---: | ---:")
+        for item in app_module.obter_metricas_consultas_sql(limite=80)["ranking"]:
+            print(
+                f"{item['nome']} | {item['pagina']} | {item['media_ms']} ms | "
+                f"{item['max_ms']} ms | {item['amostras']} | {item['cache_hits']}"
+            )
 
 
 if __name__ == "__main__":
