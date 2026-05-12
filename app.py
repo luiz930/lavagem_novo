@@ -1,6 +1,7 @@
 ﻿from flask import Flask, render_template, request, redirect, session, jsonify, has_request_context
 import csv
 import json
+import logging
 import math
 import sqlite3
 import socket
@@ -86,6 +87,10 @@ from domains.historico import (
     listar_nomes_checklist_por_servicos as listar_nomes_checklist_por_servicos_domain,
     substituir_checklist_servico as substituir_checklist_servico_domain,
 )
+from domains.pwa import (
+    montar_manifesto_pwa,
+    montar_status_pwa,
+)
 from domains.servicos import (
     consultar_historico_servicos as consultar_historico_servicos_domain,
     consultar_resumo_hud as consultar_resumo_hud_domain,
@@ -111,6 +116,12 @@ from scripts.site_monitor import (
     run_site_checks,
     send_telegram_message as send_site_monitor_telegram_message,
 )
+
+APP_LOGGER = logging.getLogger("wagen_estetica")
+
+
+def log_info(*partes):
+    APP_LOGGER.info(" ".join(str(parte) for parte in partes))
 
 try:
     from google.oauth2 import service_account
@@ -2886,9 +2897,9 @@ def loop_worker_manutencao_arquivos():
                 usuario=usuario_sistema_interno(),
             )
             if sucesso and "concluida" in mensagem.lower():
-                print(f"ARQUIVOS: {mensagem}")
+                log_info(f"ARQUIVOS: {mensagem}")
         except Exception as e:
-            print("ERRO WORKER ARQUIVOS:", e)
+            log_info("ERRO WORKER ARQUIVOS:", e)
 
         time.sleep(3600)
 
@@ -3064,9 +3075,9 @@ def loop_worker_backup_banco():
         try:
             sucesso, mensagem, caminho = criar_backup_banco(force=False)
             if caminho and "criado com sucesso" in mensagem.lower():
-                print(f"BACKUP: {mensagem} -> {caminho}")
+                log_info(f"BACKUP: {mensagem} -> {caminho}")
         except Exception as e:
-            print("ERRO WORKER BACKUP:", e)
+            log_info("ERRO WORKER BACKUP:", e)
 
         time.sleep(3600)
 
@@ -4549,7 +4560,7 @@ def garantir_schema_banco_online(force=False):
         return True
     except Exception as e:
         SCHEMA_BANCO_ONLINE_GARANTIDO = False
-        print("AVISO: nao foi possivel garantir o schema online:", e)
+        log_info("AVISO: nao foi possivel garantir o schema online:", e)
         return False
 
 
@@ -4575,7 +4586,7 @@ def _bootstrap_init_db_assincrono():
     try:
         garantir_init_db()
     except Exception as e:
-        print("AVISO BOOTSTRAP INIT_DB:", e)
+        log_info("AVISO BOOTSTRAP INIT_DB:", e)
 
 
 def iniciar_bootstrap_init_db():
@@ -4594,7 +4605,7 @@ def _bootstrap_schema_online_assincrono():
     try:
         garantir_schema_banco_online()
     except Exception as e:
-        print("AVISO BOOTSTRAP SCHEMA:", e)
+        log_info("AVISO BOOTSTRAP SCHEMA:", e)
     finally:
         if not SCHEMA_BANCO_ONLINE_GARANTIDO:
             schema_bootstrap_thread_started = False
@@ -4867,7 +4878,7 @@ def salvar_configuracao_banco_form(form):
                 migracao_automatica = True
                 mensagem_migracao = " Dados do banco local migrados automaticamente para o Supabase."
             except Exception as e:
-                print("AVISO: falha na migracao automatica para o banco online:", e)
+                log_info("AVISO: falha na migracao automatica para o banco online:", e)
                 mensagem_migracao = (
                     " A conexao foi salva, mas a migracao automatica nao concluiu. "
                     "Use o botao de migracao manual."
@@ -5065,7 +5076,7 @@ def registrar_log_banco_online(mensagem, intervalo_segundos=60):
 
     BANCO_ONLINE_ULTIMO_LOG["mensagem"] = texto
     BANCO_ONLINE_ULTIMO_LOG["testado_em"] = agora_ts
-    print("ERRO:", texto)
+    log_info("ERRO:", texto)
 
 
 def erro_transitorio_leitura_banco(erro):
@@ -5304,7 +5315,7 @@ def executar_leitura_resiliente(operacao, descricao="", padrao=None, permitir_fa
         if erro_limite_conexoes_banco_online(erro):
             registrar_log_banco_online(mensagem, intervalo_segundos=30)
         else:
-            print("AVISO LEITURA:", mensagem)
+            log_info("AVISO LEITURA:", mensagem)
 
         if permitir_fallback_local:
             conn_local = None
@@ -5314,7 +5325,7 @@ def executar_leitura_resiliente(operacao, descricao="", padrao=None, permitir_fa
                 return operacao(conn_local)
             except Exception as erro_local:
                 mensagem_local = f"{descricao}: {erro_local}" if descricao else str(erro_local)
-                print("AVISO LEITURA LOCAL:", mensagem_local)
+                log_info("AVISO LEITURA LOCAL:", mensagem_local)
             finally:
                 try:
                     if conn_local:
@@ -6291,7 +6302,7 @@ def salvar_notificacao(mensagem, tipo="info", empresa_id=None, categoria=None, r
         HUD_CACHE["resultado"] = None
 
     except Exception as e:
-        print("ERRO AO SALVAR NOTIFICACAO:", e)
+        log_info("ERRO AO SALVAR NOTIFICACAO:", e)
 
     finally:
         try:
@@ -6375,7 +6386,7 @@ def garantir_notificacoes_aniversario(empresa_id=None, force=False):
             HUD_CACHE["resultado"] = None
         return inseridas
     except Exception as e:
-        print("AVISO ANIVERSARIOS:", e)
+        log_info("AVISO ANIVERSARIOS:", e)
         return 0
     finally:
         try:
@@ -6894,7 +6905,7 @@ def init_db():
     try:
         garantir_schema_sqlite_local_minima(force=True)
     except Exception as e:
-        print("AVISO SCHEMA SQLITE LOCAL:", e)
+        log_info("AVISO SCHEMA SQLITE LOCAL:", e)
 
     if modo_banco_preferido() == "postgres":
         status_boot = diagnosticar_banco_online(force=True)
@@ -6904,7 +6915,7 @@ def init_db():
                     "Banco online obrigatorio no boot, mas a conexao nao foi estabelecida. "
                     f"Detalhe: {status_boot.get('mensagem') or 'sem detalhes'}"
                 )
-            print(
+            log_info(
                 "AVISO: banco online indisponivel no boot. "
                 "O sistema vai iniciar em modo local e sincronizar quando a rede voltar."
             )
@@ -7446,7 +7457,7 @@ def criar_todas_tabelas():
         except Exception as e:
             mensagem = str(e or "").lower()
             if "statement timeout" in mensagem or "querycanceled" in mensagem:
-                print(f"AVISO INDICE: {sql_indice} pulado por timeout do banco online.")
+                log_info(f"AVISO INDICE: {sql_indice} pulado por timeout do banco online.")
                 try:
                     conn.rollback()
                 except Exception:
@@ -9808,7 +9819,7 @@ def salvar_resultado_auto_teste_seguro(status, relatorio, chat_id=None):
     try:
         salvar_resultado_auto_teste(status, relatorio, chat_id=chat_id)
     except Exception as erro:
-        print("ERRO AO SALVAR RESULTADO AUTO TESTE:", erro)
+        log_info("ERRO AO SALVAR RESULTADO AUTO TESTE:", erro)
 
 
 def run_site_checks_interno(timeout=5):
@@ -9946,10 +9957,10 @@ def loop_worker_auto_teste():
                 configuracao = obter_configuracao_empresa(force=True)
                 if auto_teste_deve_executar(configuracao):
                     resultado = executar_auto_teste_site(configuracao, enviar_telegram=True)
-                    print(f"AUTO TESTE: {resultado['status']}")
+                    log_info(f"AUTO TESTE: {resultado['status']}")
             except Exception as erro:
                 salvar_resultado_auto_teste_seguro("erro", f"Erro no auto teste: {erro}")
-                print("ERRO WORKER AUTO TESTE:", erro)
+                log_info("ERRO WORKER AUTO TESTE:", erro)
             finally:
                 auto_teste_lock.release()
 
@@ -10302,7 +10313,7 @@ def obter_resultado_clima_api(permitir_rede=True):
         return resultado
 
     except Exception as e:
-        print("ERRO CLIMA:", e)
+        log_info("ERRO CLIMA:", e)
         if cache:
             return dict(cache)
         return fallback
@@ -11582,7 +11593,7 @@ def registrar_auditoria_assincrona(acao, entidade, entidade_id=None, placa=None,
                 usuario=usuario_info,
             )
         except Exception as erro:
-            print("AVISO AUDITORIA ASSINCRONA:", erro)
+            log_info("AVISO AUDITORIA ASSINCRONA:", erro)
 
     Thread(target=executar, daemon=True).start()
 
@@ -12226,62 +12237,7 @@ def servir_favicon_site():
 @app.route("/site.webmanifest")
 def servir_manifesto_site():
     produto = carregar_contexto_produto()
-    nome_app = produto.get("site_title") or produto.get("brand_name") or "Gestao Estetica"
-    nome_curto = (produto.get("brand_name") or "Gestao")[:24]
-    cor_fundo = produto.get("brand_background_color") or "#0b0b0b"
-    cor_tema = produto.get("brand_primary_color") or "#facc15"
-    icone_192 = "/static/icon-192.jpg"
-    icone_512 = "/static/icon-512.jpg"
-    manifest = {
-        "id": "/?source=pwa",
-        "name": nome_app,
-        "short_name": nome_curto,
-        "description": "Aplicativo operacional para gestao de estetica automotiva, atendimentos, fotos, clientes, financeiro e licencas.",
-        "start_url": "/?source=pwa",
-        "scope": "/",
-        "display": "standalone",
-        "display_override": ["standalone", "minimal-ui", "browser"],
-        "orientation": "portrait",
-        "background_color": cor_fundo,
-        "theme_color": cor_tema,
-        "categories": ["business", "productivity", "utilities"],
-        "lang": "pt-BR",
-        "dir": "ltr",
-        "prefer_related_applications": False,
-        "capture_links": "existing-client-navigate",
-        "launch_handler": {"client_mode": "navigate-existing"},
-        "permissions": ["camera", "microphone"],
-        "shortcuts": [
-            {
-                "name": "Painel operacional",
-                "short_name": "Painel",
-                "description": "Abrir atendimentos em andamento.",
-                "url": "/painel?source=pwa_shortcut",
-                "icons": [{"src": icone_192, "sizes": "192x192", "type": "image/jpeg", "purpose": "any maskable"}],
-            },
-            {
-                "name": "Novo atendimento",
-                "short_name": "Atender",
-                "description": "Abrir a tela inicial para iniciar atendimento.",
-                "url": "/?source=pwa_shortcut",
-                "icons": [{"src": icone_192, "sizes": "192x192", "type": "image/jpeg", "purpose": "any maskable"}],
-            },
-        ],
-        "icons": [
-            {
-                "src": icone_192,
-                "sizes": "192x192",
-                "type": "image/jpeg",
-                "purpose": "any maskable",
-            },
-            {
-                "src": icone_512,
-                "sizes": "512x512",
-                "type": "image/jpeg",
-                "purpose": "any maskable",
-            },
-        ],
-    }
+    manifest = montar_manifesto_pwa(produto)
     response = app.response_class(
         json.dumps(manifest, ensure_ascii=False),
         mimetype="application/manifest+json",
@@ -12305,21 +12261,7 @@ def servir_service_worker_raiz():
 
 @app.route("/api/pwa/status")
 def api_pwa_status():
-    seguro = bool(request.is_secure or request.host.startswith(("localhost", "127.0.0.1")))
-    return jsonify({
-        "ok": seguro,
-        "secure_context_required": True,
-        "secure_request": bool(request.is_secure),
-        "host": request.host,
-        "manifest_url": "/site.webmanifest",
-        "service_worker_url": "/sw.js",
-        "service_worker_scope": "/",
-        "mensagem": (
-            "PWA pronto para instalacao."
-            if seguro else
-            "Para instalar como app no Chrome Android, acesse por HTTPS com certificado valido. Em HTTP o Chrome permite apenas criar atalho."
-        ),
-    })
+    return jsonify(montar_status_pwa(request_is_secure=request.is_secure, host=request.host))
 
 
 def listar_fotos_servicos(ids_servicos, conn=None, cursor=None):
@@ -13835,8 +13777,8 @@ def executar_sincronizacao_cliente(sync_id, empresa_id=None):
         if "sheety.co" in url_base:
             df = ler_planilha_sheety(url_base, intervalo_minutos=sync["intervalo_minutos"])
 
-            print("ðŸ”¥ DADOS SHEETY:")
-            print(df.tail(5))
+            log_info("ðŸ”¥ DADOS SHEETY:")
+            log_info(df.tail(5))
 
             hash_atual = hashlib.md5(
                 df.to_csv(index=False).encode("utf-8")
@@ -13851,9 +13793,9 @@ def executar_sincronizacao_cliente(sync_id, empresa_id=None):
             resposta = requests.get(url_base, timeout=20)
             resposta.raise_for_status()
 
-            print("URL FINAL:", url_base)
-            print("STATUS:", resposta.status_code)
-            print("CONTENT TYPE:", resposta.headers.get("content-type"))
+            log_info("URL FINAL:", url_base)
+            log_info("STATUS:", resposta.status_code)
+            log_info("CONTENT TYPE:", resposta.headers.get("content-type"))
 
             hash_atual = hashlib.md5(resposta.content).hexdigest()
 
@@ -13871,8 +13813,8 @@ def executar_sincronizacao_cliente(sync_id, empresa_id=None):
             df = df.fillna("")
             df.columns = [str(col).strip().lower() for col in df.columns]
 
-            print("ðŸ”¥ DADOS PLANILHA:")
-            print(df.tail(5))
+            log_info("ðŸ”¥ DADOS PLANILHA:")
+            log_info(df.tail(5))
 
             url_usada = url_base
 
@@ -14033,7 +13975,7 @@ def listar_registros_clientes(busca="", conn=None):
         conn_local = conectar_somente_leitura()
         return executar_listagem(conn_local)
     except Exception as e:
-        print("AVISO CLIENTES LISTA:", e)
+        log_info("AVISO CLIENTES LISTA:", e)
         try:
             garantir_schema_sqlite_local_minima(force=True)
             conn_local = conectar_banco_local_forcado()
@@ -14526,7 +14468,7 @@ def loop_worker_sincronizacao():
         try:
             sincronizar_fontes_pendentes()
         except Exception as e:
-            print("ERRO WORKER SYNC:", e)
+            log_info("ERRO WORKER SYNC:", e)
 
         time.sleep(120)
 
@@ -14549,9 +14491,9 @@ def loop_worker_sincronizacao_bancos():
         try:
             resultado = sincronizar_bancos_incremental()
             if resultado.get("conectado"):
-                print("SYNC BANCOS:", resultado.get("mensagem"))
+                log_info("SYNC BANCOS:", resultado.get("mensagem"))
         except Exception as e:
-            print("ERRO WORKER SYNC BANCOS:", e)
+            log_info("ERRO WORKER SYNC BANCOS:", e)
 
         time.sleep(180)
 
@@ -14777,7 +14719,7 @@ def registrar_tempo_resposta(response):
                 METRICAS_TEMPO_RESPOSTA[caminho] = atual
                 avaliar_alerta_estabilidade_resposta(caminho, atual)
     except Exception as erro:
-        print("ERRO METRICA RESPOSTA:", erro)
+        log_info("ERRO METRICA RESPOSTA:", erro)
     return response
 
 
@@ -15627,7 +15569,7 @@ def api_agenda_retorno():
         AGENDA_RETORNO_CACHE["resultado"] = dict(dados)
         return jsonify(dados)
     except Exception as e:
-        print("ERRO AGENDA RETORNOS:", e)
+        log_info("ERRO AGENDA RETORNOS:", e)
         return jsonify({
             "erro": "nao foi possivel carregar a agenda agora",
             "detalhe": str(e),
@@ -15713,7 +15655,7 @@ def obter_resumo_retornos_hud(usuario_cache, agora_cache_ts, referencia=None):
             ),
         }
     except Exception as erro:
-        print("ERRO HUD RETORNOS:", erro)
+        log_info("ERRO HUD RETORNOS:", erro)
 
     RETORNOS_HUD_CACHE["testado_em"] = agora_cache_ts
     RETORNOS_HUD_CACHE["usuario"] = usuario_cache
@@ -16300,10 +16242,10 @@ def criar_admin():
     conn.close()
 
     if senha_temporaria:
-        print(f"ADMIN criado/recuperado com senha temporaria segura: admin / {senha_temporaria}")
-        print("ATENCAO: troque essa senha no primeiro login.")
+        log_info(f"ADMIN criado/recuperado com senha temporaria segura: admin / {senha_temporaria}")
+        log_info("ATENCAO: troque essa senha no primeiro login.")
     elif aviso_troca:
-        print("ATENCAO: senha antiga/padrao do administrador detectada. Troca obrigatoria ativada.")
+        log_info("ATENCAO: senha antiga/padrao do administrador detectada. Troca obrigatoria ativada.")
 
 def carregar_usuarios_configuracao():
     def carregar(conn):
@@ -16466,7 +16408,7 @@ def login():
                     conn.close()
             except Exception:
                 pass
-            print("ERRO LOGIN:", erro)
+            log_info("ERRO LOGIN:", erro)
             registrar_evento_telemetria_app(
                 "login_falha_interna",
                 categoria="auth",
@@ -16991,9 +16933,9 @@ def registrar_ultimo_erro_producao(erro, descricao=""):
     try:
         salvar_registro_erro_producao(registro)
     except Exception as erro_log:
-        print("ERRO AO GRAVAR CENTRAL DE ERROS:", erro_log)
-    print("ERRO PRODUCAO:", descricao or ULTIMO_ERRO_PRODUCAO["endpoint"], erro)
-    print(registro.get("stack") or "".join(traceback.format_exception(type(erro), erro, erro.__traceback__)))
+        log_info("ERRO AO GRAVAR CENTRAL DE ERROS:", erro_log)
+    log_info("ERRO PRODUCAO:", descricao or ULTIMO_ERRO_PRODUCAO["endpoint"], erro)
+    log_info(registro.get("stack") or "".join(traceback.format_exception(type(erro), erro, erro.__traceback__)))
     if descricao == "erro_global":
         texto = montar_alerta_erro_500_telegram(registro)
         chave = f"erro500:{registro.get('path')}:{registro.get('tipo')}:{str(registro.get('mensagem') or '')[:80]}"
@@ -17011,7 +16953,7 @@ def registrar_falha_banco_online_request(erro, descricao="banco_online"):
     try:
         registrar_ultimo_erro_producao(erro, descricao=descricao)
     except Exception as erro_log:
-        print("ERRO AO REGISTRAR FALHA BANCO ONLINE:", erro_log)
+        log_info("ERRO AO REGISTRAR FALHA BANCO ONLINE:", erro_log)
 
 
 def enviar_alerta_estabilidade_assincrono(texto, chave, intervalo=None):
@@ -17028,7 +16970,7 @@ def enviar_alerta_estabilidade_assincrono(texto, chave, intervalo=None):
         try:
             enviar_alerta_telegram_auto_suporte(texto)
         except Exception as erro:
-            print("ERRO ALERTA ESTABILIDADE TELEGRAM:", erro)
+            log_info("ERRO ALERTA ESTABILIDADE TELEGRAM:", erro)
 
     Thread(target=executar, daemon=True).start()
     return True
@@ -17894,7 +17836,7 @@ def registrar_incidente_auto_suporte(titulo, mensagem, detalhes=None, severidade
             detalhes=detalhes,
         )
     except Exception as erro:
-        print("ERRO AUDITORIA AUTO SUPORTE:", erro)
+        log_info("ERRO AUDITORIA AUTO SUPORTE:", erro)
 
     try:
         salvar_notificacao(
@@ -17904,7 +17846,7 @@ def registrar_incidente_auto_suporte(titulo, mensagem, detalhes=None, severidade
             referencia="incidente",
         )
     except Exception as erro:
-        print("ERRO NOTIFICACAO AUTO SUPORTE:", erro)
+        log_info("ERRO NOTIFICACAO AUTO SUPORTE:", erro)
 
     registrar_evento_telemetria_app(
         "auto_suporte_incidente",
@@ -20064,27 +20006,27 @@ def configuracoes(secao="meu-acesso"):
         try:
             usuarios = carregar_usuarios_configuracao()
         except Exception as erro:
-            print("ERRO CONFIG USUARIOS:", erro)
+            log_info("ERRO CONFIG USUARIOS:", erro)
             usuarios = []
 
     if pode_gerenciar_banco_online and secao == "banco":
         try:
             banco_status = obter_status_banco_online()
         except Exception as erro:
-            print("ERRO CONFIG BANCO STATUS:", erro)
+            log_info("ERRO CONFIG BANCO STATUS:", erro)
             banco_status = {}
 
         try:
             banco_config = obter_configuracao_banco_form(banco_status)
         except Exception as erro:
-            print("ERRO CONFIG BANCO FORM:", erro)
+            log_info("ERRO CONFIG BANCO FORM:", erro)
             banco_config = {}
 
     if pode_gerenciar_config_sistema and secao in {"sistema", "desenvolvedor", "auto-teste"}:
         try:
             configuracao_empresa = obter_configuracao_empresa()
         except Exception as erro:
-            print("ERRO CONFIG EMPRESA:", erro)
+            log_info("ERRO CONFIG EMPRESA:", erro)
             configuracao_empresa = empresa_snapshot_padrao()
 
     paginas_desabilitadas_config = normalizar_paginas_menu_desabilitadas(
@@ -20099,7 +20041,7 @@ def configuracoes(secao="meu-acesso"):
         try:
             banco_online_tabelas = listar_tabelas_banco_online(banco_status)
         except Exception as erro:
-            print("ERRO CONFIG TABELAS BANCO ONLINE:", erro)
+            log_info("ERRO CONFIG TABELAS BANCO ONLINE:", erro)
             banco_online_tabelas = {
                 "disponivel": False,
                 "mensagem": f"Nao foi possivel carregar as tabelas do banco online: {erro}",
@@ -20113,26 +20055,26 @@ def configuracoes(secao="meu-acesso"):
         try:
             backup_config = obter_configuracao_backup()
         except Exception as erro:
-            print("ERRO CONFIG BACKUP:", erro)
+            log_info("ERRO CONFIG BACKUP:", erro)
             backup_config = configuracao_backup_padrao()
 
         if request.args.get("detalhar_backup") == "1":
             try:
                 backup_status = obter_status_backup_banco()
             except Exception as erro:
-                print("ERRO CONFIG BACKUP STATUS:", erro)
+                log_info("ERRO CONFIG BACKUP STATUS:", erro)
                 backup_status = status_backup_banco_padrao()
 
             try:
                 arquivos_status = obter_status_arquivos()
             except Exception as erro:
-                print("ERRO CONFIG ARQUIVOS:", erro)
+                log_info("ERRO CONFIG ARQUIVOS:", erro)
                 arquivos_status = status_arquivos_padrao()
 
             try:
                 backups_disponiveis = listar_arquivos_backup_banco()
             except Exception as erro:
-                print("ERRO CONFIG LISTA BACKUPS:", erro)
+                log_info("ERRO CONFIG LISTA BACKUPS:", erro)
                 backups_disponiveis = []
         else:
             backup_status = status_backup_banco_padrao()
@@ -20142,7 +20084,7 @@ def configuracoes(secao="meu-acesso"):
         try:
             pastas_sync_sugeridas = listar_pastas_sincronizadas_sugeridas()
         except Exception as erro:
-            print("ERRO CONFIG PASTAS SYNC:", erro)
+            log_info("ERRO CONFIG PASTAS SYNC:", erro)
             pastas_sync_sugeridas = []
 
     if pode_gerenciar_base and secao == "desenvolvedor":
@@ -20474,7 +20416,7 @@ def configuracoes_site():
     try:
         configuracao_empresa = obter_configuracao_empresa()
     except Exception as erro:
-        print("ERRO CONFIG SITE:", erro)
+        log_info("ERRO CONFIG SITE:", erro)
         configuracao_empresa = empresa_snapshot_padrao()
 
     return render_template(
@@ -22005,7 +21947,7 @@ def cadastrar():
         definir_feedback_index("sucesso", mensagem)
         placa = resultado["placa"]
     except Exception as e:
-        print("ERRO CADASTRO:", e)
+        log_info("ERRO CADASTRO:", e)
         definir_feedback_index("erro", f"Erro ao salvar a placa {placa}: {e}")
 
     return redirect(f"/?placa={placa}")
@@ -22962,7 +22904,7 @@ def api_operacional_voz():
         VOZ_CACHE["resultado"] = dict(resultado)
         return jsonify(resultado)
     except Exception as e:
-        print("ERRO OPERACIONAL VOZ:", e)
+        log_info("ERRO OPERACIONAL VOZ:", e)
         resultado = {
             "status": "ok",
             "gerado_em": agora_iso(),

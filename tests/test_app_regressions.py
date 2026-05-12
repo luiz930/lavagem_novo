@@ -423,7 +423,6 @@ class AppRegressionTests(unittest.TestCase):
             "templates/checklist_finalizacao.html",
             "templates/editar_atendimento.html",
             "templates/index.html",
-            "templates/index2.html",
             "templates/painel.html",
             "templates/components/service_card.html",
         ]

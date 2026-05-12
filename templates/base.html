@@ -711,7 +711,7 @@ async function verificarSincroniaBancoBase() {
             }
         }
     } catch (e) {
-        console.log("Erro ao verificar sincronia do banco:", e);
+        return;
     } finally {
         baseSyncExecutando = false;
     }

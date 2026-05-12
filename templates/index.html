@@ -19,7 +19,7 @@
 <script>
 if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/static/sw.js")
-    .then(() => console.log("SW registrado"));
+    .catch(() => {});
 }
 </script>
 
@@ -1899,7 +1899,7 @@ async function verificarSync() {
         }
 
     } catch (e) {
-        console.log("Erro ao verificar sync");
+        return;
     }
 }
 
@@ -1974,7 +1974,7 @@ function salvarAgendaRetornoDispensada() {
             JSON.stringify(agendaRetornoDispensada)
         );
     } catch (e) {
-        console.log("Erro ao salvar agenda dispensada");
+        return;
     }
 }
 
@@ -2285,7 +2285,7 @@ async function carregarNotificacoes(force = false) {
             badge.innerText = naoLidas;
         }
     } catch (e) {
-        console.log("Erro notificacoes");
+        return;
     }
 }
 
@@ -2309,7 +2309,7 @@ async function carregarAgendaRetorno(force = false) {
             renderizarAgendaRetorno();
         }
     } catch (e) {
-        console.log("Erro agenda de retornos");
+        return;
     }
 }
 
@@ -2493,7 +2493,7 @@ function salvarEstadoHudExpandido() {
     try {
         localStorage.setItem(HUD_STORAGE_KEY, hudExpandido ? "1" : "0");
     } catch (e) {
-        console.log("Erro HUD storage");
+        return;
     }
 }
 
@@ -2745,7 +2745,7 @@ async function atualizarHomeSnapshot() {
         aplicarEstadoClima(data.clima);
         aplicarEstadoSincronizacao(data.sync);
     } catch (e) {
-        console.log("Erro snapshot home");
+        return;
     } finally {
         hudExecutando = false;
     }

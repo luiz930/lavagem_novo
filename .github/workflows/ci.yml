@@ -28,5 +28,13 @@ jobs:
       - name: Compile app
         run: python -m py_compile app.py
 
+      - name: Check JavaScript syntax
+        run: |
+          node --check static/auto_suporte.js
+          node --check static/operacional_voz.js
+          node --check static/photo_upload.js
+          node --check static/pwa_install.js
+          node --check static/sw.js
+
       - name: Run tests
         run: python -m unittest discover -s tests -v
