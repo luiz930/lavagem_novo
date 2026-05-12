@@ -81,6 +81,11 @@ from domains.empresas import (
     salvar_licenca as salvar_licenca_domain,
     validar_licenca_assinada as validar_licenca_assinada_domain,
 )
+from domains.financeiro import (
+    montar_chave_cache_relatorios,
+    montar_periodo_descricao,
+    montar_resumo_operacional_financeiro,
+)
 from domains.historico import (
     carregar_recursos_edicao_historico as carregar_recursos_edicao_historico_domain,
     excluir_dependencias_historico_servico as excluir_dependencias_historico_servico_domain,
@@ -4021,6 +4026,7 @@ RELATORIOS_CONTEXT_CACHE = {
     "resultado": None,
 }
 RELATORIOS_CONTEXT_CACHE_TTL = 45
+CLIENTES_LISTA_INICIAL_LIMITE = 80
 AUDITORIA_CONTEXT_CACHE = {
     "testado_em": 0.0,
     "chave": "",
@@ -8563,8 +8569,7 @@ def carregar_contexto_relatorios(periodo_atual=None, detalhado=False):
     periodo_atual = normalizar_periodo_financeiro(periodo_atual)
     detalhado = bool(detalhado)
     empresa_id = empresa_atual_id()
-    usuario_cache = str(session.get("usuario") or "")
-    chave_cache = f"{usuario_cache}|{empresa_id}|{periodo_atual}|det:{int(detalhado)}"
+    chave_cache = montar_chave_cache_relatorios(empresa_id, periodo_atual, detalhado)
     contexto_cache = obter_cache_consulta(
         RELATORIOS_CONTEXT_CACHE,
         chave_cache,
@@ -8621,14 +8626,21 @@ def carregar_contexto_relatorios(periodo_atual=None, detalhado=False):
             "notas_raw": notas,
         }
 
-    contexto_lido = executar_leitura_resiliente(
-        carregar_relatorios_raw,
-        descricao="RELATORIOS",
-        padrao={"servicos_raw": [], "orcamentos_raw": [], "notas_raw": []},
-    ) or {"servicos_raw": [], "orcamentos_raw": [], "notas_raw": []}
+    contexto_lido = medir_consulta_sql(
+        "/financeiro",
+        "leitura_contexto_financeiro",
+        lambda: executar_leitura_resiliente(
+            carregar_relatorios_raw,
+            descricao="RELATORIOS",
+            padrao={"servicos_raw": [], "orcamentos_raw": [], "notas_raw": []},
+        ) or {"servicos_raw": [], "orcamentos_raw": [], "notas_raw": []},
+        origem="banco",
+        detalhes="servicos + documentos",
+    )
     servicos_raw = contexto_lido.get("servicos_raw", []) or []
     orcamentos_raw = contexto_lido.get("orcamentos_raw", []) or []
     notas_raw = contexto_lido.get("notas_raw", []) or []
+    inicio_agregacao = time.perf_counter()
 
     periodo_label = MAPA_PERIODOS_FINANCEIRO[periodo_atual]
     finalizados = []
@@ -8815,28 +8827,17 @@ def carregar_contexto_relatorios(periodo_atual=None, detalhado=False):
         if normalizar_perfil_cliente_atendimento(item.get("perfil_cliente_atendimento")) == "RETORNO"
     ]
 
-    resumo_operacional = {
-        "lavagem_media_exibicao": formatar_duracao_segundos(
-            sum(tempos_lavagem) / len(tempos_lavagem) if tempos_lavagem else 0
-        ),
-        "finalizacao_media_exibicao": formatar_duracao_segundos(
-            sum(tempos_finalizacao) / len(tempos_finalizacao) if tempos_finalizacao else 0
-        ),
-        "ciclo_medio_exibicao": formatar_duracao_segundos(
-            sum(tempos_ciclo) / len(tempos_ciclo) if tempos_ciclo else 0
-        ),
-        "entregas_no_prazo": entregas_no_prazo,
-        "entregas_com_previsao": entregas_com_previsao,
-        "entregas_fora_prazo": entregas_fora_prazo,
-        "taxa_no_prazo": formatar_taxa_percentual(entregas_no_prazo, entregas_com_previsao),
-        "abertos_total": resumo_fluxo_aberto["total"],
-        "abertos_lavagem": resumo_fluxo_aberto["lavagem"],
-        "abertos_finalizacao": resumo_fluxo_aberto["finalizacao"],
-        "abertos_novos": resumo_fluxo_aberto["novos"],
-        "abertos_retornos": resumo_fluxo_aberto["retornos"],
-        "abertos_atrasados": resumo_fluxo_aberto["atrasados"],
-        "proxima_entrega_exibicao": resumo_fluxo_aberto["proxima_entrega_exibicao"],
-    }
+    resumo_operacional = montar_resumo_operacional_financeiro(
+        tempos_lavagem,
+        tempos_finalizacao,
+        tempos_ciclo,
+        entregas_no_prazo,
+        entregas_com_previsao,
+        entregas_fora_prazo,
+        resumo_fluxo_aberto,
+        formatar_duracao_segundos,
+        formatar_taxa_percentual,
+    )
     resumo_comercial = {
         "orcamentos_total": len(orcamentos_periodo),
         "orcamentos_valor_exibicao": formatar_valor_monetario(orcamentos_valor_total),
@@ -8851,12 +8852,7 @@ def carregar_contexto_relatorios(periodo_atual=None, detalhado=False):
         "retornos_reagendados": resumo_retornos["reagendados_vencidos"],
         "retornos_contatados_hoje": resumo_retornos["contatados_hoje"],
     }
-    periodo_descricao = {
-        "hoje": "Resultados fechados hoje com leitura financeira, operacional e comercial.",
-        "7dias": "Panorama consolidado dos ultimos 7 dias com documentos e produtividade.",
-        "30dias": "Panorama consolidado dos ultimos 30 dias com servicos, equipe e documentos.",
-        "mes": "Fechamentos acumulados no mes atual com visao completa da operacao.",
-    }[periodo_atual]
+    periodo_descricao = montar_periodo_descricao(periodo_atual)
 
     contexto = {
         "periodo_atual": periodo_atual,
@@ -8892,6 +8888,13 @@ def carregar_contexto_relatorios(periodo_atual=None, detalhado=False):
         "notas_periodo_raw": notas_periodo,
         "relatorio_detalhado": detalhado,
     }
+    registrar_metrica_consulta_sql(
+        "/financeiro",
+        "agregacao_contexto_financeiro",
+        int((time.perf_counter() - inicio_agregacao) * 1000),
+        origem="memoria",
+        detalhes=f"servicos={len(servicos_raw)}",
+    )
     salvar_cache_consulta(RELATORIOS_CONTEXT_CACHE, chave_cache, contexto)
     return contexto
 
@@ -13971,10 +13974,10 @@ def _formatar_registros_clientes(registros_db):
     return registros
 
 
-def listar_registros_clientes(busca="", conn=None):
+def listar_registros_clientes(busca="", conn=None, limite=None):
     def executar_listagem(conn_atual):
         c = conn_atual.cursor()
-        registros_db = consultar_registros_clientes_domain(c, empresa_atual_id(), busca=busca)
+        registros_db = consultar_registros_clientes_domain(c, empresa_atual_id(), busca=busca, limite=limite)
         return _formatar_registros_clientes(registros_db)
 
     if conn is not None:
@@ -14526,8 +14529,9 @@ def loop_importacao():
 def carregar_contexto_clientes(busca="", limpar=False, detalhar_sincronizacoes=False):
     busca_aplicada = "" if limpar else busca
     empresa_id = empresa_atual_id()
+    limite_inicial = None if busca_aplicada else CLIENTES_LISTA_INICIAL_LIMITE
     usuario_cache = f"{session.get('usuario') or ''}|{empresa_id}"
-    chave_cache = f"{usuario_cache}|{empresa_id}|{busca_aplicada}|sync:{int(bool(detalhar_sincronizacoes))}"
+    chave_cache = f"{usuario_cache}|{empresa_id}|{busca_aplicada}|sync:{int(bool(detalhar_sincronizacoes))}|lim:{limite_inicial or 'todos'}"
     contexto_cache = obter_cache_consulta(
         CLIENTES_CONTEXT_CACHE,
         chave_cache,
@@ -14545,7 +14549,7 @@ def carregar_contexto_clientes(busca="", limpar=False, detalhar_sincronizacoes=F
             "clientes": medir_consulta_sql(
                 "/clientes",
                 "lista_base_clientes",
-                lambda: listar_registros_clientes(busca_aplicada, conn=conn),
+                lambda: listar_registros_clientes(busca_aplicada, conn=conn, limite=limite_inicial),
                 detalhes="veiculos + clientes",
             ),
             "sincronizacoes_raw": medir_consulta_sql(
@@ -21360,11 +21364,21 @@ def exportar_relatorios_csv():
 def financeiro():
     if not session.get("usuario"):
         return redirect("/login")
-    contexto = carregar_contexto_relatorios(
-        request.args.get("periodo"),
-        detalhado=bool(request.args.get("detalhar") or request.args.get("detalhes")),
+    contexto = medir_consulta_sql(
+        "/financeiro",
+        "montagem_contexto_financeiro",
+        lambda: carregar_contexto_relatorios(
+            request.args.get("periodo"),
+            detalhado=bool(request.args.get("detalhar") or request.args.get("detalhes")),
+        ),
+        origem="memoria",
     )
-    return render_template("financeiro.html", **contexto)
+    return medir_consulta_sql(
+        "/financeiro",
+        "render_template_financeiro",
+        lambda: render_template("financeiro.html", **contexto),
+        origem="template",
+    )
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -21453,6 +21467,8 @@ def renderizar_pagina_clientes(busca="", limpar=False):
         campos_sync=CAMPOS_SINCRONIZACAO_CLIENTES,
         intervalos_sync=INTERVALOS_SINCRONIZACAO,
         busca=busca,
+        limite_inicial_clientes=CLIENTES_LISTA_INICIAL_LIMITE,
+        clientes_limitados=(not busca and len(clientes_lista) >= CLIENTES_LISTA_INICIAL_LIMITE),
     )
 
 @app.route("/clientes/sincronizacao/preview", methods=["POST"])

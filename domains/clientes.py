@@ -3,7 +3,7 @@ from __future__ import annotations
 from .tenant import normalize_empresa_id, row_to_dict, rows_to_dicts
 
 
-def consultar_registros_clientes(cursor, empresa_id, busca=""):
+def consultar_registros_clientes(cursor, empresa_id, busca="", limite=None):
     empresa_id = normalize_empresa_id(empresa_id)
     params = [empresa_id, empresa_id]
     sql = """
@@ -37,6 +37,9 @@ def consultar_registros_clientes(cursor, empresa_id, busca=""):
         params.extend([termo, termo, termo, termo])
 
     sql += " ORDER BY veiculos.id DESC"
+    if limite:
+        sql += " LIMIT ?"
+        params.append(max(1, int(limite)))
     cursor.execute(sql, tuple(params))
     return rows_to_dicts(cursor)
 

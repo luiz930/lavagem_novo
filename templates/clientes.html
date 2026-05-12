@@ -205,6 +205,11 @@
 
 <div class="top-spacing">
     <h2 class="section-title">Clientes</h2>
+    {% if clientes_limitados %}
+    <div class="page-card page-card--soft">
+        <p class="muted-text">Mostrando os {{ limite_inicial_clientes }} clientes mais recentes para abrir a tela mais rapido. Use a busca para localizar registros antigos.</p>
+    </div>
+    {% endif %}
 
     <div class="list-grid">
         {% for c in clientes %}

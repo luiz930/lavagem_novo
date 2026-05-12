@@ -1763,6 +1763,24 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(resposta, "ok")
         self.assertTrue(contexto_mock.call_args.kwargs["detalhado"])
 
+    def test_financeiro_reusa_cache_por_empresa_periodo_e_detalhe(self):
+        app_module.RELATORIOS_CONTEXT_CACHE["testado_em"] = 0.0
+        app_module.RELATORIOS_CONTEXT_CACHE["chave"] = ""
+        app_module.RELATORIOS_CONTEXT_CACHE["resultado"] = None
+
+        with app_module.app.test_request_context("/financeiro?periodo=mes", method="GET"):
+            session["usuario"] = "admin"
+            session["empresa_id"] = 1
+            with patch.object(app_module, "executar_leitura_resiliente", return_value={"servicos_raw": [], "orcamentos_raw": [], "notas_raw": []}) as leitura_mock, \
+                 patch.object(app_module, "agora", return_value=app_module.datetime(2026, 5, 4, 10, 0)):
+                primeiro = app_module.carregar_contexto_relatorios("mes")
+                segundo = app_module.carregar_contexto_relatorios("mes")
+
+        self.assertEqual(primeiro["quantidade_periodo"], 0)
+        self.assertEqual(segundo["quantidade_periodo"], 0)
+        leitura_mock.assert_called_once()
+        self.assertEqual(app_module.RELATORIOS_CONTEXT_CACHE["chave"], "1|mes|det:0")
+
     def test_auto_suporte_sugere_pacote_codex_para_erro_500(self):
         sugestoes = app_module.montar_sugestoes_auto_suporte(
             {"itens": []},
