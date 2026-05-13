@@ -696,6 +696,17 @@ class AppRegressionTests(unittest.TestCase):
         self.assertIn("setInterval(() => carregarNotificacoes(true), NOTIFICACOES_REFRESH_MS)", conteudo)
         self.assertIn("setInterval(() => carregarAgendaRetorno(true), AGENDA_REFRESH_MS)", conteudo)
 
+    def test_index_hud_banco_inicia_com_status_de_carregamento(self):
+        with open(os.path.join(app_module.app.root_path, "templates", "index.html"), encoding="utf-8") as arquivo:
+            conteudo = arquivo.read()
+
+        self.assertIn("banco_online_carregando: true", conteudo)
+        self.assertIn('banco_online_resumo: "Conectando ao banco..."', conteudo)
+        self.assertIn('banco_online_mensagem: "Carregando status de conexao. Aguarde."', conteudo)
+        self.assertIn(".hud-line--status-loading", conteudo)
+        self.assertIn("statusLoading: statusBanco.carregando", conteudo)
+        self.assertNotIn('banco_online_resumo: "Banco online indisponivel"', conteudo)
+
     def test_changelog_monta_links_github_automaticos(self):
         commit_hash = "1234567890abcdef1234567890abcdef12345678"
 

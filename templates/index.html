@@ -717,6 +717,13 @@ input[type="file"] {
     box-shadow: inset 0 0 0 1px rgba(22, 101, 52, 0.12);
 }
 
+.hud-line--status-loading {
+    color: #fde68a;
+    background: linear-gradient(90deg, rgba(120, 113, 108, 0.32), rgba(17, 24, 39, 0.94));
+    border: 1px solid rgba(251, 191, 36, 0.34);
+    box-shadow: inset 0 0 0 1px rgba(120, 113, 108, 0.12);
+}
+
 .hud-line--status-off {
     color: #fecaca;
     background: linear-gradient(90deg, rgba(127, 29, 29, 0.34), rgba(17, 24, 39, 0.94));
@@ -2393,10 +2400,11 @@ let hudData = {
     retornos_reagendados_vencidos: 0,
     retornos_contatados_hoje: 0,
     retornos_mensagem: "Painel retornos em dia",
+    banco_online_carregando: true,
     banco_online_ativo: false,
-    banco_online_resumo: "Banco online indisponivel",
-    banco_online_mensagem: "Banco online indisponivel",
-    banco_online_backend_label: "SQLite local",
+    banco_online_resumo: "Conectando ao banco...",
+    banco_online_mensagem: "Carregando status de conexao. Aguarde.",
+    banco_online_backend_label: "",
     sync_token: "",
     usuario_nome: "",
     usuario_iniciais: "",
@@ -2640,13 +2648,24 @@ function aplicarEstadoSincronizacao(data) {
 }
 
 function montarStatusBancoHud() {
+    const carregando = Boolean(hudData.banco_online_carregando);
     const ativo = Boolean(hudData.banco_online_ativo);
     const resumo = String(hudData.banco_online_resumo || "").trim();
     const mensagem = String(hudData.banco_online_mensagem || "").trim();
     const backend = String(hudData.banco_online_backend_label || "").trim();
 
+    if (carregando) {
+        return {
+            ativo: false,
+            carregando: true,
+            resumo: resumo || "Conectando ao banco...",
+            detalhe: mensagem || "Carregando status de conexao. Aguarde.",
+        };
+    }
+
     return {
         ativo,
+        carregando: false,
         resumo: resumo || (ativo ? "Banco online ativo" : "Banco online indisponivel"),
         detalhe: ativo
             ? `Banco online ativo e gravando em tempo real${backend ? ` (${backend})` : ""}`
@@ -2666,6 +2685,7 @@ function montarLinhasHud(agora) {
                 texto: `${statusBanco.resumo}`,
                 status: true,
                 statusOk: statusBanco.ativo,
+                statusLoading: statusBanco.carregando,
             } : null,
             (hudItemAtivo("operacional") || hudItemAtivo("financeiro")) ? {
                 texto: [
@@ -2685,6 +2705,7 @@ function montarLinhasHud(agora) {
             texto: statusBanco.detalhe,
             status: true,
             statusOk: statusBanco.ativo,
+            statusLoading: statusBanco.carregando,
         } : null,
         hudItemAtivo("clima") ? { texto: montarTextoClimaHud(), multilinha: true } : null,
         hudItemAtivo("financeiro") ? { texto: `Hoje: R$ ${hudData.total}` } : null,
@@ -2794,8 +2815,10 @@ function atualizarRelogio() {
                     const classeCompacta = item.compacta ? " hud-line--compact" : "";
                     const classeMultiline = item.multilinha ? " hud-line--multiline" : "";
                     const classeStatus = item.status ? " hud-line--status" : "";
-                    const classeStatusOk = item.status ? (item.statusOk ? " hud-line--status-ok" : " hud-line--status-off") : "";
-                    return `<span class="hud-line${classeCompacta}${classeMultiline}${classeStatus}${classeStatusOk}">${escaparHudHtml(item.texto)}</span>`;
+                    const classeStatusEstado = item.status
+                        ? (item.statusLoading ? " hud-line--status-loading" : (item.statusOk ? " hud-line--status-ok" : " hud-line--status-off"))
+                        : "";
+                    return `<span class="hud-line${classeCompacta}${classeMultiline}${classeStatus}${classeStatusEstado}">${escaparHudHtml(item.texto)}</span>`;
                 })
                 .join("") +
             `</div>`;
