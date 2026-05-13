@@ -7645,6 +7645,27 @@ def definir_feedback_nota_fiscal(tipo, mensagem):
 def definir_feedback_retornos(tipo, mensagem):
     session["retornos_feedback"] = {"tipo": tipo, "mensagem": mensagem}
 
+def montar_mensagem_publica_cadastro_veiculo(resultado):
+    placa = normalizar_texto_campo((resultado or {}).get("placa")).upper()
+    return f"Cadastro da placa {placa or '-'} salvo com sucesso."
+
+def registrar_alertas_espelho_planilha_cadastro(resultado):
+    espelho = (resultado or {}).get("espelho_planilha") or {}
+    falhas = espelho.get("falhas") or []
+    if not falhas:
+        return
+
+    placa = normalizar_texto_campo((resultado or {}).get("placa")).upper() or "-"
+    primeira_falha = falhas[0] or {}
+    log_info(
+        "AVISO ESPELHO PLANILHA CADASTRO:",
+        {
+            "placa": placa,
+            "total_falhas": len(falhas),
+            "primeira_falha": primeira_falha,
+        },
+    )
+
 def limpar_preview_sincronizacao():
     session.pop("clientes_sync_preview", None)
 
@@ -21883,13 +21904,8 @@ def cadastrar():
             modelo=request.form.get("modelo", ""),
             cor=request.form.get("cor", ""),
         )
-        espelho = resultado.get("espelho_planilha") or {}
-        mensagem = f"Cadastro da placa {resultado['placa']} salvo com sucesso."
-        if espelho.get("sucesso"):
-            mensagem += f" Espelhado em {len(espelho['sucesso'])} planilha(s)."
-        if espelho.get("falhas"):
-            primeiro_erro = espelho["falhas"][0]
-            mensagem += f" Aviso na planilha: {primeiro_erro.get('nome')} - {primeiro_erro.get('erro')}."
+        registrar_alertas_espelho_planilha_cadastro(resultado)
+        mensagem = montar_mensagem_publica_cadastro_veiculo(resultado)
         if resultado.get("acao") == "novo":
             registrar_cadastro_novo_para_atendimento(resultado["placa"])
         else:
@@ -21924,13 +21940,8 @@ def editar_cliente():
             cor=request.form.get("cor", ""),
             placa_original=placa_original,
         )
-        espelho = resultado.get("espelho_planilha") or {}
-        mensagem = f"Cadastro da placa {resultado['placa']} salvo com sucesso."
-        if espelho.get("sucesso"):
-            mensagem += f" Espelhado em {len(espelho['sucesso'])} planilha(s)."
-        if espelho.get("falhas"):
-            primeiro_erro = espelho["falhas"][0]
-            mensagem += f" Aviso na planilha: {primeiro_erro.get('nome')} - {primeiro_erro.get('erro')}."
+        registrar_alertas_espelho_planilha_cadastro(resultado)
+        mensagem = montar_mensagem_publica_cadastro_veiculo(resultado)
 
         if redirect_to.startswith("/clientes"):
             definir_feedback_clientes("sucesso", mensagem)

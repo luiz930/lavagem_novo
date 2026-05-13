@@ -1677,6 +1677,49 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(c.fetchone()["data_nascimento"], "1990-05-05")
         conn.close()
 
+    def test_mensagem_publica_cadastro_veiculo_nao_exibe_erro_planilha(self):
+        resultado = {
+            "placa": "ABC1234",
+            "espelho_planilha": {
+                "sucesso": [{"nome": "Clientes"}],
+                "falhas": [{"nome": "Google Planilhas", "erro": "Erro 403: permissao negada"}],
+            },
+        }
+
+        mensagem = app_module.montar_mensagem_publica_cadastro_veiculo(resultado)
+
+        self.assertEqual(mensagem, "Cadastro da placa ABC1234 salvo com sucesso.")
+        self.assertNotIn("403", mensagem)
+        self.assertNotIn("Aviso na planilha", mensagem)
+        self.assertNotIn("Espelhado", mensagem)
+
+    def test_cadastrar_veiculo_mantem_feedback_sucesso_sem_erro_planilha(self):
+        resultado = {
+            "acao": "novo",
+            "placa": "ABC1234",
+            "espelho_planilha": {
+                "falhas": [{"nome": "Google Planilhas", "erro": "Erro 403: permissao negada"}],
+            },
+        }
+
+        with app_module.app.test_request_context(
+            "/cadastrar",
+            method="POST",
+            data={"placa": "ABC1234", "nome": "Maria", "telefone": "", "modelo": "Onix", "cor": "Preto"},
+        ):
+            session["usuario"] = "admin"
+            with patch.object(app_module, "salvar_cliente_veiculo", return_value=resultado), \
+                 patch.object(app_module, "registrar_cadastro_novo_para_atendimento"), \
+                 patch.object(app_module, "log_info") as log_mock:
+                response = app_module.cadastrar()
+
+            feedback = session.get("index_feedback")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.location, "/?placa=ABC1234")
+        self.assertEqual(feedback, {"tipo": "sucesso", "mensagem": "Cadastro da placa ABC1234 salvo com sucesso."})
+        self.assertTrue(log_mock.called)
+
     def test_marcador_define_novo_atendimento_somente_para_cadastro_recente(self):
         with app_module.app.test_request_context("/"):
             session["usuario"] = "admin"
