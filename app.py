@@ -17171,6 +17171,49 @@ def aplicar_change_mobile(c, entity, entity_uuid, action, payload):
             )
         return True
 
+    if entity == "servicos":
+        if action == "delete":
+            c.execute(
+                "UPDATE servicos SET mobile_updated_at=?, status=COALESCE(status, 'CANCELADO') WHERE mobile_uuid=?",
+                (agora_iso(), entity_uuid),
+            )
+            return True
+        c.execute("SELECT id FROM servicos WHERE mobile_uuid=? LIMIT 1", (entity_uuid,))
+        existente = c.fetchone()
+        valores = (
+            normalizar_texto_campo(payload.get("status")) or "ABERTO",
+            normalizar_texto_campo(payload.get("observacoes")),
+            normalizar_texto_campo(payload.get("etapa_atual")) or "LAVAGEM",
+            str(payload.get("entrada") or agora_iso()),
+            normalizar_texto_campo(payload.get("criado_por_usuario")),
+            normalizar_texto_campo(payload.get("criado_por_nome")),
+            entity_uuid,
+            str(payload.get("updated_at") or agora_iso()),
+        )
+        if existente:
+            c.execute(
+                """
+                UPDATE servicos
+                SET status=?, observacoes=?, etapa_atual=?, entrada=?,
+                    criado_por_usuario=?, criado_por_nome=?,
+                    mobile_uuid=?, mobile_updated_at=?
+                WHERE mobile_uuid=?
+                """,
+                valores + (entity_uuid,),
+            )
+        else:
+            c.execute(
+                """
+                INSERT INTO servicos (
+                    status, observacoes, etapa_atual, entrada,
+                    criado_por_usuario, criado_por_nome, mobile_uuid, mobile_updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                valores,
+            )
+        return True
+
     if entity == "fotos":
         if action == "delete":
             c.execute("UPDATE fotos SET mobile_updated_at=? WHERE mobile_uuid=?", (agora_iso(), entity_uuid))

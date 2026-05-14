@@ -105,6 +105,60 @@ class AppRegressionTests(unittest.TestCase):
         self.assertIn('"usuario": "admin"', row["payload_json"])
         conn.close()
 
+    def test_api_mobile_sync_aplica_servico_offline(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            CREATE TABLE servicos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                status TEXT,
+                observacoes TEXT,
+                etapa_atual TEXT,
+                entrada TEXT,
+                criado_por_usuario TEXT,
+                criado_por_nome TEXT,
+                mobile_uuid TEXT,
+                mobile_updated_at TEXT
+            )
+            """
+        )
+        compat = PersistentCompatConnection(conn)
+
+        payload = {
+            "changes": [
+                {
+                    "id": 8,
+                    "entity": "servicos",
+                    "entity_uuid": "servico-local-1",
+                    "action": "upsert",
+                    "payload": {
+                        "status": "ABERTO",
+                        "observacoes": "Lavagem cadastrada no app",
+                        "etapa_atual": "LAVAGEM",
+                        "entrada": "2026-05-14T10:00:00",
+                    },
+                }
+            ]
+        }
+
+        with patch.dict(os.environ, {"MOBILE_SYNC_TOKEN": "segredo"}, clear=False), \
+             patch.object(app_module, "conectar", return_value=compat):
+            resposta = self.client.post(
+                "/api/mobile/sync",
+                json=payload,
+                headers={"Authorization": "Bearer segredo"},
+            )
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta.get_json()["accepted_ids"], [8])
+        servico = conn.execute("SELECT * FROM servicos WHERE mobile_uuid='servico-local-1'").fetchone()
+        self.assertIsNotNone(servico)
+        self.assertEqual(servico["status"], "ABERTO")
+        self.assertEqual(servico["observacoes"], "Lavagem cadastrada no app")
+        self.assertEqual(servico["etapa_atual"], "LAVAGEM")
+        conn.close()
+
     def test_api_mobile_login_gera_token_e_usuario_para_app(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
