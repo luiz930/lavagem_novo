@@ -3350,6 +3350,8 @@ SENHA_PADRAO_ADMIN_LEGADA = "admin123"
 SENHA_MINIMO_CARACTERES = 10
 MAX_TENTATIVAS_LOGIN = 5
 MINUTOS_BLOQUEIO_LOGIN = 15
+LOGIN_PERSISTENTE_COOKIE = "wagen_login_persistente"
+LOGIN_PERSISTENTE_DIAS = 30
 
 ITENS_CHECKLIST_PADRAO = [
     "Aspiracao do interior concluida",
@@ -8539,6 +8541,273 @@ def preencher_sessao_usuario(usuario_row, limpar=True, manter_conectado=None):
     session["senha_alteracao_obrigatoria"] = usuario_precisa_trocar_senha(usuario_row)
     session["usuario_sync_em"] = time.time()
     session.permanent = bool(sessao_permanente_anterior if manter_conectado is None else manter_conectado)
+
+def hash_token_login_persistente(token):
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def garantir_schema_login_persistente(cursor):
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS login_persistente_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario_id INTEGER,
+        usuario TEXT,
+        usuario_nome TEXT,
+        perfil TEXT,
+        empresa_id INTEGER,
+        foto_perfil TEXT,
+        hud_config_json TEXT,
+        senha_alteracao_obrigatoria INTEGER DEFAULT 0,
+        ativo INTEGER DEFAULT 1,
+        token_hash TEXT UNIQUE NOT NULL,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        expira_em TEXT,
+        ultimo_uso_em TEXT,
+        revogado_em TEXT
+    )
+    """)
+    for definicao in (
+        "usuario_nome TEXT",
+        "perfil TEXT",
+        "empresa_id INTEGER",
+        "foto_perfil TEXT",
+        "hud_config_json TEXT",
+        "senha_alteracao_obrigatoria INTEGER DEFAULT 0",
+        "ativo INTEGER DEFAULT 1",
+        "ultimo_uso_em TEXT",
+        "revogado_em TEXT",
+    ):
+        adicionar_coluna_se_preciso(cursor, "login_persistente_tokens", definicao)
+
+
+def snapshot_usuario_login_persistente(usuario_row):
+    dados = row_para_dict(usuario_row)
+    usuario = str(dados.get("usuario") or "").strip()
+    nome = str(dados.get("nome") or usuario).strip() or usuario
+    return {
+        "usuario_id": converter_inteiro(dados.get("id"), 0),
+        "usuario": usuario,
+        "usuario_nome": nome,
+        "perfil": normalizar_perfil_usuario(dados.get("perfil") or ("admin" if usuario == "admin" else "funcionario")),
+        "empresa_id": normalize_empresa_id(dados.get("empresa_id") or 1),
+        "foto_perfil": str(dados.get("foto_perfil") or "").strip(),
+        "hud_config_json": str(dados.get("hud_config_json") or "").strip(),
+        "senha_alteracao_obrigatoria": 1 if usuario_precisa_trocar_senha(usuario_row) else 0,
+        "ativo": converter_inteiro(dados.get("ativo"), 1),
+    }
+
+
+def registrar_login_persistente(usuario_row):
+    snapshot = snapshot_usuario_login_persistente(usuario_row)
+    if not snapshot.get("usuario"):
+        return ""
+
+    token = secrets.token_urlsafe(48)
+    expira_em = (agora() + timedelta(days=LOGIN_PERSISTENTE_DIAS)).isoformat(timespec="seconds")
+    conn = None
+    try:
+        conn = conectar_banco_local_forcado()
+        c = conn.cursor()
+        garantir_schema_login_persistente(c)
+        c.execute(
+            """
+            INSERT INTO login_persistente_tokens (
+                usuario_id, usuario, usuario_nome, perfil, empresa_id,
+                foto_perfil, hud_config_json, senha_alteracao_obrigatoria,
+                ativo, token_hash, criado_em, expira_em
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot.get("usuario_id"),
+                snapshot.get("usuario"),
+                snapshot.get("usuario_nome"),
+                snapshot.get("perfil"),
+                snapshot.get("empresa_id"),
+                snapshot.get("foto_perfil"),
+                snapshot.get("hud_config_json"),
+                snapshot.get("senha_alteracao_obrigatoria"),
+                snapshot.get("ativo"),
+                hash_token_login_persistente(token),
+                agora_iso(),
+                expira_em,
+            ),
+        )
+        conn.commit()
+        return token
+    except Exception as erro:
+        log_info("ERRO LOGIN PERSISTENTE:", erro)
+        try:
+            if conn:
+                conn.rollback()
+        except Exception:
+            pass
+        return ""
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+
+def carregar_login_persistente(token):
+    token = str(token or "").strip()
+    if not token:
+        return None
+
+    conn = None
+    try:
+        conn = conectar_banco_local_forcado()
+        c = conn.cursor()
+        garantir_schema_login_persistente(c)
+        token_hash = hash_token_login_persistente(token)
+        c.execute(
+            """
+            SELECT *
+            FROM login_persistente_tokens
+            WHERE token_hash=?
+              AND revogado_em IS NULL
+              AND (expira_em IS NULL OR expira_em > ?)
+            LIMIT 1
+            """,
+            (token_hash, agora_iso()),
+        )
+        row = c.fetchone()
+        if not row:
+            return None
+        c.execute(
+            "UPDATE login_persistente_tokens SET ultimo_uso_em=? WHERE token_hash=?",
+            (agora_iso(), token_hash),
+        )
+        conn.commit()
+        return row_para_dict(row)
+    except Exception as erro:
+        log_info("ERRO CARREGAR LOGIN PERSISTENTE:", erro)
+        return None
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+
+def revogar_login_persistente(token):
+    token = str(token or "").strip()
+    if not token:
+        return
+
+    conn = None
+    try:
+        conn = conectar_banco_local_forcado()
+        c = conn.cursor()
+        garantir_schema_login_persistente(c)
+        c.execute(
+            """
+            UPDATE login_persistente_tokens
+            SET revogado_em=COALESCE(revogado_em, ?)
+            WHERE token_hash=?
+            """,
+            (agora_iso(), hash_token_login_persistente(token)),
+        )
+        conn.commit()
+    except Exception as erro:
+        log_info("ERRO REVOGAR LOGIN PERSISTENTE:", erro)
+        try:
+            if conn:
+                conn.rollback()
+        except Exception:
+            pass
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+
+def aplicar_cookie_login_persistente(response, token):
+    if not token:
+        return response
+    response.set_cookie(
+        LOGIN_PERSISTENTE_COOKIE,
+        token,
+        max_age=LOGIN_PERSISTENTE_DIAS * 24 * 60 * 60,
+        httponly=True,
+        secure=bool(app.config.get("SESSION_COOKIE_SECURE")),
+        samesite="Lax",
+        path="/",
+    )
+    return response
+
+
+def limpar_cookie_login_persistente(response):
+    response.delete_cookie(
+        LOGIN_PERSISTENTE_COOKIE,
+        path="/",
+        secure=bool(app.config.get("SESSION_COOKIE_SECURE")),
+        httponly=True,
+        samesite="Lax",
+    )
+    return response
+
+
+def preencher_sessao_login_persistente(dados):
+    usuario = str(dados.get("usuario") or "").strip()
+    if not usuario:
+        return False
+
+    usuario_id = converter_inteiro(dados.get("usuario_id") or dados.get("id"), 0)
+    nome = str(dados.get("usuario_nome") or dados.get("nome") or usuario).strip() or usuario
+    foto = str(dados.get("foto_perfil") or "").strip()
+
+    session.clear()
+    session["usuario"] = usuario
+    session["usuario_id"] = usuario_id
+    session["usuario_nome"] = nome
+    session["usuario_iniciais"] = obter_iniciais_usuario(nome, usuario)
+    session["usuario_foto"] = foto
+    session["usuario_foto_url"] = url_foto_usuario(foto, usuario_id)
+    session["usuario_hud_config_json"] = str(dados.get("hud_config_json") or "").strip()
+    session["empresa_id"] = normalize_empresa_id(dados.get("empresa_id") or 1)
+    session["usuario_perfil"] = normalizar_perfil_usuario(dados.get("perfil") or ("admin" if usuario == "admin" else "funcionario"))
+    session["senha_alteracao_obrigatoria"] = bool(converter_inteiro(dados.get("senha_alteracao_obrigatoria"), 0))
+    session["usuario_sync_em"] = time.time()
+    session.permanent = True
+    return True
+
+
+def restaurar_sessao_login_persistente():
+    if session.get("usuario"):
+        return False
+    if not has_request_context():
+        return False
+
+    token = request.cookies.get(LOGIN_PERSISTENTE_COOKIE)
+    dados = carregar_login_persistente(token)
+    if not dados:
+        if token:
+            g.login_persistente_limpar_cookie = True
+        return False
+
+    if converter_inteiro(dados.get("ativo"), 1) == 0:
+        revogar_login_persistente(token)
+        g.login_persistente_limpar_cookie = True
+        return False
+
+    restaurado = preencher_sessao_login_persistente(dados)
+    if restaurado:
+        g.login_persistente_restaurado = True
+    return restaurado
+
+
+@app.after_request
+def aplicar_flags_cookie_login_persistente(response):
+    if getattr(g, "login_persistente_limpar_cookie", False):
+        limpar_cookie_login_persistente(response)
+    return response
+
 
 def sincronizar_sessao_usuario(force=False):
     if not session.get("usuario"):
@@ -15563,6 +15832,13 @@ def tratar_banco_online_obrigatorio(erro):
 
 
 @app.before_request
+def restaurar_login_persistente_request():
+    if request.endpoint == "static":
+        return
+    restaurar_sessao_login_persistente()
+
+
+@app.before_request
 def validar_csrf_basico():
     if request.endpoint == "static":
         return
@@ -17366,15 +17642,30 @@ def login():
                     "liberadas no sistema."
                 )
             )
-            return redirect("/configuracoes")
-        return redirect("/")
+            resposta = redirect("/configuracoes")
+        else:
+            resposta = redirect("/")
+
+        if manter_conectado:
+            revogar_login_persistente(request.cookies.get(LOGIN_PERSISTENTE_COOKIE))
+            aplicar_cookie_login_persistente(
+                resposta,
+                registrar_login_persistente(user),
+            )
+        else:
+            revogar_login_persistente(request.cookies.get(LOGIN_PERSISTENTE_COOKIE))
+            limpar_cookie_login_persistente(resposta)
+        return resposta
 
     return render_template("login.html", app_version=versao_login)
 
 @app.route("/logout")
 def logout():
+    revogar_login_persistente(request.cookies.get(LOGIN_PERSISTENTE_COOKIE))
     session.clear()
-    return redirect("/login")
+    resposta = redirect("/login")
+    limpar_cookie_login_persistente(resposta)
+    return resposta
 
 def token_sync_mobile_configurado():
     return str(os.environ.get("MOBILE_SYNC_TOKEN") or "").strip()

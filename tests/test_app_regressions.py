@@ -1034,6 +1034,13 @@ class AppRegressionTests(unittest.TestCase):
             sess["senha_alteracao_obrigatoria"] = senha_pendente
             return app_module.issue_csrf_token(sess)
 
+    def extrair_cookie_resposta(self, response, nome):
+        prefixo = f"{nome}="
+        for cabecalho in response.headers.getlist("Set-Cookie"):
+            if cabecalho.startswith(prefixo):
+                return cabecalho.split(";", 1)[0].split("=", 1)[1]
+        return ""
+
     def test_login_exibe_opcoes_de_lembrar_dados_e_manter_conectado(self):
         with open("templates/login.html", encoding="utf-8") as arquivo:
             conteudo = arquivo.read()
@@ -1076,6 +1083,84 @@ class AppRegressionTests(unittest.TestCase):
             self.assertEqual(response.status_code, 302)
             with client.session_transaction() as sess:
                 self.assertTrue(sess.permanent)
+
+        conn.close()
+
+    def test_login_manter_conectado_grava_cookie_persistente_local(self):
+        conn, compat = self.criar_banco_usuario_senha(senha="SenhaAtual1!")
+        conn.execute("UPDATE usuarios SET senha_alteracao_obrigatoria=0 WHERE id=1")
+        conn.commit()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            banco_local = os.path.join(tmpdir, "local.db")
+            with app_module.app.test_client() as client, \
+                 patch.object(app_module, "csrf_protection_ativa", return_value=False), \
+                 patch.object(app_module, "INIT_DB_EXECUTADO", True), \
+                 patch.object(app_module, "DATABASE_FILE", banco_local), \
+                 patch.object(app_module, "conectar", return_value=compat):
+                response = client.post(
+                    "/login",
+                    data={
+                        "usuario": "admin",
+                        "senha": "SenhaAtual1!",
+                        "manter_conectado": "1",
+                    },
+                )
+
+            token = self.extrair_cookie_resposta(response, app_module.LOGIN_PERSISTENTE_COOKIE)
+            self.assertTrue(token)
+
+            local_conn = sqlite3.connect(banco_local)
+            local_conn.row_factory = sqlite3.Row
+            row = local_conn.execute(
+                "SELECT usuario, token_hash, revogado_em FROM login_persistente_tokens"
+            ).fetchone()
+            local_conn.close()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["usuario"], "admin")
+        self.assertEqual(row["token_hash"], app_module.hash_token_login_persistente(token))
+        self.assertIsNone(row["revogado_em"])
+        conn.close()
+
+    def test_login_persistente_restaura_usuario_apos_sessao_flask_sumir(self):
+        conn, compat = self.criar_banco_usuario_senha(senha="SenhaAtual1!")
+        conn.execute("UPDATE usuarios SET senha_alteracao_obrigatoria=0 WHERE id=1")
+        conn.commit()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            banco_local = os.path.join(tmpdir, "local.db")
+            with app_module.app.test_client() as client, \
+                 patch.object(app_module, "csrf_protection_ativa", return_value=False), \
+                 patch.object(app_module, "INIT_DB_EXECUTADO", True), \
+                 patch.object(app_module, "DATABASE_FILE", banco_local), \
+                 patch.object(app_module, "conectar", return_value=compat):
+                response = client.post(
+                    "/login",
+                    data={
+                        "usuario": "admin",
+                        "senha": "SenhaAtual1!",
+                        "manter_conectado": "1",
+                    },
+                )
+                token = self.extrair_cookie_resposta(response, app_module.LOGIN_PERSISTENTE_COOKIE)
+
+            self.assertTrue(token)
+
+            with app_module.app.test_client() as restored, \
+                 patch.object(app_module, "INIT_DB_EXECUTADO", True), \
+                 patch.object(app_module, "DATABASE_FILE", banco_local), \
+                 patch.object(app_module, "conectar", side_effect=RuntimeError("banco online reiniciando")), \
+                 patch.object(app_module, "gerar_sync_token_leve", return_value="sync-ok"), \
+                 patch.object(app_module, "obter_contexto_licenca_empresa_cached", return_value={"bloqueada": False}):
+                restored.set_cookie(app_module.LOGIN_PERSISTENTE_COOKIE, token)
+                response = restored.get("/api/sync-token")
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.get_json()["sync_token"], "sync-ok")
+                with restored.session_transaction() as sess:
+                    self.assertEqual(sess["usuario"], "admin")
+                    self.assertTrue(sess.permanent)
 
         conn.close()
 
