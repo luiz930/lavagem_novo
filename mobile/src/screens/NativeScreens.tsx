@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
-import { ClienteLocal, listarClientes, listarServicos, resumoLocal, salvarCliente, salvarServico, ServicoLocal } from "../data/localRepository";
+import { BuscaPlacaResultado, buscarPorPlaca, ClienteLocal, listarClientes, listarServicos, resumoLocal, salvarCliente, salvarServico, ServicoLocal } from "../data/localRepository";
 import { colors, spacing } from "../theme";
 import { AppScreenKey } from "./AppShell";
 
@@ -63,13 +63,60 @@ export function NativeScreenContent({ screen, onOpenCamera, onRefreshPending, sy
 
 function InicioPainel({ onOpenCamera }: { onOpenCamera: () => void }) {
   const [resumo, setResumo] = useState({ clientes: 0, servicos: 0, fotos: 0, pendencias: 0 });
+  const [placa, setPlaca] = useState("");
+  const [resultados, setResultados] = useState<BuscaPlacaResultado[]>([]);
 
   useEffect(() => {
     resumoLocal().then(setResumo);
   }, []);
 
+  async function pesquisarPlaca(texto = placa) {
+    setResultados(await buscarPorPlaca(texto));
+  }
+
   return (
     <>
+      <View style={styles.searchHero}>
+        <Text style={styles.pill}>Busca rapida</Text>
+        <Text style={styles.heroTitle}>Buscar por placa</Text>
+        <Text style={styles.muted}>Consulta os clientes e veiculos sincronizados do site no banco local do app.</Text>
+        <View style={styles.searchRow}>
+          <TextInput
+            autoCapitalize="characters"
+            onChangeText={(value) => {
+              setPlaca(value);
+              if (value.trim().length >= 2) {
+                pesquisarPlaca(value);
+              } else {
+                setResultados([]);
+              }
+            }}
+            placeholder="Digite a placa"
+            placeholderTextColor={colors.muted}
+            style={[styles.input, styles.searchInput]}
+            value={placa}
+          />
+          <Pressable onPress={() => pesquisarPlaca()} style={styles.searchButton}>
+            <Ionicons color="#111827" name="search" size={22} />
+          </Pressable>
+        </View>
+        {resultados.length === 0 ? (
+          <Text style={styles.muted}>Sincronize em Configuracoes para baixar os dados do site.</Text>
+        ) : (
+          <View style={styles.resultList}>
+            {resultados.map((item) => (
+              <View key={`${item.placa}-${item.cliente_nome}`} style={styles.resultItem}>
+                <View style={styles.itemRow}>
+                  <Text style={styles.itemTitle}>{item.placa}</Text>
+                  <Text style={styles.badge}>{item.atendimento_ativo ? "Em atendimento" : "Cliente"}</Text>
+                </View>
+                <Text style={styles.muted}>{item.cliente_nome || "Cliente sem nome"} | {item.cliente_telefone || "Sem telefone"}</Text>
+                <Text style={styles.muted}>{item.modelo || "Modelo nao informado"} {item.cor ? `/${item.cor}` : ""}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
       <View style={styles.grid}>
         <Metric label="Clientes" value={resumo.clientes} icon="person" />
         <Metric label="Servicos" value={resumo.servicos} icon="water" />
@@ -641,6 +688,43 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     padding: spacing.lg,
     gap: spacing.md
+  },
+  searchHero: {
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    gap: spacing.md
+  },
+  heroTitle: {
+    color: colors.text,
+    fontSize: 30,
+    fontWeight: "900"
+  },
+  searchRow: {
+    flexDirection: "row",
+    gap: spacing.sm
+  },
+  searchInput: {
+    flex: 1
+  },
+  searchButton: {
+    width: 54,
+    minHeight: 50,
+    borderRadius: 14,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  resultList: {
+    gap: spacing.sm
+  },
+  resultItem: {
+    borderRadius: 14,
+    backgroundColor: colors.surfaceSoft,
+    padding: spacing.md,
+    gap: spacing.xs
   },
   pageHeaderCard: {
     borderRadius: 22,

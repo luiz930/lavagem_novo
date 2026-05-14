@@ -130,7 +130,7 @@ function Sidebar({ active, onSelect, overlay = false }: { active: AppScreenKey; 
         <Text style={styles.sidebarSubtitle}>Estetica automotiva</Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sidebarNav}>
+      <ScrollView showsVerticalScrollIndicator={false} style={styles.sidebarScroller} contentContainerStyle={styles.sidebarNav}>
         {menuGroups.map((group) => (
           <View key={group.label} style={styles.sidebarGroup}>
             <Text style={styles.sidebarGroupLabel}>{group.label}</Text>
@@ -167,6 +167,7 @@ const styles = StyleSheet.create({
   },
   sidebar: {
     width: 260,
+    height: "100%",
     backgroundColor: colors.surface,
     borderRightWidth: 2,
     borderRightColor: colors.primary,
@@ -174,7 +175,8 @@ const styles = StyleSheet.create({
     paddingTop: spacing.xl,
     paddingBottom: spacing.md,
     zIndex: 30,
-    elevation: 30
+    elevation: 30,
+    flexShrink: 0
   },
   sidebarOverlay: {
     shadowColor: "#000",
@@ -228,7 +230,11 @@ const styles = StyleSheet.create({
   },
   sidebarNav: {
     gap: spacing.md,
-    paddingBottom: spacing.xl
+    paddingBottom: spacing.xl,
+    flexGrow: 1
+  },
+  sidebarScroller: {
+    flex: 1
   },
   sidebarGroup: {
     borderRadius: 18,

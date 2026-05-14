@@ -11,6 +11,7 @@ import {
 
 import { loginOffline, loginOnline, UserSession } from "../auth/authRepository";
 import { DEFAULT_SERVER_URL } from "../config";
+import { runSync } from "../sync/syncService";
 import { colors, spacing } from "../theme";
 
 type Props = {
@@ -28,7 +29,9 @@ export function LoginScreen({ onLoggedIn }: Props) {
     setErro("");
     setLoading(true);
     try {
-      onLoggedIn(await loginOnline(DEFAULT_SERVER_URL, usuario, senha));
+      const session = await loginOnline(DEFAULT_SERVER_URL, usuario, senha);
+      await runSync({ endpointUrl: DEFAULT_SERVER_URL, token: session.onlineToken || "" });
+      onLoggedIn(session);
     } catch (error) {
       try {
         onLoggedIn(await loginOffline(usuario, senha));

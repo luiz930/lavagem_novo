@@ -17257,6 +17257,75 @@ def aplicar_change_mobile(c, entity, entity_uuid, action, payload):
 
     return False
 
+def montar_changes_mobile_site(c):
+    changes = []
+    try:
+        c.execute(
+            """
+            SELECT id, nome, telefone, placa_principal, data_nascimento,
+                   COALESCE(mobile_uuid, '') AS mobile_uuid,
+                   COALESCE(mobile_updated_at, '') AS mobile_updated_at
+            FROM clientes
+            ORDER BY id DESC
+            LIMIT 500
+            """
+        )
+        for row in c.fetchall():
+            uuid = normalizar_texto_campo(row["mobile_uuid"]) or f"site-cliente-{row['id']}"
+            changes.append({
+                "entity": "clientes",
+                "entity_uuid": uuid,
+                "action": "upsert",
+                "payload": {
+                    "uuid": uuid,
+                    "nome": str(row["nome"] or ""),
+                    "telefone": str(row["telefone"] or ""),
+                    "placa_principal": str(row["placa_principal"] or ""),
+                    "data_nascimento": str(row["data_nascimento"] or ""),
+                    "updated_at": str(row["mobile_updated_at"] or agora_iso()),
+                },
+            })
+    except Exception as erro:
+        log_info("ERRO MOBILE PULL CLIENTES:", erro)
+
+    try:
+        c.execute(
+            """
+            SELECT v.id, v.placa, v.modelo, v.cor, v.status_atendimento, v.atendimento_ativo,
+                   v.cliente_id, COALESCE(v.mobile_uuid, '') AS mobile_uuid,
+                   COALESCE(v.mobile_updated_at, '') AS mobile_updated_at,
+                   COALESCE(c.mobile_uuid, '') AS cliente_mobile_uuid
+            FROM veiculos v
+            LEFT JOIN clientes c ON c.id = v.cliente_id
+            ORDER BY v.id DESC
+            LIMIT 500
+            """
+        )
+        for row in c.fetchall():
+            uuid = normalizar_texto_campo(row["mobile_uuid"]) or f"site-veiculo-{row['id']}"
+            cliente_uuid = normalizar_texto_campo(row["cliente_mobile_uuid"])
+            if not cliente_uuid and row["cliente_id"]:
+                cliente_uuid = f"site-cliente-{row['cliente_id']}"
+            changes.append({
+                "entity": "veiculos",
+                "entity_uuid": uuid,
+                "action": "upsert",
+                "payload": {
+                    "uuid": uuid,
+                    "cliente_uuid": cliente_uuid,
+                    "placa": str(row["placa"] or ""),
+                    "modelo": str(row["modelo"] or ""),
+                    "cor": str(row["cor"] or ""),
+                    "status_atendimento": str(row["status_atendimento"] or "SEM_ATENDIMENTO"),
+                    "atendimento_ativo": int(row["atendimento_ativo"] or 0),
+                    "updated_at": str(row["mobile_updated_at"] or agora_iso()),
+                },
+            })
+    except Exception as erro:
+        log_info("ERRO MOBILE PULL VEICULOS:", erro)
+
+    return changes
+
 @app.route("/api/mobile/sync", methods=["POST"])
 def api_mobile_sync():
     if not autorizar_sync_mobile():
@@ -17320,13 +17389,14 @@ def api_mobile_sync():
         if mobile_change_id_int is not None:
             accepted_ids.append(mobile_change_id_int)
 
+    server_changes = montar_changes_mobile_site(c)
     conn.commit()
     conn.close()
 
     return jsonify({
         "ok": True,
         "accepted_ids": accepted_ids,
-        "changes": [],
+        "changes": server_changes,
     })
 
 

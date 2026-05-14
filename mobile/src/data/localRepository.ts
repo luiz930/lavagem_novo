@@ -17,6 +17,16 @@ export type ServicoLocal = {
   updated_at?: string;
 };
 
+export type BuscaPlacaResultado = {
+  placa: string;
+  modelo?: string;
+  cor?: string;
+  status_atendimento?: string;
+  atendimento_ativo?: number;
+  cliente_nome?: string;
+  cliente_telefone?: string;
+};
+
 export async function listarClientes() {
   const db = await getDatabase();
   return db.getAllAsync<ClienteLocal>(
@@ -27,6 +37,33 @@ export async function listarClientes() {
     ORDER BY updated_at DESC, nome ASC
     LIMIT 100
     `
+  );
+}
+
+export async function buscarPorPlaca(placa: string) {
+  const termo = placa.trim().toUpperCase();
+  if (!termo) {
+    return [];
+  }
+  const db = await getDatabase();
+  return db.getAllAsync<BuscaPlacaResultado>(
+    `
+    SELECT
+      v.placa,
+      v.modelo,
+      v.cor,
+      v.status_atendimento,
+      v.atendimento_ativo,
+      c.nome AS cliente_nome,
+      c.telefone AS cliente_telefone
+    FROM veiculos v
+    LEFT JOIN clientes c ON c.uuid = v.cliente_uuid
+    WHERE v.deleted_at IS NULL
+      AND UPPER(v.placa) LIKE ?
+    ORDER BY v.updated_at DESC, v.placa ASC
+    LIMIT 20
+    `,
+    `%${termo}%`
   );
 }
 

@@ -159,6 +159,55 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(servico["etapa_atual"], "LAVAGEM")
         conn.close()
 
+    def test_api_mobile_sync_retorna_clientes_e_veiculos_do_site(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE clientes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome TEXT,
+                telefone TEXT,
+                placa_principal TEXT,
+                data_nascimento TEXT,
+                mobile_uuid TEXT,
+                mobile_updated_at TEXT
+            );
+            CREATE TABLE veiculos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                placa TEXT,
+                modelo TEXT,
+                cor TEXT,
+                cliente_id INTEGER,
+                status_atendimento TEXT,
+                atendimento_ativo INTEGER,
+                mobile_uuid TEXT,
+                mobile_updated_at TEXT
+            );
+            INSERT INTO clientes (nome, telefone, placa_principal) VALUES ('Cliente Site', '1199999', 'ABC1234');
+            INSERT INTO veiculos (placa, modelo, cor, cliente_id, status_atendimento, atendimento_ativo)
+            VALUES ('ABC1234', 'Gol', 'Prata', 1, 'SEM_ATENDIMENTO', 0);
+            """
+        )
+        compat = PersistentCompatConnection(conn)
+
+        with patch.dict(os.environ, {"MOBILE_SYNC_TOKEN": "segredo"}, clear=False), \
+             patch.object(app_module, "conectar", return_value=compat):
+            resposta = self.client.post(
+                "/api/mobile/sync",
+                json={"changes": []},
+                headers={"Authorization": "Bearer segredo"},
+            )
+
+        self.assertEqual(resposta.status_code, 200)
+        changes = resposta.get_json()["changes"]
+        self.assertEqual(len(changes), 2)
+        self.assertEqual(changes[0]["entity"], "clientes")
+        self.assertEqual(changes[0]["payload"]["nome"], "Cliente Site")
+        self.assertEqual(changes[1]["entity"], "veiculos")
+        self.assertEqual(changes[1]["payload"]["placa"], "ABC1234")
+        conn.close()
+
     def test_api_mobile_login_gera_token_e_usuario_para_app(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
