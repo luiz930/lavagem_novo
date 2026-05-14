@@ -80,6 +80,7 @@ export function HomeScreen({ session, onLogout }: Props) {
       </View>
 
       <NativeScreenContent
+        key={activeScreen}
         screen={activeScreen}
         onOpenCamera={() => setCameraOpen(true)}
         onRefreshPending={refreshPending}

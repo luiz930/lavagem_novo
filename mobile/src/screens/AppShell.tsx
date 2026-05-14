@@ -84,6 +84,8 @@ export function AppShell({ active, title, subtitle, onSelect, onLogout, children
   return (
     <View style={styles.root}>
       <View style={styles.appFrame}>
+        {!desktopSidebar && sidebarOpen && <Pressable style={styles.drawerBackdrop} onPress={() => setSidebarOpen(false)} />}
+
         {(desktopSidebar || sidebarOpen) && (
           <View style={[styles.sidebar, !desktopSidebar && styles.sidebarOverlay]}>
             <View style={styles.sidebarHeader}>
@@ -113,8 +115,6 @@ export function AppShell({ active, title, subtitle, onSelect, onLogout, children
             </ScrollView>
           </View>
         )}
-
-        {!desktopSidebar && sidebarOpen && <Pressable style={styles.drawerBackdrop} onPress={() => setSidebarOpen(false)} />}
 
         <View style={styles.main}>
           <View style={styles.topbar}>
@@ -158,7 +158,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingTop: spacing.xl,
     paddingBottom: spacing.md,
-    zIndex: 10
+    zIndex: 30,
+    elevation: 30
   },
   sidebarOverlay: {
     position: "absolute",
@@ -177,7 +178,8 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: "rgba(0, 0, 0, 0.62)",
-    zIndex: 9
+    zIndex: 20,
+    elevation: 20
   },
   sidebarHeader: {
     marginTop: spacing.lg,
