@@ -27,13 +27,53 @@ export type MobileHudPayload = Record<string, unknown> & {
   versao?: string;
 };
 
+export type MobileWeatherPayload = {
+  clima?: string;
+  temp?: string | number;
+  icone?: string;
+  sugestao?: string;
+};
+
+export type MobileModuleCounter = {
+  label: string;
+  value: string | number;
+  icon?: string;
+};
+
+export type MobileModuleRow = {
+  title?: string;
+  detail?: string;
+  badge?: string;
+  tabela?: string;
+  chave?: string;
+  acao?: string;
+  direcao?: string;
+  criado_em?: string;
+};
+
+export type MobileModulePayload = {
+  counters?: MobileModuleCounter[];
+  rows?: MobileModuleRow[];
+};
+
+export type MobileSiteState = {
+  clima?: MobileWeatherPayload;
+  hud?: MobileHudPayload;
+  modulos?: Record<string, MobileModulePayload>;
+  refresh_interval_seconds?: number;
+  server_time?: string;
+  versao_sistema?: string;
+};
+
 export type MobileConfigResult = {
   version?: string;
   error?: string;
 };
 
 export type MobileHudResult = MobileConfigResult & {
+  clima?: MobileWeatherPayload;
   hud?: MobileHudPayload;
+  site?: MobileSiteState;
 };
 
 export type QueueRow = {

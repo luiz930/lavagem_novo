@@ -21,7 +21,7 @@ import {
   ServicoLocal,
   TipoServicoLocal
 } from "../data/localRepository";
-import { MobileHudPayload } from "../sync/types";
+import { MobileHudPayload, MobileModuleCounter, MobileModuleRow, MobileSiteState } from "../sync/types";
 import { colors, spacing } from "../theme";
 import { AppScreenKey } from "./AppShell";
 import { CameraTarget } from "./CameraScreen";
@@ -35,6 +35,8 @@ type Props = {
     message: string;
     endpointUrl: string;
     hud: MobileHudPayload | null;
+    siteState: MobileSiteState | null;
+    updatedAt: string;
     version: string;
     onRefreshHud: () => Promise<void>;
     onSyncNow: () => Promise<void>;
@@ -74,13 +76,13 @@ export function NativeScreenContent({ screen, onOpenCamera, onRefreshPending, sy
     return <InicioPainel onOpenCamera={onOpenCamera} onSaved={onRefreshPending} sync={sync} />;
   }
   if (screen === "painel") {
-    return <PainelScreen onOpenCamera={onOpenCamera} />;
+    return <PainelScreen onOpenCamera={onOpenCamera} sync={sync} />;
   }
   if (screen === "clientes") {
-    return <ClientesScreen onSaved={onRefreshPending} />;
+    return <ClientesScreen onSaved={onRefreshPending} sync={sync} />;
   }
   if (screen === "servicos") {
-    return <ServicosScreen onSaved={onRefreshPending} onOpenCamera={onOpenCamera} />;
+    return <ServicosScreen onSaved={onRefreshPending} onOpenCamera={onOpenCamera} sync={sync} />;
   }
   if (screen === "pneus") {
     return <PneusScreen sync={sync} />;
@@ -377,6 +379,7 @@ function InicioPainel({ onOpenCamera, onSaved, sync }: { onOpenCamera: (target: 
 function HudSiteCard({ sync }: { sync: Props["sync"] }) {
   const hud = sync.hud || {};
   const versao = sync.version || String(hud.versao || "").replace(/^Vers[aã]o:\s*/i, "");
+  const clima = sync.siteState?.clima || {};
   const totalHoje = hudNumber(hud, ["total", "servicos_ativos", "servicos_hoje"]);
   const andamento = hudNumber(hud, ["andamento", "servicos_ativos"]);
   const atrasados = hudNumber(hud, ["atrasados", "entregas_atrasadas"]);
@@ -404,6 +407,11 @@ function HudSiteCard({ sync }: { sync: Props["sync"] }) {
       </View>
       <View style={styles.hudStatusRow}>
         <View style={styles.hudStatusItem}>
+          <Text style={styles.muted}>Clima</Text>
+          <Text style={styles.itemTitle}>{`${clima.icone || ""} ${clima.clima || "Carregando clima"}`.trim()}</Text>
+          <Text style={styles.muted}>{[clima.temp ? `${clima.temp}°C` : "", clima.sugestao || ""].filter(Boolean).join(" | ")}</Text>
+        </View>
+        <View style={styles.hudStatusItem}>
           <Text style={styles.muted}>Banco</Text>
           <Text style={styles.itemTitle}>{mensagemBanco}</Text>
         </View>
@@ -426,12 +434,12 @@ function hudNumber(hud: MobileHudPayload, keys: string[]) {
   return 0;
 }
 
-function PainelScreen({ onOpenCamera }: { onOpenCamera: (target: CameraTarget) => void }) {
+function PainelScreen({ onOpenCamera, sync }: { onOpenCamera: (target: CameraTarget) => void; sync: Props["sync"] }) {
   const [servicos, setServicos] = useState<ServicoLocal[]>([]);
 
   useEffect(() => {
     listarServicos().then(setServicos);
-  }, []);
+  }, [sync.updatedAt]);
 
   const lavagem = servicos.filter((item) => String(item.status || "").toUpperCase() !== "FINALIZADO" && String(item.etapa_atual || "LAVAGEM").toUpperCase() !== "FINALIZACAO");
   const finalizacao = servicos.filter((item) => String(item.status || "").toUpperCase() !== "FINALIZADO" && String(item.etapa_atual || "").toUpperCase() === "FINALIZACAO");
@@ -470,6 +478,7 @@ function PainelScreen({ onOpenCamera }: { onOpenCamera: (target: CameraTarget) =
           <Text style={styles.muted}>Fluxo separado por lavagem, finalizacao, prioridade e fotos.</Text>
         </View>
       </View>
+      <SiteModulePanel module={sync.siteState?.modulos?.painel} screen="painel" updatedAt={sync.updatedAt} />
       <View style={styles.grid}>
         <Metric label="Em atendimento" value={lavagem.length + finalizacao.length} icon="car" />
         <Metric label="Lavagem" value={lavagem.length} icon="water" />
@@ -501,7 +510,7 @@ function PainelScreen({ onOpenCamera }: { onOpenCamera: (target: CameraTarget) =
   );
 }
 
-function ClientesScreen({ onSaved }: { onSaved: () => void }) {
+function ClientesScreen({ onSaved, sync }: { onSaved: () => void; sync: Props["sync"] }) {
   const [clientes, setClientes] = useState<ClienteLocal[]>([]);
   const [nome, setNome] = useState("");
   const [telefone, setTelefone] = useState("");
@@ -513,7 +522,7 @@ function ClientesScreen({ onSaved }: { onSaved: () => void }) {
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [sync.updatedAt]);
 
   async function submit() {
     if (!nome.trim()) {
@@ -529,6 +538,7 @@ function ClientesScreen({ onSaved }: { onSaved: () => void }) {
 
   return (
     <>
+      <SiteModulePanel module={sync.siteState?.modulos?.clientes} screen="clientes" updatedAt={sync.updatedAt} />
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Cadastrar cliente</Text>
         <TextInput value={nome} onChangeText={setNome} placeholder="Nome" placeholderTextColor={colors.muted} style={styles.input} />
@@ -550,7 +560,7 @@ function ClientesScreen({ onSaved }: { onSaved: () => void }) {
   );
 }
 
-function ServicosScreen({ onSaved, onOpenCamera }: { onSaved: () => void; onOpenCamera: (target: CameraTarget) => void }) {
+function ServicosScreen({ onSaved, onOpenCamera, sync }: { onSaved: () => void; onOpenCamera: (target: CameraTarget) => void; sync: Props["sync"] }) {
   const [servicos, setServicos] = useState<ServicoLocal[]>([]);
   const [tipos, setTipos] = useState<TipoServicoLocal[]>([]);
   const [observacoes, setObservacoes] = useState("");
@@ -562,7 +572,7 @@ function ServicosScreen({ onSaved, onOpenCamera }: { onSaved: () => void; onOpen
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [sync.updatedAt]);
 
   async function submit() {
     const servicoUuid = await salvarServico({ observacoes });
@@ -578,6 +588,7 @@ function ServicosScreen({ onSaved, onOpenCamera }: { onSaved: () => void; onOpen
 
   return (
     <>
+      <SiteModulePanel module={sync.siteState?.modulos?.servicos} screen="servicos" updatedAt={sync.updatedAt} />
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Novo servico</Text>
         <TextInput value={observacoes} onChangeText={setObservacoes} placeholder="Observacoes" placeholderTextColor={colors.muted} style={styles.input} />
@@ -613,7 +624,7 @@ function PneusScreen({ sync }: { sync: Props["sync"] }) {
 
   useEffect(() => {
     listarProdutosPneu().then(setProdutos);
-  }, [sync.message]);
+  }, [sync.updatedAt]);
 
   return (
     <>
@@ -625,6 +636,7 @@ function PneusScreen({ sync }: { sync: Props["sync"] }) {
         </View>
         <Ionicons color={colors.primary} name="construct" size={28} />
       </View>
+      <SiteModulePanel module={sync.siteState?.modulos?.pneus} screen="pneus" updatedAt={sync.updatedAt} />
       <View style={styles.card}>
         <Pressable onPress={sync.onSyncNow} style={styles.primaryButton}>
           <Ionicons color={colors.primaryText} name="sync" size={22} />
@@ -647,7 +659,7 @@ function ChecklistScreen({ sync }: { sync: Props["sync"] }) {
 
   useEffect(() => {
     listarChecklistItens().then(setItens);
-  }, [sync.message]);
+  }, [sync.updatedAt]);
 
   return (
     <>
@@ -659,6 +671,7 @@ function ChecklistScreen({ sync }: { sync: Props["sync"] }) {
         </View>
         <Ionicons color={colors.primary} name="checkbox" size={28} />
       </View>
+      <SiteModulePanel module={sync.siteState?.modulos?.checklist} screen="checklist" updatedAt={sync.updatedAt} />
       <View style={styles.card}>
         <Pressable onPress={sync.onSyncNow} style={styles.primaryButton}>
           <Ionicons color={colors.primaryText} name="sync" size={22} />
@@ -734,6 +747,7 @@ function ConfiguracoesScreen({ sync }: { sync: Props["sync"] }) {
 
 function ModuleScreen({ screen, sync }: { screen: AppScreenKey; sync: Props["sync"] }) {
   const config = useMemo(() => moduleConfig(screen), [screen]);
+  const siteModule = sync.siteState?.modulos?.[screen];
   return (
     <>
       <View style={styles.pageHeaderCard}>
@@ -744,6 +758,8 @@ function ModuleScreen({ screen, sync }: { screen: AppScreenKey; sync: Props["syn
         </View>
         <Ionicons color={colors.primary} name={config.icon} size={28} />
       </View>
+
+      <SiteModulePanel module={siteModule} screen={screen} updatedAt={sync.updatedAt} />
 
       {config.variant === "calendar" && <CalendarStrip />}
       {config.variant === "finance" && <FinanceSummary />}
@@ -789,6 +805,66 @@ function ModuleScreen({ screen, sync }: { screen: AppScreenKey; sync: Props["syn
 
       {(screen === "configuracoes" || screen === "status") && <SyncPanel sync={sync} />}
     </>
+  );
+}
+
+function iconName(name?: string): keyof typeof Ionicons.glyphMap {
+  const fallback: keyof typeof Ionicons.glyphMap = "analytics";
+  if (!name) {
+    return fallback;
+  }
+  return Object.prototype.hasOwnProperty.call(Ionicons.glyphMap, name) ? name as keyof typeof Ionicons.glyphMap : fallback;
+}
+
+function formatarLinhaSite(row: MobileModuleRow) {
+  const title = row.title || row.acao || row.tabela || "Registro do site";
+  const detail = row.detail || [row.chave, row.direcao, row.criado_em].filter(Boolean).join(" | ") || "Atualizado pelo backend do site.";
+  const badge = row.badge || row.tabela || "Site";
+  return { title, detail, badge };
+}
+
+function SiteModulePanel({ module, screen, updatedAt }: { module?: { counters?: MobileModuleCounter[]; rows?: MobileModuleRow[] }; screen: AppScreenKey; updatedAt: string }) {
+  const counters = module?.counters || [];
+  const rows = module?.rows || [];
+
+  if (!counters.length && !rows.length) {
+    return (
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Dados do site</Text>
+        <Text style={styles.muted}>Sincronizando esta aba com o backend. Atualizacao automatica a cada 10 segundos.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.card}>
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.cardTitle}>Dados do site</Text>
+          <Text style={styles.muted}>{screenTitle(screen)} atualizado automaticamente{updatedAt ? ` em ${new Date(updatedAt).toLocaleTimeString("pt-BR")}` : ""}</Text>
+        </View>
+        <Ionicons color={colors.primary} name="cloud-done" size={24} />
+      </View>
+      {counters.length > 0 && (
+        <View style={styles.grid}>
+          {counters.slice(0, 4).map((item) => (
+            <HudMetric key={`${item.label}-${item.value}`} label={item.label} value={item.value} icon={iconName(item.icon)} />
+          ))}
+        </View>
+      )}
+      {rows.slice(0, 8).map((row, index) => {
+        const item = formatarLinhaSite(row);
+        return (
+          <View key={`${item.title}-${index}`} style={styles.listItem}>
+            <View style={styles.itemRow}>
+              <Text style={styles.itemTitle}>{item.title}</Text>
+              <Text style={styles.badge}>{item.badge}</Text>
+            </View>
+            <Text style={styles.muted}>{item.detail}</Text>
+          </View>
+        );
+      })}
+    </View>
   );
 }
 

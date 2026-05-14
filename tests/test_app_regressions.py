@@ -96,6 +96,30 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(dados["versao_sistema"], "Versao: 1.0.0")
         versao_mock.assert_any_call(permitir_sem_sessao=True)
 
+    def test_api_mobile_site_state_retorna_hud_clima_e_modulos(self):
+        payload = {
+            "hud": {"total": 5, "versao": "Versao: 1.0.0"},
+            "clima": {"clima": "Tempo limpo", "temp": 24, "icone": "sol", "sugestao": "Lavagem completa"},
+            "modulos": {"clima": {"rows": [{"title": "Tempo limpo", "detail": "Lavagem completa", "badge": "24"}]}},
+            "versao_sistema": "Versao: 1.0.0",
+            "server_time": "2026-05-14T12:00:00",
+            "refresh_interval_seconds": 10,
+        }
+
+        with patch.dict(os.environ, {"MOBILE_SYNC_TOKEN": "segredo"}, clear=False), \
+             patch.object(app_module, "montar_payload_mobile_site_state", return_value=payload):
+            resposta = self.client.get(
+                "/api/mobile/site-state",
+                headers={"Authorization": "Bearer segredo"},
+            )
+
+        self.assertEqual(resposta.status_code, 200)
+        dados = resposta.get_json()
+        self.assertTrue(dados["ok"])
+        self.assertEqual(dados["clima"]["clima"], "Tempo limpo")
+        self.assertIn("clima", dados["modulos"])
+        self.assertEqual(dados["refresh_interval_seconds"], 10)
+
     def test_api_mobile_configuracao_salva_versao_no_site(self):
         with patch.dict(os.environ, {"MOBILE_SYNC_TOKEN": "segredo"}, clear=False), \
              patch.object(app_module, "salvar_campos_configuracao_empresa", return_value={"versao_sistema": "1.0.2"}) as salvar_mock, \
@@ -114,6 +138,28 @@ class AppRegressionTests(unittest.TestCase):
         salvar_mock.assert_called_once()
         self.assertEqual(salvar_mock.call_args.args[0]["versao_sistema"], "1.0.2")
         versao_mock.assert_any_call(permitir_sem_sessao=True)
+
+    def test_sync_bancos_resolve_automatico_apenas_quando_mais_recente_e_seguro(self):
+        origem = {"id": 1, "nome": "Cliente novo", "atualizado_em": "2026-05-14T12:00:00"}
+        destino = {"id": 1, "nome": "Cliente antigo", "atualizado_em": "2026-05-14T11:00:00"}
+
+        self.assertFalse(app_module.detectar_conflito_registro_sync("clientes", origem, destino))
+        self.assertTrue(app_module.decidir_atualizar_registro_sync(origem, destino, tabela="clientes"))
+
+    def test_sync_bancos_mantem_conflito_em_financeiro_ou_finalizado(self):
+        financeiro_origem = {"id": 1, "valor": 120, "atualizado_em": "2026-05-14T12:00:00"}
+        financeiro_destino = {"id": 1, "valor": 100, "atualizado_em": "2026-05-14T11:00:00"}
+        finalizado_origem = {"id": 2, "status": "FINALIZADO", "observacoes": "Site", "atualizado_em": "2026-05-14T12:00:00"}
+        finalizado_destino = {"id": 2, "status": "EM ANDAMENTO", "observacoes": "Local", "atualizado_em": "2026-05-14T11:00:00"}
+
+        self.assertTrue(app_module.detectar_conflito_registro_sync("servico_cobrancas_extras", financeiro_origem, financeiro_destino))
+        self.assertTrue(app_module.detectar_conflito_registro_sync("servicos", finalizado_origem, finalizado_destino))
+
+    def test_sync_bancos_fotos_nao_viram_conflito_de_sobrescrita(self):
+        origem = {"id": 1, "caminho": "/foto-online.jpg", "atualizado_em": "2026-05-14T12:00:00"}
+        destino = {"id": 1, "caminho": "/foto-local.jpg", "atualizado_em": "2026-05-14T12:00:00"}
+
+        self.assertFalse(app_module.detectar_conflito_registro_sync("fotos", origem, destino))
 
     def test_api_mobile_sync_registra_eventos_aceitos(self):
         conn = sqlite3.connect(":memory:")

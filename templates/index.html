@@ -904,7 +904,8 @@ input[type="file"] {
 }
 
 #btn-sino,
-#btn-agenda-retorno {
+#btn-agenda-retorno,
+#btn-sync-bancos {
     background: #111;
     color: #ffd700;
     border: none;
@@ -925,8 +926,12 @@ input[type="file"] {
     order: 2;
 }
 
-#btn-sino {
+#btn-sync-bancos {
     order: 3;
+}
+
+#btn-sino {
+    order: 4;
 }
 
 #badge {
@@ -955,6 +960,21 @@ input[type="file"] {
     text-align: center;
 }
 
+#badge-sync-bancos {
+    background: #22c55e;
+    color: #052e16;
+    border-radius: 999px;
+    padding: 2px 6px;
+    font-size: 11px;
+    margin-left: 0;
+    position: absolute;
+    top: -4px;
+    right: -5px;
+    min-width: 20px;
+    text-align: center;
+    font-weight: 900;
+}
+
 #dropdown-notificacoes {
     position: absolute;
     right: 0;
@@ -979,6 +999,21 @@ input[type="file"] {
     overflow-y: auto;
     background: #111827;
     border: 1px solid #facc15;
+    border-radius: 12px;
+    padding: 12px;
+    box-shadow: 0 18px 32px rgba(0, 0, 0, 0.34);
+    z-index: 10001;
+}
+
+#dropdown-sync-bancos {
+    position: absolute;
+    right: 116px;
+    top: 50px;
+    width: min(92vw, 380px);
+    max-height: 360px;
+    overflow-y: auto;
+    background: #111827;
+    border: 1px solid #22c55e;
     border-radius: 12px;
     padding: 12px;
     box-shadow: 0 18px 32px rgba(0, 0, 0, 0.34);
@@ -1185,7 +1220,8 @@ input[type="file"] {
     }
 
     #btn-sino,
-    #btn-agenda-retorno {
+    #btn-agenda-retorno,
+    #btn-sync-bancos {
         width: 44px;
         height: 44px;
     }
@@ -1204,6 +1240,11 @@ input[type="file"] {
 
     #dropdown-agenda-retorno {
         right: 50px;
+        width: min(94vw, 320px);
+    }
+
+    #dropdown-sync-bancos {
+        right: 100px;
         width: min(94vw, 320px);
     }
 
@@ -2069,10 +2110,38 @@ function garantirAgendaRetornoUI() {
         dropdown.className = "hidden";
         container.appendChild(dropdown);
     }
+
+    garantirSyncBancosUI();
+}
+
+function garantirSyncBancosUI() {
+    const container = document.getElementById("sino-container");
+    if (!container) return;
+
+    let button = document.getElementById("btn-sync-bancos");
+    const sino = document.getElementById("btn-sino");
+
+    if (!button && sino) {
+        button = document.createElement("button");
+        button.id = "btn-sync-bancos";
+        button.type = "button";
+        button.title = "Resolucao de conflitos do banco";
+        button.innerHTML = "&#9881;<span id=\"badge-sync-bancos\">0</span>";
+        button.onclick = toggleSyncBancosDropdown;
+        container.insertBefore(button, sino);
+    }
+
+    let dropdown = document.getElementById("dropdown-sync-bancos");
+    if (!dropdown) {
+        dropdown = document.createElement("div");
+        dropdown.id = "dropdown-sync-bancos";
+        dropdown.className = "hidden";
+        container.appendChild(dropdown);
+    }
 }
 
 function fecharDropdownsCabecalho(excecaoId = "") {
-    ["dropdown-notificacoes", "dropdown-agenda-retorno"].forEach(id => {
+    ["dropdown-notificacoes", "dropdown-agenda-retorno", "dropdown-sync-bancos"].forEach(id => {
         if (id === excecaoId) return;
 
         const el = document.getElementById(id);
@@ -2235,6 +2304,112 @@ function renderizarAgendaRetorno() {
     badge.style.display = totalAgenda > 0 ? "inline-flex" : "none";
 }
 
+function textoAcaoSyncBancos(acao) {
+    const mapa = {
+        atualizacao_automatica_mais_recente: "Aplicou a versao mais recente",
+        foto_preservada_sem_sobrescrever: "Preservou foto existente",
+    };
+    return mapa[acao] || acao || "Registro avaliado";
+}
+
+function renderizarSyncBancosResumo(data) {
+    garantirSyncBancosUI();
+
+    const dropdown = document.getElementById("dropdown-sync-bancos");
+    const badge = document.getElementById("badge-sync-bancos");
+    if (!dropdown || !badge) return;
+
+    const resumo = data.resumo || {};
+    const resolucoes = Array.isArray(data.resolucoes) ? data.resolucoes : [];
+    const conflitos = Array.isArray(data.conflitos) ? data.conflitos : [];
+    const totalPendencias = Number(resumo.conflitos || conflitos.length || 0);
+
+    badge.textContent = String(totalPendencias || resolucoes.length || 0);
+    badge.style.display = (totalPendencias > 0 || resolucoes.length > 0) ? "inline-flex" : "none";
+    badge.style.background = totalPendencias > 0 ? "#f97316" : "#22c55e";
+    badge.style.color = totalPendencias > 0 ? "#fff" : "#052e16";
+
+    dropdown.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.className = "agenda-header";
+    header.innerHTML = "<strong>Banco offline/online</strong>";
+
+    const headerActions = document.createElement("div");
+    headerActions.className = "agenda-header-actions";
+
+    const chip = document.createElement("span");
+    chip.className = "agenda-chip";
+    chip.textContent = totalPendencias > 0 ? `${totalPendencias} conflito(s)` : "Seguro";
+    headerActions.appendChild(chip);
+
+    const abrirConfig = document.createElement("button");
+    abrirConfig.type = "button";
+    abrirConfig.textContent = "Configurar";
+    abrirConfig.onclick = () => {
+        window.location.href = "/configuracoes";
+    };
+    headerActions.appendChild(abrirConfig);
+
+    header.appendChild(headerActions);
+    dropdown.appendChild(header);
+
+    const status = document.createElement("div");
+    status.className = "agenda-card-note";
+    status.textContent = resumo.mensagem || "O sistema resolve automaticamente apenas quando existe uma versao mais recente segura.";
+    dropdown.appendChild(status);
+
+    if (resolucoes.length) {
+        resolucoes.slice(0, 5).forEach(item => {
+            const card = document.createElement("div");
+            card.className = "agenda-card";
+            const title = document.createElement("strong");
+            title.textContent = textoAcaoSyncBancos(item.acao);
+            const meta = document.createElement("div");
+            meta.className = "agenda-card-meta";
+            meta.textContent = `${item.tabela || "-"} | ${item.chave || "-"} | ${item.direcao || "-"}`;
+            const note = document.createElement("div");
+            note.className = "agenda-card-note";
+            note.textContent = "Backup local do valor anterior foi registrado antes da decisao.";
+            card.appendChild(title);
+            card.appendChild(meta);
+            card.appendChild(note);
+            dropdown.appendChild(card);
+        });
+    } else {
+        const vazio = document.createElement("div");
+        vazio.className = "agenda-empty";
+        vazio.textContent = "Nenhuma resolucao automatica registrada ainda.";
+        dropdown.appendChild(vazio);
+    }
+
+    if (conflitos.length) {
+        const alerta = document.createElement("div");
+        alerta.className = "agenda-empty";
+        alerta.textContent = "Alguns conflitos continuam abertos porque envolvem empate, status finalizado ou valores financeiros.";
+        dropdown.appendChild(alerta);
+    }
+}
+
+async function carregarSyncBancosResumo(force = false) {
+    try {
+        garantirSyncBancosUI();
+        const dropdown = document.getElementById("dropdown-sync-bancos");
+        if (!dropdown) return;
+        if (!force && dropdown.dataset.carregado === "1") {
+            return;
+        }
+        const res = await fetch("/api/sync-bancos/resumo", { cache: "no-store" });
+        const data = await res.json();
+        if (data && data.ok) {
+            dropdown.dataset.carregado = "1";
+            renderizarSyncBancosResumo(data);
+        }
+    } catch (e) {
+        return;
+    }
+}
+
 async function carregarNotificacoes(force = false) {
     try {
         const dropdown = document.getElementById("dropdown-notificacoes");
@@ -2334,6 +2509,25 @@ async function toggleAgendaRetornoDropdown(event) {
     }
 }
 
+async function toggleSyncBancosDropdown(event) {
+    if (event) {
+        event.stopPropagation();
+    }
+
+    garantirSyncBancosUI();
+    fecharDropdownsCabecalho("dropdown-sync-bancos");
+
+    const dropdown = document.getElementById("dropdown-sync-bancos");
+    if (!dropdown) {
+        return;
+    }
+
+    dropdown.classList.toggle("hidden");
+    if (!dropdown.classList.contains("hidden")) {
+        await carregarSyncBancosResumo(true);
+    }
+}
+
 const btnSino = document.getElementById("btn-sino");
 if (btnSino) {
     btnSino.onclick = async (event) => {
@@ -2359,10 +2553,12 @@ document.addEventListener("click", (event) => {
 
 function iniciarCarregamentoCabecalhoOperacional() {
     garantirAgendaRetornoUI();
+    garantirSyncBancosUI();
 
     const carregarInicial = () => {
         carregarNotificacoes(true);
         carregarAgendaRetorno(true);
+        carregarSyncBancosResumo(true);
     };
 
     if ("requestIdleCallback" in window) {
@@ -2373,6 +2569,7 @@ function iniciarCarregamentoCabecalhoOperacional() {
 
     setInterval(() => carregarNotificacoes(true), NOTIFICACOES_REFRESH_MS);
     setInterval(() => carregarAgendaRetorno(true), AGENDA_REFRESH_MS);
+    setInterval(() => carregarSyncBancosResumo(true), 60000);
 }
 
 iniciarCarregamentoCabecalhoOperacional();

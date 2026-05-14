@@ -6100,6 +6100,18 @@ def garantir_tabelas_sync_bancos_local(conn=None):
         )
     """)
     c.execute("""
+        CREATE TABLE IF NOT EXISTS sync_bancos_resolucoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tabela TEXT NOT NULL,
+            chave TEXT,
+            acao TEXT NOT NULL,
+            direcao TEXT,
+            status TEXT DEFAULT 'registrado',
+            detalhe_json TEXT,
+            criado_em TEXT
+        )
+    """)
+    c.execute("""
         CREATE TABLE IF NOT EXISTS sync_bancos_fila (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tabela TEXT NOT NULL,
@@ -6287,6 +6299,13 @@ def chave_registro_sync(tabela, registro):
 def detectar_conflito_registro_sync(tabela, registro_origem, registro_destino):
     if hash_registro_sync(registro_origem) == hash_registro_sync(registro_destino):
         return False
+
+    if tabela == "fotos":
+        return False
+
+    if conflito_bloqueado_por_regra_sync(tabela, registro_origem, registro_destino):
+        return True
+
     momento_origem = obter_momento_registro_sync(registro_origem)
     momento_destino = obter_momento_registro_sync(registro_destino)
     if momento_origem and momento_destino:
@@ -6297,6 +6316,11 @@ def detectar_conflito_registro_sync(tabela, registro_origem, registro_destino):
 def montar_conflito_registro_sync(tabela, registro_origem, registro_destino):
     destino_dict = dict(registro_destino) if not isinstance(registro_destino, dict) else dict(registro_destino)
     origem_dict = dict(registro_origem) if not isinstance(registro_origem, dict) else dict(registro_origem)
+    motivo = "empate_ou_data_ausente"
+    if registro_sync_tem_status_finalizado(origem_dict) or registro_sync_tem_status_finalizado(destino_dict):
+        motivo = "status_finalizado_protegido"
+    elif registro_sync_tem_diferenca_financeira(tabela, origem_dict, destino_dict):
+        motivo = "valor_financeiro_protegido"
     return {
         "tabela": tabela,
         "chave": chave_registro_sync(tabela, origem_dict),
@@ -6304,6 +6328,7 @@ def montar_conflito_registro_sync(tabela, registro_origem, registro_destino):
         "hash_destino": hash_registro_sync(destino_dict),
         "momento_origem": str(origem_dict.get("atualizado_em") or ""),
         "momento_destino": str(destino_dict.get("atualizado_em") or ""),
+        "motivo": motivo,
     }
 
 
@@ -6353,6 +6378,97 @@ def registrar_conflitos_sync_bancos(conflitos):
             inseridos += 1
         conn.commit()
         return inseridos
+    finally:
+        conn.close()
+
+
+def registrar_resolucao_sync_bancos(tabela, registro_origem, registro_destino=None, acao="atualizacao_automatica", direcao="", status="registrado"):
+    try:
+        conn = conectar_banco_local_forcado()
+        garantir_tabelas_sync_bancos_local(conn)
+        c = conn.cursor()
+        origem_dict = dict(registro_origem) if not isinstance(registro_origem, dict) else dict(registro_origem or {})
+        destino_dict = dict(registro_destino) if registro_destino is not None and not isinstance(registro_destino, dict) else dict(registro_destino or {})
+        chave = chave_registro_sync(tabela, origem_dict or destino_dict)
+        detalhe = {
+            "tabela": tabela,
+            "chave": chave,
+            "acao": acao,
+            "direcao": direcao,
+            "status": status,
+            "origem": origem_dict,
+            "backup_destino_antes": destino_dict,
+        }
+        c.execute(
+            """
+            INSERT INTO sync_bancos_resolucoes (
+                tabela, chave, acao, direcao, status, detalhe_json, criado_em
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tabela,
+                chave,
+                acao,
+                direcao,
+                status,
+                json.dumps(detalhe, ensure_ascii=False, default=sanitizar_para_json),
+                agora_iso(),
+            ),
+        )
+        c.execute(
+            """
+            UPDATE sync_bancos_conflitos
+            SET resolvido=1
+            WHERE resolvido=0 AND tabela=? AND chave=?
+            """,
+            (tabela, chave),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as erro:
+        log_info("ERRO REGISTRAR RESOLUCAO SYNC BANCOS:", erro)
+
+
+def listar_resolucoes_sync_bancos(limite=8):
+    conn = conectar_banco_local_forcado()
+    try:
+        garantir_tabelas_sync_bancos_local(conn)
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT id, tabela, chave, acao, direcao, status, criado_em, detalhe_json
+            FROM sync_bancos_resolucoes
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(limite or 8),),
+        )
+        return [row_para_dict(row) for row in c.fetchall()]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def listar_conflitos_sync_bancos_abertos(limite=8):
+    conn = conectar_banco_local_forcado()
+    try:
+        garantir_tabelas_sync_bancos_local(conn)
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT id, tabela, chave, momento_origem, momento_destino, detalhe_json, criado_em
+            FROM sync_bancos_conflitos
+            WHERE resolvido=0
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(limite or 8),),
+        )
+        return [row_para_dict(row) for row in c.fetchall()]
+    except Exception:
+        return []
     finally:
         conn.close()
 
@@ -6489,7 +6605,7 @@ def executar_update_sync_seguro(cursor_destino, tabela, colunas_update, valores_
         return False
 
 
-def sincronizar_tabela_incremental(origem_conn, destino_conn, tabela, origem_prevalece_em_empate=False, conflitos=None):
+def sincronizar_tabela_incremental(origem_conn, destino_conn, tabela, origem_prevalece_em_empate=False, conflitos=None, direcao=""):
     if not tabela_existe_no_backend(origem_conn, tabela) or not tabela_existe_no_backend(destino_conn, tabela):
         return {"lidos": 0, "inseridos": 0, "atualizados": 0, "ignorados": 0}
 
@@ -6546,6 +6662,18 @@ def sincronizar_tabela_incremental(origem_conn, destino_conn, tabela, origem_pre
                 estatisticas["ignorados"] += 1
                 continue
 
+            if tabela == "fotos" and hash_registro_sync(registro_dict) != hash_registro_sync(registro_destino):
+                registrar_resolucao_sync_bancos(
+                    tabela,
+                    registro_dict,
+                    registro_destino,
+                    acao="foto_preservada_sem_sobrescrever",
+                    direcao=direcao,
+                    status="preservado",
+                )
+                estatisticas["ignorados"] += 1
+                continue
+
             if detectar_conflito_registro_sync(tabela, registro_dict, registro_destino):
                 if conflitos is not None:
                     conflitos.append(montar_conflito_registro_sync(tabela, registro_dict, registro_destino))
@@ -6576,6 +6704,14 @@ def sincronizar_tabela_incremental(origem_conn, destino_conn, tabela, origem_pre
                 valores_update,
                 id_registro,
             ):
+                registrar_resolucao_sync_bancos(
+                    tabela,
+                    registro_dict,
+                    registro_destino,
+                    acao="atualizacao_automatica_mais_recente",
+                    direcao=direcao,
+                    status="aplicado",
+                )
                 estatisticas["atualizados"] += 1
             else:
                 estatisticas["ignorados"] += 1
@@ -6587,6 +6723,18 @@ def sincronizar_tabela_incremental(origem_conn, destino_conn, tabela, origem_pre
             registro_dict,
         )
         if registro_destino is not None:
+            if tabela == "fotos" and hash_registro_sync(registro_dict) != hash_registro_sync(registro_destino):
+                registrar_resolucao_sync_bancos(
+                    tabela,
+                    registro_dict,
+                    registro_destino,
+                    acao="foto_preservada_sem_sobrescrever",
+                    direcao=direcao,
+                    status="preservado",
+                )
+                estatisticas["ignorados"] += 1
+                continue
+
             if detectar_conflito_registro_sync(tabela, registro_dict, registro_destino):
                 if conflitos is not None:
                     conflitos.append(montar_conflito_registro_sync(tabela, registro_dict, registro_destino))
@@ -6618,6 +6766,14 @@ def sincronizar_tabela_incremental(origem_conn, destino_conn, tabela, origem_pre
                 valores_update,
                 id_destino,
             ):
+                registrar_resolucao_sync_bancos(
+                    tabela,
+                    registro_dict,
+                    registro_destino,
+                    acao="atualizacao_automatica_mais_recente",
+                    direcao=direcao,
+                    status="aplicado",
+                )
                 estatisticas["atualizados"] += 1
             else:
                 estatisticas["ignorados"] += 1
@@ -6652,6 +6808,18 @@ def sincronizar_tabela_incremental(origem_conn, destino_conn, tabela, origem_pre
                 estatisticas["ignorados"] += 1
                 continue
 
+            if tabela == "fotos" and hash_registro_sync(registro_dict) != hash_registro_sync(registro_destino):
+                registrar_resolucao_sync_bancos(
+                    tabela,
+                    registro_dict,
+                    registro_destino,
+                    acao="foto_preservada_sem_sobrescrever",
+                    direcao=direcao,
+                    status="preservado",
+                )
+                estatisticas["ignorados"] += 1
+                continue
+
             if detectar_conflito_registro_sync(tabela, registro_dict, registro_destino):
                 if conflitos is not None:
                     conflitos.append(montar_conflito_registro_sync(tabela, registro_dict, registro_destino))
@@ -6683,6 +6851,14 @@ def sincronizar_tabela_incremental(origem_conn, destino_conn, tabela, origem_pre
                 valores_update,
                 id_destino,
             ):
+                registrar_resolucao_sync_bancos(
+                    tabela,
+                    registro_dict,
+                    registro_destino,
+                    acao="atualizacao_automatica_mais_recente",
+                    direcao=direcao,
+                    status="aplicado",
+                )
                 estatisticas["atualizados"] += 1
             else:
                 estatisticas["ignorados"] += 1
@@ -6763,6 +6939,7 @@ def sincronizar_bancos_incremental(force=False):
                 tabela,
                 origem_prevalece_em_empate=True,
                 conflitos=resumo["conflitos_lista"],
+                direcao="online_para_local",
             )
             resultado_local_online = sincronizar_tabela_incremental(
                 destino_local,
@@ -6770,6 +6947,7 @@ def sincronizar_bancos_incremental(force=False):
                 tabela,
                 origem_prevalece_em_empate=False,
                 conflitos=resumo["conflitos_lista"],
+                direcao="local_para_online",
             )
             resumo["tabelas"][tabela] = {
                 "online_para_local": resultado_online_local,
@@ -8372,6 +8550,67 @@ def perfil_auto_suporte():
     if usuario_admin():
         return "administrador"
     return ""
+
+
+TABELAS_SYNC_FINANCEIRO_PROTEGIDO = {
+    "servico_cobrancas_extras",
+    "orcamentos",
+    "orcamento_itens",
+    "notas_fiscais",
+    "nota_fiscal_itens",
+    "integracao_fiscal",
+}
+
+COLUNAS_SYNC_FINANCEIRAS_PROTEGIDAS = {
+    "valor",
+    "valor_adicional",
+    "valor_total",
+    "total",
+    "subtotal",
+    "desconto",
+    "preco",
+    "custo",
+    "forma_pagamento",
+    "status_pagamento",
+    "pago",
+}
+
+
+def campo_sync_diferente(registro_origem, registro_destino, campo):
+    origem = dict(registro_origem or {})
+    destino = dict(registro_destino or {})
+    if campo not in origem and campo not in destino:
+        return False
+    return sanitizar_para_json(origem.get(campo)) != sanitizar_para_json(destino.get(campo))
+
+
+def registro_sync_tem_status_finalizado(registro):
+    return obter_status_operacional_sync(registro) == "FINALIZADO"
+
+
+def registro_sync_tem_diferenca_financeira(tabela, registro_origem, registro_destino):
+    if tabela not in TABELAS_SYNC_FINANCEIRO_PROTEGIDO and tabela != "servicos":
+        return False
+    return any(
+        campo_sync_diferente(registro_origem, registro_destino, campo)
+        for campo in COLUNAS_SYNC_FINANCEIRAS_PROTEGIDAS
+    )
+
+
+def conflito_bloqueado_por_regra_sync(tabela, registro_origem, registro_destino):
+    if hash_registro_sync(registro_origem) == hash_registro_sync(registro_destino):
+        return False
+
+    if tabela == "fotos":
+        return False
+
+    if registro_sync_tem_status_finalizado(registro_origem) or registro_sync_tem_status_finalizado(registro_destino):
+        return True
+
+    if registro_sync_tem_diferenca_financeira(tabela, registro_origem, registro_destino):
+        return True
+
+    return False
 
 def usuario_auto_suporte_tecnico():
     return perfil_auto_suporte() == "desenvolvedor"
@@ -15292,7 +15531,7 @@ def preparar_sincronizacoes():
         return
 
     endpoint = request.endpoint or ""
-    if endpoint in {"api_mobile_login", "api_mobile_sync", "api_mobile_hud", "api_mobile_configuracao"}:
+    if endpoint in {"api_mobile_login", "api_mobile_sync", "api_mobile_hud", "api_mobile_site_state", "api_mobile_configuracao"}:
         return
 
     sessao_ativa = bool(session.get("usuario"))
@@ -16487,6 +16726,33 @@ def obter_payload_hud():
 def api_hud():
     return obter_payload_hud()
 
+@app.route("/api/sync-bancos/resumo")
+def api_sync_bancos_resumo():
+    if not session.get("usuario"):
+        return jsonify({"erro": "nao autorizado"}), 401
+
+    status = obter_status_sync_bancos()
+    resumo = montar_resumo_sync_bancos_hud(status)
+    resolucoes = listar_resolucoes_sync_bancos(limite=8)
+    conflitos = listar_conflitos_sync_bancos_abertos(limite=8)
+
+    for lista in (resolucoes, conflitos):
+        for item in lista:
+            detalhes_raw = item.get("detalhe_json") or "{}"
+            try:
+                item["detalhes"] = json.loads(detalhes_raw)
+            except Exception:
+                item["detalhes"] = {}
+            item.pop("detalhe_json", None)
+
+    return jsonify({
+        "ok": True,
+        "status": status,
+        "resumo": resumo,
+        "resolucoes": resolucoes,
+        "conflitos": conflitos,
+    })
+
 def obter_payload_status_sync():
     if not session.get("usuario"):
         return {"status": "erro", "mensagem": "", "id": 0}
@@ -17170,6 +17436,192 @@ def api_mobile_login():
         "versao_sistema": obter_versao_sistema(permitir_sem_sessao=True),
     })
 
+def formatar_valor_mobile_site(valor):
+    if valor in (None, ""):
+        return ""
+    texto = str(sanitizar_para_json(valor)).strip()
+    if len(texto) > 140:
+        return texto[:137] + "..."
+    return texto
+
+
+def montar_linhas_mobile_tabela(cursor, tabela, titulo_campos=None, detalhe_campos=None, badge_campos=None, limite=8):
+    titulo_campos = titulo_campos or ("nome", "titulo", "placa", "numero", "id")
+    detalhe_campos = detalhe_campos or ("telefone", "modelo", "observacoes", "descricao", "criado_em")
+    badge_campos = badge_campos or ("status", "perfil", "ativo", "atualizado_em")
+    try:
+        cursor.execute(f"SELECT * FROM {tabela} ORDER BY id DESC LIMIT ?", (int(limite or 8),))
+        rows = [row_para_dict(row) for row in cursor.fetchall()]
+    except Exception:
+        return []
+
+    linhas = []
+    for row in rows:
+        titulo = next((formatar_valor_mobile_site(row.get(campo)) for campo in titulo_campos if row.get(campo) not in (None, "")), "")
+        detalhes = [
+            formatar_valor_mobile_site(row.get(campo))
+            for campo in detalhe_campos
+            if row.get(campo) not in (None, "")
+        ]
+        badge = next((formatar_valor_mobile_site(row.get(campo)) for campo in badge_campos if row.get(campo) not in (None, "")), "")
+        linhas.append({
+            "title": titulo or f"{tabela} #{row.get('id') or '-'}",
+            "detail": " | ".join(detalhes[:3]) or "Registro sincronizado do site.",
+            "badge": badge or "Site",
+        })
+    return linhas
+
+
+def contar_tabela_mobile(cursor, tabela):
+    try:
+        cursor.execute(f"SELECT COUNT(*) AS total FROM {tabela}")
+        row = cursor.fetchone()
+        return int((row["total"] if hasattr(row, "__getitem__") else row[0]) or 0)
+    except Exception:
+        return 0
+
+
+def somar_financeiro_mobile(cursor):
+    try:
+        cursor.execute("SELECT COALESCE(SUM(COALESCE(valor, 0) + COALESCE(valor_adicional, 0)), 0) AS total FROM servicos")
+        row = cursor.fetchone()
+        return float((row["total"] if hasattr(row, "__getitem__") else row[0]) or 0)
+    except Exception:
+        return 0.0
+
+
+def montar_payload_mobile_modulos():
+    conn = None
+    try:
+        conn = conectar()
+        c = conn.cursor()
+        total_clientes = contar_tabela_mobile(c, "clientes")
+        total_servicos = contar_tabela_mobile(c, "servicos")
+        total_fotos = contar_tabela_mobile(c, "fotos")
+        total_retorno = contar_tabela_mobile(c, "retornos_clientes")
+        total_orcamentos = contar_tabela_mobile(c, "orcamentos")
+        total_notas = contar_tabela_mobile(c, "notas_fiscais")
+        total_auditoria = contar_tabela_mobile(c, "auditoria")
+        total_pneus = contar_tabela_mobile(c, "produtos_pneu")
+        total_checklist = contar_tabela_mobile(c, "checklist_itens")
+        total_financeiro = somar_financeiro_mobile(c)
+
+        modulos = {
+            "inicio": {
+                "counters": [
+                    {"label": "Clientes", "value": total_clientes, "icon": "person"},
+                    {"label": "Servicos", "value": total_servicos, "icon": "water"},
+                    {"label": "Fotos", "value": total_fotos, "icon": "camera"},
+                    {"label": "Retornos", "value": total_retorno, "icon": "calendar"},
+                ],
+                "rows": montar_linhas_mobile_tabela(c, "servicos", ("observacoes", "status", "id"), ("tipo_nome", "entrada", "entrega_prevista"), ("status",), 5),
+            },
+            "clientes": {
+                "counters": [{"label": "Clientes", "value": total_clientes, "icon": "person"}],
+                "rows": montar_linhas_mobile_tabela(c, "clientes", ("nome", "placa_principal", "id"), ("telefone", "placa_principal", "criado_em"), ("atualizado_em",), 8),
+            },
+            "painel": {
+                "counters": [{"label": "Atendimentos", "value": total_servicos, "icon": "car"}],
+                "rows": montar_linhas_mobile_tabela(c, "servicos", ("observacoes", "status", "id"), ("entrada", "entrega_prevista", "entrega"), ("status",), 8),
+            },
+            "servicos": {
+                "counters": [{"label": "Servicos", "value": total_servicos, "icon": "water"}],
+                "rows": montar_linhas_mobile_tabela(c, "servicos", ("observacoes", "status", "id"), ("valor", "valor_adicional", "entrada"), ("status",), 8),
+            },
+            "historico": {
+                "counters": [{"label": "Registros", "value": total_servicos, "icon": "time"}],
+                "rows": montar_linhas_mobile_tabela(c, "servicos", ("observacoes", "status", "id"), ("entrada", "entrega", "finalizado_por_nome"), ("status",), 8),
+            },
+            "retornos": {
+                "counters": [{"label": "Retornos", "value": total_retorno, "icon": "calendar"}],
+                "rows": montar_linhas_mobile_tabela(c, "retornos_clientes", ("placa", "cliente", "id"), ("status", "proximo_contato_em", "observacao"), ("status",), 8),
+            },
+            "financeiro": {
+                "counters": [{"label": "Receita", "value": round(total_financeiro, 2), "icon": "cash"}],
+                "rows": montar_linhas_mobile_tabela(c, "servico_cobrancas_extras", ("descricao", "id"), ("valor", "criado_por_nome", "criado_em"), ("valor",), 8),
+            },
+            "orcamentos": {
+                "counters": [{"label": "Orcamentos", "value": total_orcamentos, "icon": "document-text"}],
+                "rows": montar_linhas_mobile_tabela(c, "orcamentos", ("numero", "cliente_nome", "id"), ("status", "valor_total", "criado_em"), ("status",), 8),
+            },
+            "notaFiscal": {
+                "counters": [{"label": "Notas", "value": total_notas, "icon": "receipt"}],
+                "rows": montar_linhas_mobile_tabela(c, "notas_fiscais", ("numero", "rps_numero", "id"), ("cliente_nome", "status", "valor_total"), ("status",), 8),
+            },
+            "pneus": {
+                "counters": [{"label": "Pneus", "value": total_pneus, "icon": "construct"}],
+                "rows": montar_linhas_mobile_tabela(c, "produtos_pneu", ("nome", "id"), ("atualizado_em", "criado_em"), ("ativo",), 8),
+            },
+            "checklist": {
+                "counters": [{"label": "Itens", "value": total_checklist, "icon": "checkbox"}],
+                "rows": montar_linhas_mobile_tabela(c, "checklist_itens", ("nome", "id"), ("ordem", "criado_em"), ("ativo",), 8),
+            },
+            "auditoria": {
+                "counters": [{"label": "Eventos", "value": total_auditoria, "icon": "shield-checkmark"}],
+                "rows": montar_linhas_mobile_tabela(c, "auditoria", ("acao", "entidade", "id"), ("usuario_nome", "criado_em", "placa"), ("entidade",), 8),
+            },
+            "empresas": {
+                "counters": [{"label": "Empresas", "value": contar_tabela_mobile(c, "empresas"), "icon": "business"}],
+                "rows": montar_linhas_mobile_tabela(c, "empresas", ("nome_fantasia", "razao_social", "id"), ("cnpj", "telefone", "cidade"), ("status",), 8),
+            },
+        }
+
+        modulos["status"] = {
+            "counters": [
+                {"label": "Pendencias", "value": contar_tabela_mobile(c, "sync_bancos_fila"), "icon": "sync"},
+                {"label": "Conflitos", "value": contar_conflitos_sync_bancos_abertos(), "icon": "alert-circle"},
+            ],
+            "rows": listar_resolucoes_sync_bancos(limite=5),
+        }
+        modulos["diagnostico"] = modulos["status"]
+        modulos["configSite"] = {
+            "counters": [{"label": "Versao", "value": obter_versao_sistema(permitir_sem_sessao=True), "icon": "settings"}],
+            "rows": montar_linhas_mobile_tabela(c, "configuracao_empresa", ("versao_sistema", "marca_nome", "id"), ("clima_local_label", "atualizado_em"), ("empresa_id",), 5),
+        }
+        modulos["autoSuporte"] = {
+            "counters": [{"label": "Eventos", "value": total_auditoria, "icon": "construct"}],
+            "rows": montar_linhas_mobile_tabela(c, "auditoria", ("acao", "id"), ("entidade", "usuario_nome", "criado_em"), ("entidade",), 5),
+        }
+        modulos["changelog"] = {
+            "counters": [{"label": "Versao", "value": obter_versao_sistema(permitir_sem_sessao=True), "icon": "git-branch"}],
+            "rows": [{"title": obter_versao_sistema(permitir_sem_sessao=True), "detail": "Versao atual configurada no site.", "badge": "Site"}],
+        }
+        return modulos
+    except Exception as erro:
+        log_info("ERRO MOBILE MODULOS:", erro)
+        return {}
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+
+def montar_payload_mobile_site_state():
+    hud = obter_payload_hud()
+    clima = obter_resultado_clima_api(permitir_rede=True)
+    modulos = montar_payload_mobile_modulos()
+    modulos["clima"] = {
+        "counters": [{"label": "Temperatura", "value": clima.get("temp") or "--", "icon": "thermometer"}],
+        "rows": [
+            {
+                "title": f"{clima.get('icone') or ''} {clima.get('clima') or 'Clima'}".strip(),
+                "detail": clima.get("sugestao") or "Sugestao operacional do site.",
+                "badge": str(clima.get("temp") or "--"),
+            }
+        ],
+    }
+    return {
+        "hud": hud,
+        "clima": clima,
+        "modulos": modulos,
+        "versao_sistema": obter_versao_sistema(permitir_sem_sessao=True),
+        "server_time": agora_iso(),
+        "refresh_interval_seconds": 10,
+    }
+
+
 @app.route("/api/mobile/hud")
 def api_mobile_hud():
     usuario_info = autorizar_mobile_token_detalhado()
@@ -17187,9 +17639,30 @@ def api_mobile_hud():
     return jsonify({
         "ok": True,
         "hud": payload,
+        "clima": obter_resultado_clima_api(permitir_rede=True),
         "usuario": contexto,
         "versao_sistema": obter_versao_sistema(permitir_sem_sessao=True),
         "server_time": agora_iso(),
+    })
+
+@app.route("/api/mobile/site-state")
+def api_mobile_site_state():
+    usuario_info = autorizar_mobile_token_detalhado()
+    if not usuario_info:
+        return jsonify({
+            "ok": False,
+            "erro": "Token de sincronizacao mobile ausente ou invalido."
+        }), 401
+
+    contexto = aplicar_contexto_sessao_mobile(usuario_info)
+    payload = montar_payload_mobile_site_state()
+    if isinstance(payload.get("hud"), dict) and payload["hud"].get("erro"):
+        return jsonify({"ok": False, "erro": payload["hud"].get("erro")}), 401
+
+    return jsonify({
+        "ok": True,
+        "usuario": contexto,
+        **payload,
     })
 
 @app.route("/api/mobile/configuracao", methods=["GET", "POST"])

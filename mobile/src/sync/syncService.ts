@@ -1,6 +1,6 @@
 import { getDatabase } from "../database/db";
 import { normalizeServerUrl } from "../config";
-import { MobileConfigResult, MobileHudPayload, MobileHudResult, QueueRow, SyncConfig, SyncResult } from "./types";
+import { MobileConfigResult, MobileHudPayload, MobileHudResult, MobileSiteState, QueueRow, SyncConfig, SyncResult } from "./types";
 
 const SYNC_BATCH_SIZE = 50;
 
@@ -104,9 +104,14 @@ function normalizeVersionText(value: unknown) {
 export async function fetchMobileHud(config: SyncConfig): Promise<MobileHudResult> {
   const endpointUrl = normalizeServerUrl(config.endpointUrl);
   try {
-    const response = await fetch(`${endpointUrl}/api/mobile/hud`, {
+    let response = await fetch(`${endpointUrl}/api/mobile/site-state`, {
       headers: authHeaders(config)
     });
+    if (response.status === 404) {
+      response = await fetch(`${endpointUrl}/api/mobile/hud`, {
+        headers: authHeaders(config)
+      });
+    }
     if (!response.ok) {
       throw new Error(`Servidor retornou HTTP ${response.status}`);
     }
@@ -115,8 +120,18 @@ export async function fetchMobileHud(config: SyncConfig): Promise<MobileHudResul
       throw new Error(String(data.erro || "Falha ao carregar HUD do site."));
     }
     const hud: MobileHudPayload = data.hud || {};
-    return {
+    const site: MobileSiteState = {
+      clima: data.clima,
       hud,
+      modulos: data.modulos,
+      refresh_interval_seconds: data.refresh_interval_seconds,
+      server_time: data.server_time,
+      versao_sistema: data.versao_sistema
+    };
+    return {
+      clima: data.clima,
+      hud,
+      site,
       version: normalizeVersionText(data.versao_sistema || hud.versao)
     };
   } catch (error) {
