@@ -22680,13 +22680,13 @@ def executar_acao_sync_bancos_configuracoes():
     if not session.get("usuario"):
         return redirect("/login")
 
-    sincronizar_sessao_usuario()
-    if not usuario_gerencia_banco_online():
-        definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem agir sobre conflitos do banco.")
-        return redirect("/configuracoes")
-
-    acao = normalizar_texto_campo(request.form.get("acao"))
     try:
+        sincronizar_sessao_usuario_seguro(contexto="SYNC_BANCOS_CONFIGURACOES")
+        if not usuario_gerencia_banco_online():
+            definir_feedback_configuracoes("erro", "Somente administradores ou desenvolvedores podem agir sobre conflitos do banco.")
+            return redirect(destino_configuracoes("banco"))
+
+        acao = normalizar_texto_campo(request.form.get("acao"))
         if acao == "reprocessar_seguro":
             resultado = sincronizar_bancos_incremental(force=True)
             conflitos = contar_conflitos_sync_bancos_abertos()
@@ -22721,9 +22721,10 @@ def executar_acao_sync_bancos_configuracoes():
         else:
             definir_feedback_configuracoes("erro", "Acao de sincronizacao invalida.")
     except Exception as erro:
+        log_info("ERRO ACAO SYNC BANCOS CONFIGURACOES:", erro)
         definir_feedback_configuracoes("erro", f"Nao foi possivel executar a acao: {erro}")
 
-    return redirect("/configuracoes")
+    return redirect(destino_configuracoes("banco"))
 
 @app.route("/configuracoes/banco/migrar", methods=["POST"])
 def migrar_banco_para_supabase():

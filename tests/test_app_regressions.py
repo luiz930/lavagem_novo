@@ -1958,6 +1958,25 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(feedback.get("tipo"), "erro")
         self.assertIn("Nao foi possivel salvar a configuracao do banco online", feedback.get("mensagem", ""))
 
+    def test_sync_acao_banco_reprocessar_nao_retorna_500_quando_banco_falha(self):
+        with app_module.app.test_request_context(
+            "/configuracoes/banco/sync-acao",
+            method="POST",
+            data={"acao": "reprocessar_seguro"},
+        ):
+            session["usuario"] = "admin"
+            session["usuario_perfil"] = "admin"
+            with patch.object(app_module, "sincronizar_sessao_usuario", side_effect=RuntimeError("banco reiniciando")), \
+                 patch.object(app_module, "sincronizar_bancos_incremental", side_effect=RuntimeError("sync falhou")):
+                response = app_module.executar_acao_sync_bancos_configuracoes()
+
+            feedback = session.get("configuracoes_feedback") or {}
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/configuracoes/banco", response.location)
+        self.assertEqual(feedback.get("tipo"), "erro")
+        self.assertIn("Nao foi possivel executar a acao", feedback.get("mensagem", ""))
+
     def test_salvar_configuracao_backup_form_isola_por_empresa(self):
         conn = self._criar_banco_admin_memoria()
         wrapper = PersistentCompatConnection(conn)
