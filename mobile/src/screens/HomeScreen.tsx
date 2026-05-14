@@ -1,6 +1,4 @@
 import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
 
 import { UserSession } from "../auth/authRepository";
 import { DEFAULT_SERVER_URL, normalizeServerUrl } from "../config";
@@ -55,95 +53,18 @@ export function HomeScreen({ session, onLogout }: Props) {
       onSelect={setActiveScreen}
       onLogout={onLogout}
     >
-      <View style={styles.statusBand}>
-        <View style={styles.statusItem}>
-          <Text style={styles.statusLabel}>Banco</Text>
-          <Text style={styles.statusValue}>SQLite local</Text>
-        </View>
-        <View style={styles.statusItem}>
-          <Text style={styles.statusLabel}>Pendencias</Text>
-          <Text style={styles.statusValue}>{pending}</Text>
-        </View>
-      </View>
-
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <View>
-            <Text style={styles.cardTitle}>Sincronizacao</Text>
-            <Text style={styles.muted}>{syncMessage}</Text>
-          </View>
-          <Pressable onPress={syncNow} style={styles.syncButton}>
-            <Ionicons color="#111827" name="sync" size={20} />
-          </Pressable>
-        </View>
-        <Text style={styles.serverText}>{endpointUrl || DEFAULT_SERVER_URL}</Text>
-      </View>
-
       <NativeScreenContent
         key={activeScreen}
         screen={activeScreen}
         onOpenCamera={() => setCameraOpen(true)}
         onRefreshPending={refreshPending}
+        sync={{
+          pending,
+          message: syncMessage,
+          endpointUrl: endpointUrl || DEFAULT_SERVER_URL,
+          onSyncNow: syncNow
+        }}
       />
     </AppShell>
   );
 }
-
-const styles = StyleSheet.create({
-  statusBand: {
-    flexDirection: "row",
-    gap: spacing.md
-  },
-  statusItem: {
-    flex: 1,
-    borderRadius: 18,
-    backgroundColor: colors.surfaceSoft,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.md
-  },
-  statusLabel: {
-    color: colors.muted,
-    marginBottom: 4
-  },
-  statusValue: {
-    color: colors.text,
-    fontSize: 20,
-    fontWeight: "900"
-  },
-  card: {
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    padding: spacing.lg,
-    gap: spacing.md
-  },
-  cardTitle: {
-    color: colors.text,
-    fontSize: 20,
-    fontWeight: "900"
-  },
-  cardHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: spacing.md
-  },
-  syncButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: colors.primary,
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  muted: {
-    color: colors.muted,
-    lineHeight: 20
-  },
-  serverText: {
-    color: colors.text,
-    fontWeight: "800"
-  }
-});

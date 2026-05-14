@@ -10,6 +10,12 @@ type Props = {
   screen: AppScreenKey;
   onOpenCamera: () => void;
   onRefreshPending: () => void;
+  sync: {
+    pending: number;
+    message: string;
+    endpointUrl: string;
+    onSyncNow: () => void;
+  };
 };
 
 const titles: Record<AppScreenKey, string> = {
@@ -39,9 +45,12 @@ export function screenTitle(screen: AppScreenKey) {
   return titles[screen];
 }
 
-export function NativeScreenContent({ screen, onOpenCamera, onRefreshPending }: Props) {
-  if (screen === "inicio" || screen === "painel") {
+export function NativeScreenContent({ screen, onOpenCamera, onRefreshPending, sync }: Props) {
+  if (screen === "inicio") {
     return <InicioPainel onOpenCamera={onOpenCamera} />;
+  }
+  if (screen === "painel") {
+    return <PainelScreen onOpenCamera={onOpenCamera} />;
   }
   if (screen === "clientes") {
     return <ClientesScreen onSaved={onRefreshPending} />;
@@ -49,7 +58,7 @@ export function NativeScreenContent({ screen, onOpenCamera, onRefreshPending }: 
   if (screen === "servicos") {
     return <ServicosScreen onSaved={onRefreshPending} onOpenCamera={onOpenCamera} />;
   }
-  return <ModuleScreen screen={screen} />;
+  return <ModuleScreen screen={screen} sync={sync} />;
 }
 
 function InicioPainel({ onOpenCamera }: { onOpenCamera: () => void }) {
@@ -75,6 +84,44 @@ function InicioPainel({ onOpenCamera }: { onOpenCamera: () => void }) {
           <Text style={styles.primaryButtonText}>Registrar foto</Text>
         </Pressable>
       </View>
+    </>
+  );
+}
+
+function PainelScreen({ onOpenCamera }: { onOpenCamera: () => void }) {
+  return (
+    <>
+      <View style={styles.toolbarCard}>
+        <View>
+          <Text style={styles.pill}>Painel operacional</Text>
+          <Text style={styles.cardTitle}>Controle dos servicos em andamento</Text>
+          <Text style={styles.muted}>Fluxo separado por lavagem, finalizacao, prioridade e fotos.</Text>
+        </View>
+        <Pressable onPress={onOpenCamera} style={styles.cameraFab}>
+          <Ionicons color="#111827" name="camera" size={22} />
+        </Pressable>
+      </View>
+      <View style={styles.grid}>
+        <Metric label="Em atendimento" value={0} icon="car" />
+        <Metric label="Lavagem" value={0} icon="water" />
+        <Metric label="Finalizacao" value={0} icon="checkmark-done" />
+        <Metric label="Atrasados" value={0} icon="alert-circle" />
+      </View>
+      {["Etapa de Lavagem", "Etapa de Finalizacao"].map((title) => (
+        <View key={title} style={styles.stageCard}>
+          <View style={styles.sectionHeader}>
+            <View>
+              <Text style={styles.pill}>{title}</Text>
+              <Text style={styles.muted}>Nenhum atendimento sincronizado nesta etapa.</Text>
+            </View>
+            <Ionicons color={colors.primary} name="timer" size={24} />
+          </View>
+          <View style={styles.servicePreview}>
+            <Text style={styles.itemTitle}>Fila vazia</Text>
+            <Text style={styles.muted}>Ao abrir servicos no app, eles aparecem aqui com cliente, veiculo, etapa e fotos.</Text>
+          </View>
+        </View>
+      ))}
     </>
   );
 }
@@ -173,12 +220,24 @@ function ServicosScreen({ onSaved, onOpenCamera }: { onSaved: () => void; onOpen
   );
 }
 
-function ModuleScreen({ screen }: { screen: AppScreenKey }) {
+function ModuleScreen({ screen, sync }: { screen: AppScreenKey; sync: Props["sync"] }) {
   const config = useMemo(() => moduleConfig(screen), [screen]);
   return (
     <>
+      <View style={styles.pageHeaderCard}>
+        <View>
+          <Text style={styles.pill}>{config.kicker}</Text>
+          <Text style={styles.cardTitle}>{screenTitle(screen)}</Text>
+          <Text style={styles.muted}>{config.subtitle}</Text>
+        </View>
+        <Ionicons color={colors.primary} name={config.icon} size={28} />
+      </View>
+
+      {config.variant === "calendar" && <CalendarStrip />}
+      {config.variant === "finance" && <FinanceSummary />}
+      {config.variant === "diagnostic" && <DiagnosticSummary sync={sync} />}
+
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>{screenTitle(screen)}</Text>
         <View style={styles.filterGrid}>
           {config.filters.map((item) => (
             <View key={item} style={styles.fakeInput}>
@@ -196,7 +255,7 @@ function ModuleScreen({ screen }: { screen: AppScreenKey }) {
       </View>
 
       {config.sections.map((section) => (
-        <View key={section.title} style={styles.card}>
+        <View key={section.title} style={config.variant === "timeline" ? styles.timelineCard : styles.card}>
           <View style={styles.sectionHeader}>
             <View>
               <Text style={styles.cardTitle}>{section.title}</Text>
@@ -205,7 +264,7 @@ function ModuleScreen({ screen }: { screen: AppScreenKey }) {
             <Ionicons color={colors.primary} name={section.icon} size={22} />
           </View>
           {section.rows.map((item) => (
-            <View key={item.title} style={styles.listItem}>
+            <View key={item.title} style={config.variant === "table" ? styles.tableRow : styles.listItem}>
               <View style={styles.itemRow}>
                 <Text style={styles.itemTitle}>{item.title}</Text>
                 <Text style={styles.badge}>{item.badge}</Text>
@@ -215,6 +274,8 @@ function ModuleScreen({ screen }: { screen: AppScreenKey }) {
           ))}
         </View>
       ))}
+
+      {(screen === "configuracoes" || screen === "status") && <SyncPanel sync={sync} />}
     </>
   );
 }
@@ -227,6 +288,10 @@ type SectionConfig = {
 };
 
 type ModuleConfig = {
+  kicker: string;
+  subtitle: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  variant?: "cards" | "timeline" | "calendar" | "table" | "finance" | "diagnostic";
   filters: string[];
   actions: string[];
   sections: SectionConfig[];
@@ -239,6 +304,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
     clientes: baseModule("Clientes"),
     servicos: baseModule("Servicos"),
     historico: {
+      kicker: "Historico",
+      subtitle: "Busca e linha do tempo dos atendimentos",
+      icon: "time",
+      variant: "timeline",
       filters: ["Buscar placa ou cliente", "Periodo", "Status"],
       actions: ["Filtrar", "Exportar"],
       sections: [
@@ -253,6 +322,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     retornos: {
+      kicker: "Agenda",
+      subtitle: "Retornos por data, cliente e responsavel",
+      icon: "calendar",
+      variant: "calendar",
       filters: ["Data", "Cliente", "Responsavel"],
       actions: ["Agendar", "Confirmar"],
       sections: [
@@ -263,6 +336,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     checklist: {
+      kicker: "Finalizacao",
+      subtitle: "Itens de conferencia usados no atendimento",
+      icon: "checkbox",
+      variant: "table",
       filters: ["Item", "Categoria", "Ativo"],
       actions: ["Novo item", "Ordenar"],
       sections: [
@@ -273,6 +350,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     pneus: {
+      kicker: "Produtos",
+      subtitle: "Pneus e aplicacoes vinculadas aos servicos",
+      icon: "construct",
+      variant: "table",
       filters: ["Produto", "Estoque", "Aplicacao"],
       actions: ["Cadastrar", "Baixa"],
       sections: [
@@ -283,6 +364,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     financeiro: {
+      kicker: "Relatorios",
+      subtitle: "Resumo financeiro e filtros do periodo",
+      icon: "cash",
+      variant: "finance",
       filters: ["Periodo", "Tipo", "Forma"],
       actions: ["Atualizar", "Relatorio"],
       sections: [
@@ -293,6 +378,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     orcamentos: {
+      kicker: "Comercial",
+      subtitle: "Orcamentos, itens, totais e envio",
+      icon: "document-text",
+      variant: "cards",
       filters: ["Cliente", "Validade", "Status"],
       actions: ["Novo", "Enviar"],
       sections: [
@@ -303,6 +392,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     notaFiscal: {
+      kicker: "Fiscal",
+      subtitle: "Emissao, consulta e status das notas",
+      icon: "receipt",
+      variant: "table",
       filters: ["Periodo", "Cliente", "Status"],
       actions: ["Emitir", "Consultar"],
       sections: [
@@ -313,6 +406,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     clima: {
+      kicker: "Operacao",
+      subtitle: "Clima atual e previsao para planejar atendimentos",
+      icon: "cloud",
+      variant: "cards",
       filters: ["Cidade", "Periodo", "Alerta"],
       actions: ["Atualizar", "Ver previsao"],
       sections: [
@@ -323,6 +420,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     auditoria: {
+      kicker: "Seguranca",
+      subtitle: "Usuarios, acoes e detalhes de auditoria",
+      icon: "search",
+      variant: "timeline",
       filters: ["Usuario", "Acao", "Periodo"],
       actions: ["Buscar", "Detalhes"],
       sections: [
@@ -333,6 +434,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     changelog: {
+      kicker: "Versoes",
+      subtitle: "Historico de mudancas publicadas",
+      icon: "list",
+      variant: "timeline",
       filters: ["Versao", "Tipo", "Data"],
       actions: ["Atualizar", "Detalhar"],
       sections: [
@@ -343,6 +448,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     empresas: {
+      kicker: "Licenca",
+      subtitle: "Empresa ativa, plano, limites e status",
+      icon: "business",
+      variant: "cards",
       filters: ["Empresa", "Plano", "Status"],
       actions: ["Salvar", "Licenca"],
       sections: [
@@ -353,6 +462,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     diagnostico: {
+      kicker: "Diagnostico",
+      subtitle: "Checklist tecnico do sistema",
+      icon: "medkit",
+      variant: "diagnostic",
       filters: ["Componente", "Resultado", "Data"],
       actions: ["Verificar", "Corrigir"],
       sections: [
@@ -363,6 +476,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     status: {
+      kicker: "Status",
+      subtitle: "Saude do app, site e fila de sincronizacao",
+      icon: "pulse",
+      variant: "diagnostic",
       filters: ["Servico", "Severidade", "Periodo"],
       actions: ["Atualizar", "Logs"],
       sections: [
@@ -373,6 +490,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     autoSuporte: {
+      kicker: "Suporte",
+      subtitle: "Acoes tecnicas e resultados protegidos",
+      icon: "hardware-chip",
+      variant: "diagnostic",
       filters: ["Acao", "Permissao", "Resultado"],
       actions: ["Executar", "Confirmar"],
       sections: [
@@ -383,6 +504,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     configSite: {
+      kicker: "Aparencia",
+      subtitle: "Identidade, tema e menu do sistema",
+      icon: "color-palette",
+      variant: "cards",
       filters: ["Marca", "Menu", "Tema"],
       actions: ["Salvar", "Preview"],
       sections: [
@@ -393,6 +518,10 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
       ]
     },
     configuracoes: {
+      kicker: "Sistema",
+      subtitle: "Conta, banco local, backup e sincronizacao",
+      icon: "settings",
+      variant: "diagnostic",
       filters: ["Conta", "Banco", "Backup"],
       actions: ["Salvar", "Sincronizar"],
       sections: [
@@ -408,10 +537,71 @@ function moduleConfig(screen: AppScreenKey): ModuleConfig {
 
 function baseModule(name: string): ModuleConfig {
   return {
+    kicker: name,
+    subtitle: "Resumo do modulo",
+    icon: "apps",
+    variant: "cards",
     filters: ["Busca", "Periodo", "Status"],
     actions: ["Atualizar", "Novo"],
     sections: [section(name, "Resumo do modulo", "apps", [row("Registros", "Dados locais e sincronizados.", "Local")])]
   };
+}
+
+function CalendarStrip() {
+  return (
+    <View style={styles.calendarStrip}>
+      {["Hoje", "Amanha", "Semana"].map((label, index) => (
+        <View key={label} style={[styles.calendarDay, index === 0 && styles.calendarDayActive]}>
+          <Text style={[styles.calendarDayText, index === 0 && styles.calendarDayTextActive]}>{label}</Text>
+          <Text style={[styles.muted, index === 0 && styles.calendarDayTextActive]}>0 retorno(s)</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function FinanceSummary() {
+  return (
+    <View style={styles.financeBand}>
+      <Metric label="Receitas" value={0} icon="trending-up" />
+      <Metric label="Extras" value={0} icon="add-circle" />
+      <Metric label="Fechamento" value={0} icon="calculator" />
+    </View>
+  );
+}
+
+function DiagnosticSummary({ sync }: { sync: Props["sync"] }) {
+  return (
+    <View style={styles.diagnosticGrid}>
+      <View style={styles.diagnosticItem}>
+        <Ionicons color={colors.success} name="checkmark-circle" size={22} />
+        <Text style={styles.itemTitle}>App nativo</Text>
+        <Text style={styles.muted}>React Native com banco local.</Text>
+      </View>
+      <View style={styles.diagnosticItem}>
+        <Ionicons color={sync.pending > 0 ? colors.primary : colors.success} name="sync" size={22} />
+        <Text style={styles.itemTitle}>{sync.pending} pendencia(s)</Text>
+        <Text style={styles.muted}>{sync.message}</Text>
+      </View>
+    </View>
+  );
+}
+
+function SyncPanel({ sync }: { sync: Props["sync"] }) {
+  return (
+    <View style={styles.card}>
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.cardTitle}>Sincronizacao</Text>
+          <Text style={styles.muted}>{sync.endpointUrl}</Text>
+        </View>
+        <Pressable onPress={sync.onSyncNow} style={styles.cameraFab}>
+          <Ionicons color="#111827" name="sync" size={22} />
+        </Pressable>
+      </View>
+      <Text style={styles.muted}>{sync.message}</Text>
+    </View>
+  );
 }
 
 function section(title: string, subtitle: string, icon: keyof typeof Ionicons.glyphMap, rows: SectionConfig["rows"]): SectionConfig {
@@ -452,6 +642,43 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     gap: spacing.md
   },
+  pageHeaderCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "rgba(250, 204, 21, 0.06)",
+    padding: spacing.lg,
+    gap: spacing.md,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center"
+  },
+  toolbarCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    gap: spacing.md,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center"
+  },
+  stageCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    gap: spacing.md
+  },
+  servicePreview: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(250, 204, 21, 0.12)",
+    backgroundColor: colors.surfaceSoft,
+    padding: spacing.md
+  },
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -476,6 +703,26 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 20,
     fontWeight: "900"
+  },
+  pill: {
+    alignSelf: "flex-start",
+    color: "#111827",
+    backgroundColor: colors.primary,
+    borderRadius: 999,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    overflow: "hidden",
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase"
+  },
+  cameraFab: {
+    width: 50,
+    height: 50,
+    borderRadius: 16,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center"
   },
   input: {
     minHeight: 50,
@@ -542,6 +789,48 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: spacing.md
   },
+  calendarStrip: {
+    flexDirection: "row",
+    gap: spacing.sm
+  },
+  calendarDay: {
+    flex: 1,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.md
+  },
+  calendarDayActive: {
+    backgroundColor: colors.primary
+  },
+  calendarDayText: {
+    color: colors.text,
+    fontWeight: "900"
+  },
+  calendarDayTextActive: {
+    color: "#111827"
+  },
+  financeBand: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.md
+  },
+  diagnosticGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.md
+  },
+  diagnosticItem: {
+    flexBasis: "47%",
+    flexGrow: 1,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.md,
+    gap: spacing.xs
+  },
   filterGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -566,6 +855,26 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: colors.surfaceSoft,
     padding: spacing.md,
+    gap: spacing.xs
+  },
+  timelineCard: {
+    borderRadius: 22,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.primary,
+    borderTopWidth: 1,
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
+    borderTopColor: colors.border,
+    borderRightColor: colors.border,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    gap: spacing.md
+  },
+  tableRow: {
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(250, 204, 21, 0.12)",
+    paddingVertical: spacing.md,
     gap: spacing.xs
   },
   itemTitle: {

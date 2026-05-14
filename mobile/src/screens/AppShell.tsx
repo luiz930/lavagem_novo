@@ -1,5 +1,5 @@
 import { ReactNode, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
 import { colors, spacing } from "../theme";
@@ -84,36 +84,15 @@ export function AppShell({ active, title, subtitle, onSelect, onLogout, children
   return (
     <View style={styles.root}>
       <View style={styles.appFrame}>
-        {!desktopSidebar && sidebarOpen && <Pressable style={styles.drawerBackdrop} onPress={() => setSidebarOpen(false)} />}
+        {desktopSidebar && <Sidebar active={active} onSelect={selectScreen} />}
 
-        {(desktopSidebar || sidebarOpen) && (
-          <View style={[styles.sidebar, !desktopSidebar && styles.sidebarOverlay]}>
-            <View style={styles.sidebarHeader}>
-              <View style={styles.sidebarLogo}>
-                <Text style={styles.sidebarLogoText}>W</Text>
-              </View>
-              <Text style={styles.sidebarTitle}>Wagen</Text>
-              <Text style={styles.sidebarSubtitle}>Estetica automotiva</Text>
+        {!desktopSidebar && (
+          <Modal visible={sidebarOpen} transparent animationType="slide" onRequestClose={() => setSidebarOpen(false)}>
+            <View style={styles.modalLayer}>
+              <Sidebar active={active} onSelect={selectScreen} overlay />
+              <Pressable style={styles.drawerBackdrop} onPress={() => setSidebarOpen(false)} />
             </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sidebarNav}>
-              {menuGroups.map((group) => (
-                <View key={group.label} style={styles.sidebarGroup}>
-                  <Text style={styles.sidebarGroupLabel}>{group.label}</Text>
-                  {group.items.map((item) => (
-                    <Pressable
-                      key={item.key}
-                      onPress={() => selectScreen(item.key)}
-                      style={[styles.sidebarItem, active === item.key && styles.sidebarItemActive]}
-                    >
-                      <Ionicons color={active === item.key ? "#111827" : colors.text} name={item.icon} size={18} />
-                      <Text style={[styles.sidebarItemText, active === item.key && styles.sidebarItemTextActive]}>{item.label}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-              ))}
-            </ScrollView>
-          </View>
+          </Modal>
         )}
 
         <View style={styles.main}>
@@ -140,6 +119,38 @@ export function AppShell({ active, title, subtitle, onSelect, onLogout, children
   );
 }
 
+function Sidebar({ active, onSelect, overlay = false }: { active: AppScreenKey; onSelect: (screen: AppScreenKey) => void; overlay?: boolean }) {
+  return (
+    <View style={[styles.sidebar, overlay && styles.sidebarOverlay]}>
+      <View style={styles.sidebarHeader}>
+        <View style={styles.sidebarLogo}>
+          <Text style={styles.sidebarLogoText}>W</Text>
+        </View>
+        <Text style={styles.sidebarTitle}>Wagen</Text>
+        <Text style={styles.sidebarSubtitle}>Estetica automotiva</Text>
+      </View>
+
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sidebarNav}>
+        {menuGroups.map((group) => (
+          <View key={group.label} style={styles.sidebarGroup}>
+            <Text style={styles.sidebarGroupLabel}>{group.label}</Text>
+            {group.items.map((item) => (
+              <Pressable
+                key={item.key}
+                onPress={() => onSelect(item.key)}
+                style={[styles.sidebarItem, active === item.key && styles.sidebarItemActive]}
+              >
+                <Ionicons color={active === item.key ? "#111827" : colors.text} name={item.icon} size={18} />
+                <Text style={[styles.sidebarItemText, active === item.key && styles.sidebarItemTextActive]}>{item.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   root: {
     flex: 1,
@@ -149,6 +160,10 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     backgroundColor: colors.bg
+  },
+  modalLayer: {
+    flex: 1,
+    flexDirection: "row"
   },
   sidebar: {
     width: 260,
@@ -162,21 +177,13 @@ const styles = StyleSheet.create({
     elevation: 30
   },
   sidebarOverlay: {
-    position: "absolute",
-    left: 0,
-    top: 0,
-    bottom: 0,
     shadowColor: "#000",
     shadowOpacity: 0.45,
     shadowRadius: 18,
     elevation: 16
   },
   drawerBackdrop: {
-    position: "absolute",
-    left: 0,
-    top: 0,
-    right: 0,
-    bottom: 0,
+    flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.62)",
     zIndex: 20,
     elevation: 20
