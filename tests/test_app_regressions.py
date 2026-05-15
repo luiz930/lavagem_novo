@@ -1971,7 +1971,7 @@ class AppRegressionTests(unittest.TestCase):
             session["usuario"] = "admin"
             session["usuario_perfil"] = "admin"
             with patch.object(app_module, "sincronizar_sessao_usuario", side_effect=RuntimeError("banco reiniciando")), \
-                 patch.object(app_module, "sincronizar_bancos_incremental", side_effect=RuntimeError("sync falhou")):
+                 patch.object(app_module, "iniciar_reprocessamento_sync_bancos_background", side_effect=RuntimeError("sync falhou")):
                 response = app_module.executar_acao_sync_bancos_configuracoes()
 
             feedback = session.get("configuracoes_feedback") or {}
@@ -1980,6 +1980,66 @@ class AppRegressionTests(unittest.TestCase):
         self.assertIn("/configuracoes/banco", response.location)
         self.assertEqual(feedback.get("tipo"), "erro")
         self.assertIn("Nao foi possivel executar a acao", feedback.get("mensagem", ""))
+
+    def test_sync_acao_banco_reprocessar_inicia_background_sem_bloquear(self):
+        with app_module.app.test_request_context(
+            "/configuracoes/banco/sync-acao",
+            method="POST",
+            data={"acao": "reprocessar_seguro"},
+        ):
+            session["usuario"] = "admin"
+            session["usuario_perfil"] = "admin"
+            with patch.object(app_module, "sincronizar_sessao_usuario_seguro"), \
+                 patch.object(app_module, "usuario_gerencia_banco_online", return_value=True), \
+                 patch.object(
+                     app_module,
+                     "iniciar_reprocessamento_sync_bancos_background",
+                     return_value={
+                         "iniciado": True,
+                         "mensagem": "Reprocessamento seguro iniciado em segundo plano.",
+                     },
+                 ) as iniciar_mock, \
+                 patch.object(app_module, "sincronizar_bancos_incremental") as sync_mock:
+                response = app_module.executar_acao_sync_bancos_configuracoes()
+
+            feedback = session.get("configuracoes_feedback") or {}
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/configuracoes/banco", response.location)
+        self.assertEqual(feedback.get("tipo"), "sucesso")
+        self.assertIn("segundo plano", feedback.get("mensagem", ""))
+        iniciar_mock.assert_called_once()
+        sync_mock.assert_not_called()
+
+    def test_api_sync_banco_reprocessar_inicia_background_sem_bloquear(self):
+        with app_module.app.test_request_context(
+            "/api/sync-bancos/acao",
+            method="POST",
+            json={"acao": "reprocessar_seguro"},
+        ):
+            session["usuario"] = "admin"
+            session["usuario_perfil"] = "admin"
+            with patch.object(app_module, "sincronizar_sessao_usuario_seguro"), \
+                 patch.object(app_module, "usuario_gerencia_configuracao_sistema", return_value=True), \
+                 patch.object(
+                     app_module,
+                     "iniciar_reprocessamento_sync_bancos_background",
+                     return_value={
+                         "iniciado": True,
+                         "mensagem": "Reprocessamento seguro iniciado em segundo plano.",
+                     },
+                 ) as iniciar_mock, \
+                 patch.object(app_module, "contar_conflitos_sync_bancos_abertos", return_value=2), \
+                 patch.object(app_module, "sincronizar_bancos_incremental") as sync_mock:
+                response, status_code = app_module.api_sync_bancos_acao()
+
+        payload = response.get_json()
+        self.assertEqual(status_code, 202)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["conflitos"], 2)
+        self.assertIn("segundo plano", payload["mensagem"])
+        iniciar_mock.assert_called_once()
+        sync_mock.assert_not_called()
 
     def test_sync_acao_banco_alterna_ia_conflitos_com_feedback(self):
         with app_module.app.test_request_context(

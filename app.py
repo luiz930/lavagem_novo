@@ -7564,6 +7564,62 @@ def sincronizar_bancos_incremental(force=False):
         except Exception:
             pass
 
+
+def executar_reprocessamento_sync_bancos_background(usuario_info=None, force=True):
+    usuario_info = deepcopy(usuario_info or usuario_sistema_interno())
+    with app.app_context():
+        try:
+            resultado = sincronizar_bancos_incremental(force=force)
+            conflitos = contar_conflitos_sync_bancos_abertos()
+            registrar_auditoria(
+                "sync_bancos_reprocessou_seguro",
+                "sync_bancos",
+                detalhes={"conflitos_abertos": conflitos, "resultado": resultado, "modo": "background"},
+                usuario=usuario_info,
+            )
+            log_info("SYNC BANCOS REPROCESSAMENTO BACKGROUND:", resultado.get("mensagem"))
+        except Exception as erro:
+            log_info("ERRO REPROCESSAMENTO SYNC BANCOS BACKGROUND:", erro)
+            try:
+                salvar_status_sync_bancos(
+                    {
+                        "status": "erro",
+                        "ultima_falha_em": agora_iso(),
+                        "ultimo_erro": str(erro),
+                    },
+                    f"Falha no reprocessamento seguro em segundo plano: {erro}",
+                    {"conflitos": contar_conflitos_sync_bancos_abertos()},
+                )
+            except Exception as erro_status:
+                log_info("ERRO STATUS REPROCESSAMENTO SYNC BANCOS BACKGROUND:", erro_status)
+
+
+def iniciar_reprocessamento_sync_bancos_background(usuario_info=None, force=True):
+    if hasattr(sync_bancos_lock, "locked") and sync_bancos_lock.locked():
+        return {
+            "iniciado": False,
+            "em_andamento": True,
+            "mensagem": "Ja existe um reprocessamento do banco em andamento.",
+        }
+
+    inicio = agora_iso()
+    salvar_status_sync_bancos(
+        {"status": "sincronizando", "ultimo_inicio_em": inicio, "ultimo_erro": ""},
+        "Reprocessamento seguro iniciado em segundo plano.",
+    )
+    Thread(
+        target=executar_reprocessamento_sync_bancos_background,
+        args=(deepcopy(usuario_info or usuario_sistema_interno()), force),
+        daemon=True,
+    ).start()
+    return {
+        "iniciado": True,
+        "em_andamento": False,
+        "mensagem": "Reprocessamento seguro iniciado em segundo plano.",
+        "ultimo_inicio_em": inicio,
+    }
+
+
 def salvar_notificacao(mensagem, tipo="info", empresa_id=None, categoria=None, referencia=None):
     global NOTIFICACOES_CACHE
     global HUD_CACHE
@@ -17577,7 +17633,7 @@ def api_sync_bancos_resumo():
             {
                 "id": "reprocessar_seguro",
                 "titulo": "Reprocessar seguro",
-                "descricao": "Tenta resolver automaticamente apenas registros com versao mais recente segura.",
+                "descricao": "Inicia o reprocessamento em segundo plano e acompanha pelo status do banco.",
                 "perigosa": False,
             },
             {
@@ -17610,25 +17666,16 @@ def api_sync_bancos_acao():
     dados = request.get_json(silent=True) or {}
     acao = normalizar_texto_campo(dados.get("acao"))
     if acao == "reprocessar_seguro":
-        resultado = sincronizar_bancos_incremental(force=True)
-        conflitos = contar_conflitos_sync_bancos_abertos()
-        registrar_auditoria(
-            "sync_bancos_reprocessou_seguro",
-            "sync_bancos",
-            detalhes={
-                "conflitos_abertos": conflitos,
-                "resultado": resultado,
-            },
+        resultado = iniciar_reprocessamento_sync_bancos_background(
+            usuario_info=resumo_usuario_logado(),
+            force=True,
         )
         return jsonify({
             "ok": True,
-            "mensagem": (
-                "Reprocessamento seguro concluido. "
-                f"Conflitos restantes: {conflitos}."
-            ),
+            "mensagem": resultado.get("mensagem"),
             "resultado": resultado,
-            "conflitos": conflitos,
-        })
+            "conflitos": contar_conflitos_sync_bancos_abertos(),
+        }), 202 if resultado.get("iniciado") else 200
 
     if acao == "alternar_ia_conflitos":
         resultado = alternar_resolucao_ia_sync_bancos(executar_agora=True)
@@ -23207,16 +23254,18 @@ def executar_acao_sync_bancos_configuracoes():
 
         acao = normalizar_texto_campo(request.form.get("acao"))
         if acao == "reprocessar_seguro":
-            resultado = sincronizar_bancos_incremental(force=True)
-            conflitos = contar_conflitos_sync_bancos_abertos()
-            registrar_auditoria(
-                "sync_bancos_reprocessou_seguro",
-                "sync_bancos",
-                detalhes={"conflitos_abertos": conflitos, "resultado": resultado},
+            resultado = iniciar_reprocessamento_sync_bancos_background(
+                usuario_info=resumo_usuario_logado(),
+                force=True,
             )
             definir_feedback_configuracoes(
-                "sucesso" if conflitos == 0 else "aviso",
-                f"Reprocessamento seguro concluido. Conflitos restantes: {conflitos}.",
+                "sucesso" if resultado.get("iniciado") else "aviso",
+                (
+                    "Reprocessamento seguro iniciado em segundo plano. "
+                    "Acompanhe o status nesta aba."
+                    if resultado.get("iniciado")
+                    else resultado.get("mensagem") or "Ja existe uma sincronizacao do banco em andamento."
+                ),
             )
         elif acao == "alternar_ia_conflitos":
             resultado = alternar_resolucao_ia_sync_bancos(executar_agora=True)
