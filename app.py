@@ -11724,6 +11724,133 @@ def empresa_snapshot_padrao():
     }
 
 
+CONFIGURACAO_EMPRESA_BLOBS_LIMPEZA = {
+    "marca_logo_blob": None,
+    "marca_logo_mime_type": "",
+    "marca_logo_arquivo_nome": "",
+    "marca_favicon_blob": None,
+    "marca_favicon_mime_type": "",
+    "marca_favicon_arquivo_nome": "",
+}
+
+CONFIGURACAO_EMPRESA_EXTRAS_LIMPEZA = {
+    "whitelabel_ativo": 0,
+    "storage_provider": "",
+    "licenca_plano": "",
+    "licenca_status": "",
+    "onboarding_concluido": 0,
+}
+
+CONFIGURACAO_EMPRESA_JSON_LIMPEZA = {
+    "paginas_menu_desabilitadas_json": "[]",
+}
+
+CONFIGURACAO_EMPRESA_COLUNAS_TECNICAS = {
+    "id",
+    "empresa_id",
+    "criado_em",
+    "atualizado_em",
+}
+
+
+def valor_limpeza_coluna_configuracao_empresa(nome_coluna, tipo_coluna=""):
+    nome_coluna = normalizar_texto_campo(nome_coluna)
+    tipo = normalizar_texto_campo(tipo_coluna).lower()
+
+    if nome_coluna in CONFIGURACAO_EMPRESA_JSON_LIMPEZA:
+        return CONFIGURACAO_EMPRESA_JSON_LIMPEZA[nome_coluna]
+    if nome_coluna in CONFIGURACAO_EMPRESA_BLOBS_LIMPEZA:
+        return CONFIGURACAO_EMPRESA_BLOBS_LIMPEZA[nome_coluna]
+    if any(chave in tipo for chave in ("blob", "bytea", "binary")):
+        return None
+    if any(chave in tipo for chave in ("int", "bool")):
+        return 0
+    if any(chave in tipo for chave in ("real", "numeric", "decimal", "double", "float")):
+        return 0.0
+    return ""
+
+
+def extrair_coluna_schema_configuracao_empresa(row):
+    if isinstance(row, dict):
+        nome = row.get("name") or row.get("column_name")
+        tipo = row.get("type") or row.get("data_type")
+        return normalizar_texto_campo(nome), normalizar_texto_campo(tipo)
+    try:
+        chaves = row.keys()
+    except Exception:
+        chaves = []
+    if chaves:
+        nome = row["name"] if "name" in chaves else row["column_name"]
+        tipo = row["type"] if "type" in chaves else row["data_type"]
+        return normalizar_texto_campo(nome), normalizar_texto_campo(tipo)
+    if len(row) >= 3:
+        return normalizar_texto_campo(row[1]), normalizar_texto_campo(row[2])
+    if len(row) >= 2:
+        return normalizar_texto_campo(row[0]), normalizar_texto_campo(row[1])
+    return "", ""
+
+
+def listar_schema_configuracao_empresa():
+    conn = None
+    try:
+        conn = conectar()
+        cursor = conn.cursor()
+        if getattr(conn, "backend", "") == "postgres":
+            cursor.execute(
+                """
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = ?
+                ORDER BY ordinal_position
+                """,
+                ("configuracao_empresa",),
+            )
+        else:
+            cursor.execute("PRAGMA table_info(configuracao_empresa)")
+
+        schema = []
+        for row in cursor.fetchall():
+            nome, tipo = extrair_coluna_schema_configuracao_empresa(row)
+            if nome:
+                schema.append({"name": nome, "type": tipo})
+        return schema
+    except Exception:
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def montar_payload_limpeza_configuracao_empresa(schema_colunas=None):
+    payload = {}
+    for campo, valor_padrao in empresa_snapshot_padrao().items():
+        if campo in CONFIGURACAO_EMPRESA_JSON_LIMPEZA:
+            payload[campo] = CONFIGURACAO_EMPRESA_JSON_LIMPEZA[campo]
+        elif isinstance(valor_padrao, bool):
+            payload[campo] = 0
+        elif isinstance(valor_padrao, int):
+            payload[campo] = 0
+        elif isinstance(valor_padrao, float):
+            payload[campo] = 0.0
+        else:
+            payload[campo] = ""
+
+    payload.update(CONFIGURACAO_EMPRESA_BLOBS_LIMPEZA)
+    payload.update(CONFIGURACAO_EMPRESA_EXTRAS_LIMPEZA)
+
+    if schema_colunas:
+        payload_schema = {}
+        for coluna in schema_colunas:
+            nome = normalizar_texto_campo(coluna.get("name") if isinstance(coluna, dict) else coluna)
+            tipo = normalizar_texto_campo(coluna.get("type") if isinstance(coluna, dict) else "")
+            if not nome or nome in CONFIGURACAO_EMPRESA_COLUNAS_TECNICAS:
+                continue
+            payload_schema[nome] = payload.get(nome, valor_limpeza_coluna_configuracao_empresa(nome, tipo))
+        return payload_schema
+
+    return payload
+
+
 def mascarar_token_telegram(token):
     token = normalizar_texto_campo(token)
     if not token:
@@ -12562,6 +12689,16 @@ def salvar_configuracao_empresa_form(form):
         "codigo_servico_padrao": normalizar_texto_campo(form.get("codigo_servico_padrao")),
         "aliquota_padrao": converter_valor_numerico(form.get("aliquota_padrao")),
     })
+
+
+def limpar_configuracao_empresa_form():
+    schema_colunas = listar_schema_configuracao_empresa()
+    payload = montar_payload_limpeza_configuracao_empresa(schema_colunas)
+    salvar_campos_configuracao_empresa(payload)
+    limpar_cache_clima()
+    limpar_caches_interface()
+    return payload
+
 
 def integracao_fiscal_padrao():
     return {
@@ -23609,6 +23746,41 @@ def salvar_configuracao_versao():
         f"Versao do sistema atualizada para {formatar_versao_sistema(versao)}.",
     )
     return redirect(destino_configuracoes("sistema"))
+
+
+@app.route("/configuracoes/empresa/limpar", methods=["POST"])
+def limpar_configuracao_empresa_route():
+    if not session.get("usuario"):
+        return redirect("/login")
+
+    sincronizar_sessao_usuario_seguro(contexto="LIMPAR CONFIG EMPRESA")
+    if not usuario_gerencia_configuracao_sistema() or session.get("senha_alteracao_obrigatoria"):
+        definir_feedback_configuracoes(
+            "erro",
+            "Somente administradores ou desenvolvedores com senha regularizada podem zerar as configuracoes da empresa.",
+        )
+        return redirect(destino_configuracoes("sistema"))
+
+    try:
+        payload = limpar_configuracao_empresa_form()
+    except Exception as erro:
+        definir_feedback_configuracoes("erro", f"Nao foi possivel zerar as configuracoes da empresa: {erro}")
+        return redirect(destino_configuracoes("sistema"))
+
+    registrar_auditoria(
+        "limpou_configuracao_empresa",
+        "configuracao_empresa",
+        detalhes={
+            "empresa_id": empresa_atual_id(),
+            "campos_zerados": sorted(payload.keys()),
+        },
+    )
+    definir_feedback_configuracoes(
+        "sucesso",
+        "Configuracoes da empresa zeradas. Os campos editaveis foram limpos e os arquivos personalizados removidos.",
+    )
+    return redirect(destino_configuracoes("sistema"))
+
 
 @app.route("/configuracoes/clima", methods=["POST"])
 def salvar_configuracao_clima():

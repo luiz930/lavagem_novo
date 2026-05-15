@@ -1820,6 +1820,87 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(payload["auto_teste_ativo"], 1)
         self.assertIn("auto_teste_ativo", config)
 
+    def test_montar_payload_limpeza_configuracao_empresa_zera_campos_editaveis(self):
+        payload = app_module.montar_payload_limpeza_configuracao_empresa()
+
+        for campo in app_module.empresa_snapshot_padrao():
+            self.assertIn(campo, payload)
+
+        self.assertEqual(payload["razao_social"], "")
+        self.assertEqual(payload["nome_fantasia"], "")
+        self.assertEqual(payload["cnpj"], "")
+        self.assertEqual(payload["aliquota_padrao"], 0.0)
+        self.assertEqual(payload["versao_sistema"], "")
+        self.assertEqual(payload["clima_ativo"], 0)
+        self.assertEqual(payload["clima_latitude"], 0.0)
+        self.assertEqual(payload["auto_teste_intervalo_horas"], 0)
+        self.assertEqual(payload["paginas_menu_desabilitadas_json"], "[]")
+        self.assertIsNone(payload["marca_logo_blob"])
+        self.assertIsNone(payload["marca_favicon_blob"])
+        self.assertEqual(payload["marca_logo_arquivo_nome"], "")
+        self.assertEqual(payload["marca_favicon_arquivo_nome"], "")
+        self.assertEqual(payload["storage_provider"], "")
+        self.assertEqual(payload["licenca_plano"], "")
+        self.assertEqual(payload["licenca_status"], "")
+        self.assertEqual(payload["onboarding_concluido"], 0)
+        self.assertNotIn("id", payload)
+        self.assertNotIn("empresa_id", payload)
+        self.assertNotIn("atualizado_em", payload)
+
+        payload_schema = app_module.montar_payload_limpeza_configuracao_empresa([
+            {"name": "id", "type": "INTEGER"},
+            {"name": "empresa_id", "type": "INTEGER"},
+            {"name": "telemetria_ativo", "type": "INTEGER"},
+            {"name": "storage_bucket", "type": "TEXT"},
+            {"name": "storage_public_base_url", "type": "TEXT"},
+            {"name": "marca_logo_blob", "type": "BLOB"},
+        ])
+        self.assertNotIn("id", payload_schema)
+        self.assertNotIn("empresa_id", payload_schema)
+        self.assertEqual(payload_schema["telemetria_ativo"], 0)
+        self.assertEqual(payload_schema["storage_bucket"], "")
+        self.assertEqual(payload_schema["storage_public_base_url"], "")
+        self.assertIsNone(payload_schema["marca_logo_blob"])
+
+    def test_limpar_configuracao_empresa_form_salva_payload_e_limpa_caches(self):
+        with patch.object(app_module, "salvar_campos_configuracao_empresa") as salvar, \
+             patch.object(app_module, "listar_schema_configuracao_empresa", return_value=[
+                 {"name": "id", "type": "INTEGER"},
+                 {"name": "empresa_id", "type": "INTEGER"},
+                 {"name": "razao_social", "type": "TEXT"},
+                 {"name": "auto_teste_telegram_bot_token", "type": "TEXT"},
+                 {"name": "marca_logo_blob", "type": "BLOB"},
+                 {"name": "suporte_email", "type": "TEXT"},
+             ]), \
+             patch.object(app_module, "limpar_cache_clima") as limpar_clima, \
+             patch.object(app_module, "limpar_caches_interface") as limpar_interface:
+            payload = app_module.limpar_configuracao_empresa_form()
+
+        salvar.assert_called_once_with(payload)
+        limpar_clima.assert_called_once()
+        limpar_interface.assert_called_once()
+        self.assertEqual(payload["auto_teste_telegram_bot_token"], "")
+        self.assertIsNone(payload["marca_logo_blob"])
+        self.assertEqual(payload["suporte_email"], "")
+
+    def test_limpar_configuracao_empresa_route_executa_para_admin(self):
+        payload = {"razao_social": "", "marca_logo_blob": None}
+
+        with app_module.app.test_request_context("/configuracoes/empresa/limpar", method="POST"):
+            session["usuario"] = "admin"
+            session["usuario_perfil"] = "admin"
+            session["empresa_id"] = 1
+            with patch.object(app_module, "sincronizar_sessao_usuario_seguro"), \
+                 patch.object(app_module, "usuario_gerencia_configuracao_sistema", return_value=True), \
+                 patch.object(app_module, "limpar_configuracao_empresa_form", return_value=payload) as limpar, \
+                 patch.object(app_module, "registrar_auditoria") as auditoria:
+                response = app_module.limpar_configuracao_empresa_route()
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/configuracoes/sistema", response.headers.get("Location", ""))
+        limpar.assert_called_once()
+        auditoria.assert_called_once()
+
     def test_executar_auto_teste_envia_relatorio_e_salva_chat_resolvido(self):
         config = app_module.empresa_snapshot_padrao()
         config.update(

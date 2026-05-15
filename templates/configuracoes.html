@@ -112,6 +112,14 @@
             <button type="button">Diagnostico</button>
         </a>
         {% endif %}
+        <form
+            action="/configuracoes/empresa/limpar"
+            method="POST"
+            onsubmit="return confirm('Zerar todas as configuracoes da empresa ativa? Esta acao limpa dados fiscais, marca, clima, auto teste, versao, menus e arquivos personalizados.');"
+        >
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="button-danger">Zerar configuracoes da empresa</button>
+        </form>
     </div>
 </div>
 {% endif %}
