@@ -1065,6 +1065,56 @@ input[type="file"] {
     font-weight: 700;
 }
 
+.sync-progress {
+    margin: 10px 0;
+    padding: 10px;
+    border: 1px solid rgba(250, 204, 21, 0.22);
+    border-radius: 12px;
+    background: rgba(250, 204, 21, 0.08);
+}
+
+.sync-progress-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    color: #fef08a;
+    font-size: 12px;
+    font-weight: 800;
+    margin-bottom: 8px;
+}
+
+.sync-progress-track {
+    height: 9px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.sync-progress-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #facc15, #22c55e);
+    transition: width 0.25s ease;
+}
+
+.sync-action-feedback {
+    margin: 8px 0;
+    padding: 9px 10px;
+    border-radius: 10px;
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.28);
+    color: #bbf7d0;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.agenda-header-actions button:disabled {
+    opacity: 0.58;
+    cursor: wait;
+}
+
 .agenda-card {
     border: 1px solid rgba(250, 204, 21, 0.16);
     border-radius: 12px;
@@ -2309,13 +2359,48 @@ function textoAcaoSyncBancos(acao) {
         atualizacao_automatica_mais_recente: "Aplicou a versao mais recente",
         foto_preservada_sem_sobrescrever: "Preservou foto existente",
         conflito_revisado_admin: "Conflito revisado pelo admin",
+        conflito_sem_alteracao: "Conflito ja estava alinhado",
+        resolucao_segura_mais_recente: "Reparo seguro aplicou a versao mais recente",
+        status_finalizado_preservado_sync: "Reparo seguro preservou atendimento finalizado",
+        status_finalizado_mais_recente_sync: "Reparo seguro alinhou atendimento finalizado",
+        resolucao_ia_automatica: "IA resolveu conflito seguro",
     };
     return mapa[acao] || acao || "Registro avaliado";
 }
 
+let syncBancosMonitorTimer = null;
+
 function csrfTokenCabecalho() {
     const meta = document.querySelector('meta[name="csrf-token"]');
     return meta ? meta.getAttribute("content") || "" : "";
+}
+
+function syncBancosEstaEmAndamento(status) {
+    return Boolean(status && (status.status === "sincronizando" || status.acao_em_andamento));
+}
+
+function pararMonitoramentoSyncBancos() {
+    if (syncBancosMonitorTimer) {
+        clearInterval(syncBancosMonitorTimer);
+        syncBancosMonitorTimer = null;
+    }
+}
+
+function iniciarMonitoramentoSyncBancos() {
+    if (syncBancosMonitorTimer) {
+        return;
+    }
+    syncBancosMonitorTimer = setInterval(() => carregarSyncBancosResumo(true), 3000);
+}
+
+function renderizarFeedbackAcaoSyncBancos(dropdown, mensagem) {
+    if (!dropdown || !mensagem) {
+        return;
+    }
+    const feedback = document.createElement("div");
+    feedback.className = "sync-action-feedback";
+    feedback.textContent = mensagem;
+    dropdown.prepend(feedback);
 }
 
 async function executarAcaoSyncBancos(acao) {
@@ -2343,7 +2428,9 @@ async function executarAcaoSyncBancos(acao) {
         }
         if (dropdown) {
             dropdown.dataset.carregado = "0";
+            renderizarFeedbackAcaoSyncBancos(dropdown, data.mensagem || "Acao iniciada.");
         }
+        iniciarMonitoramentoSyncBancos();
         await carregarSyncBancosResumo(true);
         atualizarHomeSnapshot();
     } catch (e) {
@@ -2359,14 +2446,16 @@ function renderizarSyncBancosResumo(data) {
     if (!dropdown || !badge) return;
 
     const resumo = data.resumo || {};
+    const syncStatus = data.status || {};
     const resolucoes = Array.isArray(data.resolucoes) ? data.resolucoes : [];
     const conflitos = Array.isArray(data.conflitos) ? data.conflitos : [];
     const totalPendencias = Number(resumo.conflitos || conflitos.length || 0);
+    const emAndamento = syncBancosEstaEmAndamento(syncStatus);
 
     badge.textContent = String(totalPendencias || resolucoes.length || 0);
-    badge.style.display = (totalPendencias > 0 || resolucoes.length > 0) ? "inline-flex" : "none";
-    badge.style.background = totalPendencias > 0 ? "#f97316" : "#22c55e";
-    badge.style.color = totalPendencias > 0 ? "#fff" : "#052e16";
+    badge.style.display = (emAndamento || totalPendencias > 0 || resolucoes.length > 0) ? "inline-flex" : "none";
+    badge.style.background = emAndamento ? "#facc15" : (totalPendencias > 0 ? "#f97316" : "#22c55e");
+    badge.style.color = emAndamento ? "#111827" : (totalPendencias > 0 ? "#fff" : "#052e16");
 
     dropdown.innerHTML = "";
 
@@ -2398,6 +2487,32 @@ function renderizarSyncBancosResumo(data) {
     status.textContent = resumo.mensagem || "O sistema resolve automaticamente apenas quando existe uma versao mais recente segura.";
     dropdown.appendChild(status);
 
+    if (emAndamento) {
+        const progresso = Math.max(0, Math.min(100, Number(syncStatus.progresso_percentual || 0)));
+        const progressoBox = document.createElement("div");
+        progressoBox.className = "sync-progress";
+        const progressoTop = document.createElement("div");
+        progressoTop.className = "sync-progress-top";
+        const progressoTexto = document.createElement("span");
+        progressoTexto.textContent = syncStatus.progresso_mensagem || "Processando sincronizacao do banco.";
+        const progressoValor = document.createElement("span");
+        progressoValor.textContent = `${progresso}%`;
+        const progressoTrack = document.createElement("div");
+        progressoTrack.className = "sync-progress-track";
+        const progressoFill = document.createElement("div");
+        progressoFill.className = "sync-progress-fill";
+        progressoFill.style.width = `${Math.max(6, progresso)}%`;
+        progressoTop.appendChild(progressoTexto);
+        progressoTop.appendChild(progressoValor);
+        progressoTrack.appendChild(progressoFill);
+        progressoBox.appendChild(progressoTop);
+        progressoBox.appendChild(progressoTrack);
+        dropdown.appendChild(progressoBox);
+        iniciarMonitoramentoSyncBancos();
+    } else {
+        pararMonitoramentoSyncBancos();
+    }
+
     if (Array.isArray(data.acoes) && data.acoes.length) {
         const actions = document.createElement("div");
         actions.className = "agenda-header-actions";
@@ -2408,6 +2523,7 @@ function renderizarSyncBancosResumo(data) {
             btn.textContent = acao.titulo || acao.id;
             btn.title = acao.descricao || "";
             btn.onclick = () => executarAcaoSyncBancos(acao.id);
+            btn.disabled = Boolean(acao.desabilitada);
             if (acao.perigosa) {
                 btn.style.borderColor = "#f97316";
             }

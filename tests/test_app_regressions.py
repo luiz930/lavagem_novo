@@ -1449,6 +1449,17 @@ class AppRegressionTests(unittest.TestCase):
         self.assertIn("alternar_ia_conflitos", conteudo)
         self.assertIn("Ativar IA de conflitos", conteudo)
         self.assertIn("Desativar IA de conflitos", conteudo)
+        self.assertIn("Reparos seguros na ultima rodada", conteudo)
+        self.assertIn("sync-progress", conteudo)
+
+    def test_home_sync_bancos_exibe_barra_e_monitoramento_de_status(self):
+        with open(os.path.join(app_module.app.root_path, "templates", "index.html"), encoding="utf-8") as arquivo:
+            conteudo = arquivo.read()
+
+        self.assertIn("sync-progress", conteudo)
+        self.assertIn("progresso_percentual", conteudo)
+        self.assertIn("iniciarMonitoramentoSyncBancos", conteudo)
+        self.assertIn("desabilitada", conteudo)
 
     def test_changelog_monta_links_github_automaticos(self):
         commit_hash = "1234567890abcdef1234567890abcdef12345678"
@@ -2041,6 +2052,29 @@ class AppRegressionTests(unittest.TestCase):
         iniciar_mock.assert_called_once()
         sync_mock.assert_not_called()
 
+    def test_api_sync_bancos_resumo_desabilita_acoes_durante_processamento(self):
+        status = app_module.status_sync_bancos_padrao()
+        status.update({
+            "status": "sincronizando",
+            "acao_em_andamento": "reprocessar_seguro",
+            "progresso_percentual": 45,
+            "conflitos": 3,
+        })
+        with app_module.app.test_request_context("/api/sync-bancos/resumo"):
+            session["usuario"] = "admin"
+            session["usuario_perfil"] = "admin"
+            with patch.object(app_module, "obter_status_sync_bancos", return_value=status), \
+                 patch.object(app_module, "montar_resumo_sync_bancos_hud", return_value={"conflitos": 3}), \
+                 patch.object(app_module, "listar_resolucoes_sync_bancos", return_value=[]), \
+                 patch.object(app_module, "listar_conflitos_sync_bancos_abertos", return_value=[]), \
+                 patch.object(app_module, "usuario_gerencia_configuracao_sistema", return_value=True):
+                response = app_module.api_sync_bancos_resumo()
+
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"]["progresso_percentual"], 45)
+        self.assertTrue(all(acao.get("desabilitada") for acao in payload["acoes"]))
+
     def test_sync_acao_banco_alterna_ia_conflitos_com_feedback(self):
         with app_module.app.test_request_context(
             "/configuracoes/banco/sync-acao",
@@ -2561,6 +2595,39 @@ class AppRegressionTests(unittest.TestCase):
         conn.commit()
         return conn, PersistentCompatConnection(conn)
 
+    def _criar_banco_sync_servicos_memoria(self, registros):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            CREATE TABLE servicos (
+                id INTEGER PRIMARY KEY,
+                placa TEXT,
+                status TEXT,
+                observacoes TEXT,
+                valor_total REAL,
+                atualizado_em TEXT
+            )
+            """
+        )
+        for registro in registros:
+            conn.execute(
+                """
+                INSERT INTO servicos (id, placa, status, observacoes, valor_total, atualizado_em)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    registro["id"],
+                    registro.get("placa", "ABC1234"),
+                    registro.get("status", ""),
+                    registro.get("observacoes", ""),
+                    registro.get("valor_total", 0),
+                    registro.get("atualizado_em", ""),
+                ),
+            )
+        conn.commit()
+        return conn, PersistentCompatConnection(conn)
+
     def test_sync_bancos_incremental_versao_mais_nova_vence_sem_apagar(self):
         origem_conn, origem = self._criar_banco_sync_veiculos_memoria([
             {"id": 1, "placa": "ABC1234", "modelo": "Onix Novo", "cor": "Preto", "atualizado_em": "2026-05-13T10:00:00-03:00"},
@@ -2662,6 +2729,141 @@ class AppRegressionTests(unittest.TestCase):
         self.assertFalse(decisao["aplicar"])
         self.assertEqual(decisao["motivo"], "regra_protecao_negocio")
 
+    def test_reparo_seguro_resolve_status_finalizado_sem_diferenca_financeira(self):
+        local_conn, local = self._criar_banco_sync_servicos_memoria([
+            {
+                "id": 1,
+                "placa": "ABC1234",
+                "status": "FINALIZADO",
+                "observacoes": "Entrega concluida",
+                "valor_total": 100,
+                "atualizado_em": "2026-05-13T11:00:00-03:00",
+            },
+        ])
+        online_conn, online = self._criar_banco_sync_servicos_memoria([
+            {
+                "id": 1,
+                "placa": "ABC1234",
+                "status": "EM ANDAMENTO",
+                "observacoes": "Lavando",
+                "valor_total": 100,
+                "atualizado_em": "2026-05-13T10:00:00-03:00",
+            },
+        ])
+        registro_local = dict(local_conn.execute("SELECT * FROM servicos WHERE id=1").fetchone())
+        registro_online = dict(online_conn.execute("SELECT * FROM servicos WHERE id=1").fetchone())
+        conflito = app_module.montar_conflito_registro_sync("servicos", registro_local, registro_online)
+
+        with patch.object(app_module, "conectar_banco_local_forcado", return_value=local):
+            app_module.registrar_conflitos_sync_bancos([conflito])
+
+        resultado = app_module.resolver_conflitos_sync_bancos_seguro(
+            local_conn=local,
+            online_conn=online,
+        )
+
+        online_atualizado = online_conn.execute("SELECT status, observacoes FROM servicos WHERE id=1").fetchone()
+        conflito_aberto = local_conn.execute(
+            "SELECT COUNT(*) FROM sync_bancos_conflitos WHERE resolvido=0"
+        ).fetchone()[0]
+        resolucao = local_conn.execute(
+            "SELECT acao, direcao, status FROM sync_bancos_resolucoes ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+        self.assertEqual(resultado["resolvidos"], 1)
+        self.assertEqual(online_atualizado["status"], "FINALIZADO")
+        self.assertEqual(online_atualizado["observacoes"], "Entrega concluida")
+        self.assertEqual(conflito_aberto, 0)
+        self.assertEqual(resolucao["acao"], "status_finalizado_preservado_sync")
+        self.assertEqual(resolucao["direcao"], "local_para_online_seguro")
+        self.assertEqual(resolucao["status"], "aplicado")
+        local_conn.close()
+        online_conn.close()
+
+    def test_reparo_seguro_mantem_conflito_com_diferenca_financeira(self):
+        local_conn, local = self._criar_banco_sync_servicos_memoria([
+            {
+                "id": 1,
+                "status": "FINALIZADO",
+                "valor_total": 100,
+                "atualizado_em": "2026-05-13T11:00:00-03:00",
+            },
+        ])
+        online_conn, online = self._criar_banco_sync_servicos_memoria([
+            {
+                "id": 1,
+                "status": "EM ANDAMENTO",
+                "valor_total": 150,
+                "atualizado_em": "2026-05-13T10:00:00-03:00",
+            },
+        ])
+        conflito = app_module.montar_conflito_registro_sync(
+            "servicos",
+            dict(local_conn.execute("SELECT * FROM servicos WHERE id=1").fetchone()),
+            dict(online_conn.execute("SELECT * FROM servicos WHERE id=1").fetchone()),
+        )
+
+        with patch.object(app_module, "conectar_banco_local_forcado", return_value=local):
+            app_module.registrar_conflitos_sync_bancos([conflito])
+
+        resultado = app_module.resolver_conflitos_sync_bancos_seguro(
+            local_conn=local,
+            online_conn=online,
+        )
+
+        conflito_aberto = local_conn.execute(
+            "SELECT COUNT(*) FROM sync_bancos_conflitos WHERE resolvido=0"
+        ).fetchone()[0]
+
+        self.assertEqual(resultado["resolvidos"], 0)
+        self.assertEqual(resultado["mantidos"], 1)
+        self.assertEqual(conflito_aberto, 1)
+        self.assertIn("valor_financeiro_exige_revisao_manual", resultado["motivos"])
+        local_conn.close()
+        online_conn.close()
+
+    def test_registrar_conflitos_nao_reabre_foto_preservada_com_mesmos_hashes(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        wrapper = PersistentCompatConnection(conn)
+        app_module.garantir_tabelas_sync_bancos_local(wrapper)
+
+        registro_local = {
+            "id": 379,
+            "servico_id": 10,
+            "tipo": "entrada",
+            "caminho": "static/uploads/foto-local.jpg",
+            "atualizado_em": "2026-05-13T11:00:00-03:00",
+        }
+        registro_online = {
+            "id": 379,
+            "servico_id": 10,
+            "tipo": "entrada",
+            "caminho": "static/uploads/foto-online.jpg",
+            "atualizado_em": "2026-05-13T10:00:00-03:00",
+        }
+        conflito = app_module.montar_conflito_registro_sync("fotos", registro_local, registro_online)
+        app_module.registrar_resolucao_sync_bancos(
+            "fotos",
+            registro_local,
+            registro_online,
+            acao="foto_preservada_sem_sobrescrever",
+            direcao="preservado",
+            status="preservado",
+            conn=wrapper,
+        )
+
+        with patch.object(app_module, "conectar_banco_local_forcado", return_value=wrapper):
+            inseridos = app_module.registrar_conflitos_sync_bancos([conflito])
+
+        conflito_aberto = conn.execute(
+            "SELECT COUNT(*) FROM sync_bancos_conflitos WHERE resolvido=0"
+        ).fetchone()[0]
+
+        self.assertEqual(inseridos, 0)
+        self.assertEqual(conflito_aberto, 0)
+        conn.close()
+
     def test_alternar_resolucao_ia_sync_bancos_persiste_estado(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -2701,6 +2903,7 @@ class AppRegressionTests(unittest.TestCase):
         self.assertIn("sync_bancos_fila", tabelas)
         self.assertEqual(status["status"], "aguardando")
         self.assertEqual(status["ia_resolucao_automatica"], 0)
+        self.assertEqual(status["progresso_percentual"], 0)
         conn.close()
 
     def test_mensagem_publica_cadastro_veiculo_nao_exibe_erro_planilha(self):

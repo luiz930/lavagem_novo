@@ -863,9 +863,21 @@
                 </span>
             </p>
             <p><b>Resumo:</b> {{ banco_sync_status.mensagem }}</p>
+            {% if banco_sync_status.status == 'sincronizando' or banco_sync_status.acao_em_andamento %}
+            <div class="sync-progress top-spacing">
+                <div class="sync-progress-top">
+                    <span>{{ banco_sync_status.progresso_mensagem or "Sincronizacao em andamento." }}</span>
+                    <span>{{ banco_sync_status.progresso_percentual or 0 }}%</span>
+                </div>
+                <div class="sync-progress-track">
+                    <div class="sync-progress-fill" style="width: {{ [6, banco_sync_status.progresso_percentual or 0]|max }}%;"></div>
+                </div>
+            </div>
+            {% endif %}
             <p><b>Ultimo sucesso:</b> {{ banco_sync_status.ultimo_sucesso_em or "Ainda nao sincronizou" }}</p>
             <p><b>Fila local pendente:</b> {{ banco_sync_status.pendentes_local or 0 }} alteracao(oes)</p>
             <p><b>Conflitos abertos:</b> {{ banco_sync_status.conflitos or 0 }}</p>
+            <p><b>Reparos seguros na ultima rodada:</b> {{ banco_sync_status.resolucoes_seguras_ultima_execucao or 0 }}</p>
             <p><b>IA de conflitos:</b> {% if banco_sync_status.ia_resolucao_automatica|int %}Ativa{% else %}Desativada{% endif %}</p>
             {% if banco_sync_status.ia_ultima_mensagem %}
             <p class="muted-text">Ultima IA: {{ banco_sync_status.ia_ultima_mensagem }} Analisados: {{ banco_sync_status.ia_analisados_ultima_execucao or 0 }}. Resolvidos: {{ banco_sync_status.ia_resolvidos_ultima_execucao or 0 }}.</p>
@@ -876,12 +888,12 @@
                 <form action="/configuracoes/banco/sync-acao" method="POST">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="acao" value="reprocessar_seguro">
-                    <button type="submit">Reprocessar seguro</button>
+                    <button type="submit" {% if banco_sync_status.status == 'sincronizando' or banco_sync_status.acao_em_andamento %}disabled{% endif %}>Reprocessar seguro</button>
                 </form>
                 <form action="/configuracoes/banco/sync-acao" method="POST">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="acao" value="alternar_ia_conflitos">
-                    <button type="submit">
+                    <button type="submit" {% if banco_sync_status.status == 'sincronizando' or banco_sync_status.acao_em_andamento %}disabled{% endif %}>
                         {% if banco_sync_status.ia_resolucao_automatica|int %}
                         Desativar IA de conflitos
                         {% else %}
@@ -892,7 +904,7 @@
                 <form action="/configuracoes/banco/sync-acao" method="POST" onsubmit="return confirm('Marcar os conflitos restantes como revisados sem sobrescrever dados?');">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="acao" value="marcar_revisado">
-                    <button type="submit">Marcar conflitos revisados</button>
+                    <button type="submit" {% if banco_sync_status.status == 'sincronizando' or banco_sync_status.acao_em_andamento %}disabled{% endif %}>Marcar conflitos revisados</button>
                 </form>
             </div>
         </div>
