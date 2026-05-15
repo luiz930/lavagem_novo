@@ -140,6 +140,18 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(salvar_mock.call_args.args[0]["versao_sistema"], "1.0.2")
         versao_mock.assert_any_call(permitir_sem_sessao=True)
 
+    def test_cookie_seguro_desliga_em_http_local_mesmo_com_env_producao(self):
+        self.assertFalse(app_module.cookie_sessao_seguro_efetivo("127.0.0.1:5000", False, "1"))
+        self.assertFalse(app_module.cookie_sessao_seguro_efetivo("192.168.0.106:5000", False, "1"))
+        self.assertFalse(app_module.cookie_sessao_seguro_efetivo("10.0.0.5:5000", False, "true"))
+        self.assertTrue(app_module.cookie_sessao_seguro_efetivo("wagenestetica.duckdns.org", False, "1"))
+        self.assertTrue(app_module.cookie_sessao_seguro_efetivo("192.168.0.106:5000", True, "1"))
+
+        with app_module.app.test_request_context("/login", base_url="http://192.168.0.106:5000"):
+            app_module.app.config["SESSION_COOKIE_SECURE"] = True
+            app_module.ajustar_cookie_seguro_para_http_local()
+            self.assertFalse(app_module.app.config["SESSION_COOKIE_SECURE"])
+
     def test_app_mobile_update_endpoint_e_instalador_publico(self):
         arquivo = tempfile.NamedTemporaryFile(delete=False, suffix=".apk")
         try:

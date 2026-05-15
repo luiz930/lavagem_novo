@@ -1,5 +1,6 @@
 ﻿from flask import Flask, render_template, request, redirect, session, jsonify, has_request_context
 import csv
+import ipaddress
 import json
 import logging
 import math
@@ -3265,6 +3266,44 @@ app.config.update(
 )
 app.config["SESSION_TYPE"] = "filesystem"
 app.secret_key = app.config["SECRET_KEY"]
+
+
+def extrair_host_requisicao(host):
+    texto = str(host or "").strip().lower()
+    if texto.startswith("[") and "]" in texto:
+        return texto[1:texto.index("]")]
+    if ":" in texto:
+        return texto.split(":", 1)[0]
+    return texto
+
+
+def host_local_ou_rede_privada(host):
+    host_limpo = extrair_host_requisicao(host)
+    if host_limpo in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        endereco = ipaddress.ip_address(host_limpo)
+        return bool(endereco.is_loopback or endereco.is_private)
+    except ValueError:
+        return False
+
+
+def cookie_sessao_seguro_efetivo(host="", request_is_secure=False, secure_raw=None):
+    raw = str(SESSION_COOKIE_SECURE_RAW if secure_raw is None else secure_raw).strip().lower()
+    if raw not in {"1", "true", "yes", "on"}:
+        return False
+    if request_is_secure:
+        return True
+    return not host_local_ou_rede_privada(host)
+
+
+@app.before_request
+def ajustar_cookie_seguro_para_http_local():
+    app.config["SESSION_COOKIE_SECURE"] = cookie_sessao_seguro_efetivo(
+        request.host,
+        request.is_secure,
+    )
+
 
 VERSAO_SISTEMA_PADRAO = "1.0.0"
 APP_VERSION = f"Versao: {VERSAO_SISTEMA_PADRAO}"
