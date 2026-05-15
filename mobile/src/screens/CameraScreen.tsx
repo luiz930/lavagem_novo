@@ -47,15 +47,11 @@ export function CameraScreen({ session, target, onClose, onSaved }: Props) {
       const targetUri = `${targetDir}${uuid}.jpg`;
       await FileSystem.copyAsync({ from: photo.uri, to: targetUri });
       const info = await FileSystem.getInfoAsync(targetUri);
-      const arquivoBase64 = await FileSystem.readAsStringAsync(targetUri, {
-        encoding: FileSystem.EncodingType.Base64
-      });
 
       await salvarFotoAtendimento({
         servico_uuid: target.servico_uuid,
         tipo: target.tipo,
         uri_local: targetUri,
-        arquivo_base64: arquivoBase64,
         mime_type: "image/jpeg",
         usuario: session.usuario,
         usuario_nome: session.nome,

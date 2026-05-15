@@ -6,7 +6,24 @@ export type SyncConfig = {
 export type SyncResult = {
   sent: number;
   pulled: number;
+  photosUploaded?: number;
+  durationMs?: number;
+  serverCursor?: string;
+  nextRetrySeconds?: number;
   error?: string;
+};
+
+export type SyncDiagnostics = {
+  pending: number;
+  pendingPhotos: number;
+  lastSuccessAt: string;
+  lastErrorAt: string;
+  lastError: string;
+  lastDurationMs: number;
+  lastSent: number;
+  lastPulled: number;
+  lastPhotosUploaded: number;
+  lastPullAt: string;
 };
 
 export type MobileHudPayload = Record<string, unknown> & {

@@ -72,4 +72,21 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase) {
   await addColumnIfMissing(db, "servicos", "fotos_saida", "INTEGER DEFAULT 0");
   await addColumnIfMissing(db, "veiculos", "ultima_entrada", "TEXT");
   await addColumnIfMissing(db, "veiculos", "ultima_entrega", "TEXT");
+  await addColumnIfMissing(db, "fotos", "uploaded_at", "TEXT");
+  await addColumnIfMissing(db, "fotos", "upload_attempts", "INTEGER DEFAULT 0");
+  await addColumnIfMissing(db, "fotos", "upload_last_error", "TEXT");
+  await db.execAsync(`
+    CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON sync_queue(synced_at, id);
+    CREATE INDEX IF NOT EXISTS idx_sync_queue_entity_pending ON sync_queue(entity, synced_at);
+    CREATE INDEX IF NOT EXISTS idx_veiculos_placa ON veiculos(placa);
+    CREATE INDEX IF NOT EXISTS idx_veiculos_updated ON veiculos(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_veiculos_deleted ON veiculos(deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_servicos_updated ON servicos(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_servicos_deleted ON servicos(deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_servicos_veiculo ON servicos(veiculo_uuid, deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_fotos_servico ON fotos(servico_uuid, deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_fotos_upload_pending ON fotos(uploaded_at, deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_clientes_updated ON clientes(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_clientes_deleted ON clientes(deleted_at);
+  `);
 }

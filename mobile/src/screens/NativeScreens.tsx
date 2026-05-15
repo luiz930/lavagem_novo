@@ -21,7 +21,7 @@ import {
   ServicoLocal,
   TipoServicoLocal
 } from "../data/localRepository";
-import { MobileHudPayload, MobileModuleCounter, MobileModuleRow, MobileSiteState } from "../sync/types";
+import { MobileHudPayload, MobileModuleCounter, MobileModuleRow, MobileSiteState, SyncDiagnostics } from "../sync/types";
 import { colors, spacing } from "../theme";
 import { AppScreenKey } from "./AppShell";
 import { CameraTarget } from "./CameraScreen";
@@ -32,10 +32,13 @@ type Props = {
   onRefreshPending: () => void;
   sync: {
     pending: number;
+    pendingPhotos: number;
     message: string;
+    syncing: boolean;
     endpointUrl: string;
     hud: MobileHudPayload | null;
     siteState: MobileSiteState | null;
+    diagnostics: SyncDiagnostics | null;
     updatedAt: string;
     version: string;
     onRefreshHud: () => Promise<void>;
@@ -1171,11 +1174,23 @@ function DiagnosticSummary({ sync }: { sync: Props["sync"] }) {
         <Text style={styles.itemTitle}>{sync.pending} pendencia(s)</Text>
         <Text style={styles.muted}>{sync.message}</Text>
       </View>
+      <View style={styles.diagnosticItem}>
+        <Ionicons color={sync.pendingPhotos > 0 ? colors.primary : colors.success} name="images" size={22} />
+        <Text style={styles.itemTitle}>{sync.pendingPhotos} foto(s)</Text>
+        <Text style={styles.muted}>Upload separado do sync principal.</Text>
+      </View>
     </View>
   );
 }
 
 function SyncPanel({ sync }: { sync: Props["sync"] }) {
+  const diagnostics = sync.diagnostics;
+  const ultimaSync = diagnostics?.lastSuccessAt
+    ? new Date(diagnostics.lastSuccessAt).toLocaleString("pt-BR")
+    : "Ainda nao sincronizou";
+  const duracao = diagnostics?.lastDurationMs ? `${(diagnostics.lastDurationMs / 1000).toFixed(1)}s` : "-";
+  const cursor = diagnostics?.lastPullAt ? new Date(diagnostics.lastPullAt).toLocaleString("pt-BR") : "Primeira carga pendente";
+
   return (
     <View style={styles.card}>
       <View style={styles.sectionHeader}>
@@ -1184,10 +1199,32 @@ function SyncPanel({ sync }: { sync: Props["sync"] }) {
           <Text style={styles.muted}>{sync.endpointUrl}</Text>
         </View>
         <Pressable onPress={sync.onSyncNow} style={styles.cameraFab}>
-          <Ionicons color={colors.primaryText} name="sync" size={22} />
+          <Ionicons color={colors.primaryText} name={sync.syncing ? "hourglass" : "sync"} size={22} />
         </Pressable>
       </View>
       <Text style={styles.muted}>{sync.message}</Text>
+      <View style={styles.syncStatusGrid}>
+        <View style={styles.syncStatusItem}>
+          <Text style={styles.syncStatusValue}>{sync.pending}</Text>
+          <Text style={styles.muted}>fila</Text>
+        </View>
+        <View style={styles.syncStatusItem}>
+          <Text style={styles.syncStatusValue}>{sync.pendingPhotos}</Text>
+          <Text style={styles.muted}>fotos</Text>
+        </View>
+        <View style={styles.syncStatusItem}>
+          <Text style={styles.syncStatusValue}>{diagnostics?.lastSent || 0}</Text>
+          <Text style={styles.muted}>enviados</Text>
+        </View>
+        <View style={styles.syncStatusItem}>
+          <Text style={styles.syncStatusValue}>{diagnostics?.lastPulled || 0}</Text>
+          <Text style={styles.muted}>recebidos</Text>
+        </View>
+      </View>
+      <Text style={styles.muted}>Ultima sync: {ultimaSync}</Text>
+      <Text style={styles.muted}>Cursor: {cursor}</Text>
+      <Text style={styles.muted}>Duracao: {duracao} | Fotos enviadas: {diagnostics?.lastPhotosUploaded || 0}</Text>
+      {diagnostics?.lastError ? <Text style={styles.errorText}>Ultimo erro: {diagnostics.lastError}</Text> : null}
     </View>
   );
 }
@@ -1552,6 +1589,24 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     gap: spacing.xs
   },
+  syncStatusGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm
+  },
+  syncStatusItem: {
+    flexBasis: "22%",
+    flexGrow: 1,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceSoft,
+    padding: spacing.sm,
+    gap: 2
+  },
+  syncStatusValue: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: "900"
+  },
   filterGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1621,6 +1676,11 @@ const styles = StyleSheet.create({
   muted: {
     color: colors.muted,
     lineHeight: 20
+  },
+  errorText: {
+    color: colors.danger,
+    lineHeight: 20,
+    fontWeight: "700"
   },
   sectionHeader: {
     flexDirection: "row",

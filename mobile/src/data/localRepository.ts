@@ -388,7 +388,6 @@ export async function salvarFotoAtendimento(dados: {
     servico_uuid: dados.servico_uuid,
     tipo,
     uri_local: dados.uri_local,
-    arquivo_base64: dados.arquivo_base64 || "",
     mime_type: dados.mime_type || "image/jpeg",
     usuario: dados.usuario || "",
     usuario_nome: dados.usuario_nome || "",

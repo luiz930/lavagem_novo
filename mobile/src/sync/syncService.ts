@@ -1,8 +1,13 @@
+import * as FileSystem from "expo-file-system";
+
 import { getDatabase } from "../database/db";
+import { getSetting, setSetting } from "../database/db";
 import { normalizeServerUrl } from "../config";
-import { MobileConfigResult, MobileHudPayload, MobileHudResult, MobileSiteState, QueueRow, SyncConfig, SyncResult } from "./types";
+import { MobileConfigResult, MobileHudPayload, MobileHudResult, MobileSiteState, QueueRow, SyncConfig, SyncDiagnostics, SyncResult } from "./types";
 
 const SYNC_BATCH_SIZE = 50;
+const PHOTO_UPLOAD_BATCH_SIZE = 6;
+const REQUEST_TIMEOUT_MS = 15000;
 
 type ServerChange = {
   entity?: string;
@@ -10,6 +15,31 @@ type ServerChange = {
   action?: string;
   payload?: Record<string, unknown>;
 };
+
+type PendingPhotoUpload = {
+  uuid: string;
+  servico_uuid?: string;
+  tipo?: string;
+  uri_local: string;
+  mime_type?: string;
+  usuario?: string;
+  usuario_nome?: string;
+  tamanho_bytes?: number;
+  largura?: number;
+  altura?: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export async function pendingSyncCount() {
   const db = await getDatabase();
@@ -19,10 +49,65 @@ export async function pendingSyncCount() {
   return Number(row?.total || 0);
 }
 
+export async function pendingPhotoUploadCount() {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ total: number }>(
+    `
+    SELECT COUNT(*) as total
+    FROM fotos
+    WHERE deleted_at IS NULL
+      AND uploaded_at IS NULL
+      AND COALESCE(uri_local, '') <> ''
+      AND uri_local LIKE 'file:%'
+    `
+  );
+  return Number(row?.total || 0);
+}
+
+export async function getSyncDiagnostics(): Promise<SyncDiagnostics> {
+  const [
+    pending,
+    pendingPhotos,
+    lastSuccessAt,
+    lastErrorAt,
+    lastError,
+    lastDurationMs,
+    lastSent,
+    lastPulled,
+    lastPhotosUploaded,
+    lastPullAt
+  ] = await Promise.all([
+    pendingSyncCount(),
+    pendingPhotoUploadCount(),
+    getSetting("sync_last_success_at"),
+    getSetting("sync_last_error_at"),
+    getSetting("sync_last_error"),
+    getSetting("sync_last_duration_ms"),
+    getSetting("sync_last_sent"),
+    getSetting("sync_last_pulled"),
+    getSetting("sync_last_photos_uploaded"),
+    getSetting("mobile_last_pull_at")
+  ]);
+  return {
+    pending,
+    pendingPhotos,
+    lastSuccessAt,
+    lastErrorAt,
+    lastError,
+    lastDurationMs: Number(lastDurationMs || 0),
+    lastSent: Number(lastSent || 0),
+    lastPulled: Number(lastPulled || 0),
+    lastPhotosUploaded: Number(lastPhotosUploaded || 0),
+    lastPullAt
+  };
+}
+
 export async function runSync(config: SyncConfig): Promise<SyncResult> {
   const endpointUrl = normalizeServerUrl(config.endpointUrl);
+  const startedAt = Date.now();
 
   const db = await getDatabase();
+  const lastPullAt = await getSetting("mobile_last_pull_at");
   const queue = await db.getAllAsync<QueueRow>(
     `
     SELECT id, entity, entity_uuid, action, payload_json
@@ -35,6 +120,7 @@ export async function runSync(config: SyncConfig): Promise<SyncResult> {
   );
 
   const payload = {
+    last_pull_at: lastPullAt || undefined,
     changes: queue.map((item) => ({
       id: item.id,
       entity: item.entity,
@@ -45,7 +131,7 @@ export async function runSync(config: SyncConfig): Promise<SyncResult> {
   };
 
   try {
-    const response = await fetch(`${endpointUrl}/api/mobile/sync`, {
+    const response = await fetchWithTimeout(`${endpointUrl}/api/mobile/sync`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -65,19 +151,37 @@ export async function runSync(config: SyncConfig): Promise<SyncResult> {
     const data = await response.json();
     const acceptedIds: number[] = Array.isArray(data.accepted_ids) ? data.accepted_ids : [];
     const serverChanges: ServerChange[] = Array.isArray(data.changes) ? data.changes : [];
+    const serverCursor = String(data.server_cursor || data.server_time || "");
 
-    for (const id of acceptedIds) {
-      await db.runAsync("UPDATE sync_queue SET synced_at = CURRENT_TIMESTAMP WHERE id = ?", id);
+    await db.withTransactionAsync(async () => {
+      for (const id of acceptedIds) {
+        await db.runAsync("UPDATE sync_queue SET synced_at = CURRENT_TIMESTAMP WHERE id = ?", id);
+      }
+      for (const change of serverChanges) {
+        await applyServerChange(change, db);
+      }
+    });
+
+    if (serverCursor) {
+      await setSetting("mobile_last_pull_at", serverCursor);
     }
+    const photosUploaded = await uploadPendingPhotos({ endpointUrl, token: config.token });
+    const durationMs = Date.now() - startedAt;
+    await setSetting("sync_last_success_at", new Date().toISOString());
+    await setSetting("sync_last_error", "");
+    await setSetting("sync_last_duration_ms", String(durationMs));
+    await setSetting("sync_last_sent", String(acceptedIds.length));
+    await setSetting("sync_last_pulled", String(serverChanges.length));
+    await setSetting("sync_last_photos_uploaded", String(photosUploaded));
 
-    for (const change of serverChanges) {
-      await applyServerChange(change);
-    }
-
-    return {
+    const result = {
       sent: acceptedIds.length,
-      pulled: serverChanges.length
+      pulled: serverChanges.length,
+      photosUploaded,
+      durationMs,
+      serverCursor
     };
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     for (const item of queue) {
@@ -87,7 +191,10 @@ export async function runSync(config: SyncConfig): Promise<SyncResult> {
         item.id
       );
     }
-    return { sent: 0, pulled: 0, error: message };
+    await setSetting("sync_last_error_at", new Date().toISOString());
+    await setSetting("sync_last_error", message);
+    await setSetting("sync_last_duration_ms", String(Date.now() - startedAt));
+    return { sent: 0, pulled: 0, photosUploaded: 0, durationMs: Date.now() - startedAt, nextRetrySeconds: 20, error: message };
   }
 }
 
@@ -97,6 +204,72 @@ function authHeaders(config: SyncConfig) {
   };
 }
 
+async function uploadPendingPhotos(config: SyncConfig) {
+  const endpointUrl = normalizeServerUrl(config.endpointUrl);
+  const db = await getDatabase();
+  const fotos = await db.getAllAsync<PendingPhotoUpload>(
+    `
+    SELECT uuid, servico_uuid, tipo, uri_local, mime_type, usuario, usuario_nome,
+           tamanho_bytes, largura, altura, created_at, updated_at
+    FROM fotos
+    WHERE deleted_at IS NULL
+      AND uploaded_at IS NULL
+      AND COALESCE(uri_local, '') <> ''
+      AND uri_local LIKE 'file:%'
+    ORDER BY id
+    LIMIT ?
+    `,
+    PHOTO_UPLOAD_BATCH_SIZE
+  );
+
+  let uploaded = 0;
+  for (const foto of fotos) {
+    try {
+      const info = await FileSystem.getInfoAsync(foto.uri_local);
+      if (!info.exists) {
+        throw new Error("Arquivo local da foto nao encontrado.");
+      }
+      const response = await FileSystem.uploadAsync(`${endpointUrl}/api/mobile/fotos/upload`, foto.uri_local, {
+        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        fieldName: "arquivo",
+        mimeType: foto.mime_type || "image/jpeg",
+        headers: authHeaders(config),
+        parameters: {
+          entity_uuid: foto.uuid,
+          servico_uuid: foto.servico_uuid || "",
+          tipo: foto.tipo || "entrada",
+          uri_local: foto.uri_local,
+          mime_type: foto.mime_type || "image/jpeg",
+          usuario: foto.usuario || "",
+          usuario_nome: foto.usuario_nome || "",
+          tamanho_bytes: String(foto.tamanho_bytes || Number(info.size || 0)),
+          largura: String(foto.largura || 0),
+          altura: String(foto.altura || 0),
+          created_at: foto.created_at || "",
+          updated_at: foto.updated_at || new Date().toISOString()
+        }
+      });
+      const body = response.body ? JSON.parse(response.body) : {};
+      if (response.status < 200 || response.status >= 300 || body.ok === false) {
+        throw new Error(String(body.erro || `Upload retornou HTTP ${response.status}`));
+      }
+      await db.runAsync(
+        "UPDATE fotos SET uploaded_at=CURRENT_TIMESTAMP, upload_last_error=NULL WHERE uuid=?",
+        foto.uuid
+      );
+      uploaded += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await db.runAsync(
+        "UPDATE fotos SET upload_attempts=upload_attempts+1, upload_last_error=? WHERE uuid=?",
+        message,
+        foto.uuid
+      );
+    }
+  }
+  return uploaded;
+}
+
 function normalizeVersionText(value: unknown) {
   return String(value || "").replace(/^Vers[aã]o:\s*/i, "").trim();
 }
@@ -104,11 +277,11 @@ function normalizeVersionText(value: unknown) {
 export async function fetchMobileHud(config: SyncConfig): Promise<MobileHudResult> {
   const endpointUrl = normalizeServerUrl(config.endpointUrl);
   try {
-    let response = await fetch(`${endpointUrl}/api/mobile/site-state`, {
+    let response = await fetchWithTimeout(`${endpointUrl}/api/mobile/site-state`, {
       headers: authHeaders(config)
     });
     if (response.status === 404) {
-      response = await fetch(`${endpointUrl}/api/mobile/hud`, {
+      response = await fetchWithTimeout(`${endpointUrl}/api/mobile/hud`, {
         headers: authHeaders(config)
       });
     }
@@ -142,7 +315,7 @@ export async function fetchMobileHud(config: SyncConfig): Promise<MobileHudResul
 export async function fetchMobileConfig(config: SyncConfig): Promise<MobileConfigResult> {
   const endpointUrl = normalizeServerUrl(config.endpointUrl);
   try {
-    const response = await fetch(`${endpointUrl}/api/mobile/configuracao`, {
+    const response = await fetchWithTimeout(`${endpointUrl}/api/mobile/configuracao`, {
       headers: authHeaders(config)
     });
     if (!response.ok) {
@@ -161,7 +334,7 @@ export async function fetchMobileConfig(config: SyncConfig): Promise<MobileConfi
 export async function updateMobileVersion(config: SyncConfig, version: string): Promise<MobileConfigResult> {
   const endpointUrl = normalizeServerUrl(config.endpointUrl);
   try {
-    const response = await fetch(`${endpointUrl}/api/mobile/configuracao`, {
+    const response = await fetchWithTimeout(`${endpointUrl}/api/mobile/configuracao`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -182,7 +355,7 @@ export async function updateMobileVersion(config: SyncConfig, version: string): 
   }
 }
 
-async function applyServerChange(change: ServerChange) {
+async function applyServerChange(change: ServerChange, dbParam?: Awaited<ReturnType<typeof getDatabase>>) {
   const entity = String(change.entity || "");
   const action = String(change.action || "upsert");
   const payload = change.payload || {};
@@ -191,7 +364,7 @@ async function applyServerChange(change: ServerChange) {
     return;
   }
 
-  const db = await getDatabase();
+  const db = dbParam || await getDatabase();
   if (entity === "clientes") {
     await db.runAsync(
       `
@@ -399,7 +572,10 @@ async function applyServerChange(change: ServerChange) {
       ON CONFLICT(uuid) DO UPDATE SET
         servico_uuid=excluded.servico_uuid,
         tipo=excluded.tipo,
-        uri_local=excluded.uri_local,
+        uri_local=CASE
+          WHEN fotos.uploaded_at IS NULL AND fotos.uri_local LIKE 'file:%' THEN fotos.uri_local
+          ELSE excluded.uri_local
+        END,
         mime_type=excluded.mime_type,
         usuario=excluded.usuario,
         usuario_nome=excluded.usuario_nome,

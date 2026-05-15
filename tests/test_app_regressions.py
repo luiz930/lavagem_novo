@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import re
 import sqlite3
@@ -299,6 +300,45 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(changes[1]["payload"]["placa"], "ABC1234")
         conn.close()
 
+    def test_api_mobile_sync_respeita_cursor_incremental(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE clientes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome TEXT,
+                telefone TEXT,
+                placa_principal TEXT,
+                data_nascimento TEXT,
+                mobile_uuid TEXT,
+                mobile_updated_at TEXT
+            );
+            INSERT INTO clientes (nome, mobile_uuid, mobile_updated_at)
+            VALUES ('Cliente Antigo', 'cliente-antigo', '2026-05-14T09:00:00');
+            INSERT INTO clientes (nome, mobile_uuid, mobile_updated_at)
+            VALUES ('Cliente Novo', 'cliente-novo', '2026-05-14T11:00:00');
+            """
+        )
+        compat = PersistentCompatConnection(conn)
+
+        with patch.dict(os.environ, {"MOBILE_SYNC_TOKEN": "segredo"}, clear=False), \
+             patch.object(app_module, "conectar", return_value=compat):
+            resposta = self.client.post(
+                "/api/mobile/sync",
+                json={"changes": [], "last_pull_at": "2026-05-14T10:00:00"},
+                headers={"Authorization": "Bearer segredo"},
+            )
+
+        self.assertEqual(resposta.status_code, 200)
+        dados = resposta.get_json()
+        self.assertIn("server_cursor", dados)
+        changes = dados["changes"]
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["entity"], "clientes")
+        self.assertEqual(changes[0]["payload"]["nome"], "Cliente Novo")
+        conn.close()
+
     def test_api_mobile_sync_retorna_tipos_servico_do_site(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -592,6 +632,61 @@ class AppRegressionTests(unittest.TestCase):
         self.assertEqual(foto["servico_id"], servico["id"])
         self.assertEqual(foto["tipo"], "saida")
         self.assertEqual(foto["arquivo_blob"], b"foto")
+        conn.close()
+
+    def test_api_mobile_upload_foto_recebe_arquivo_separado(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE servicos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mobile_uuid TEXT
+            );
+            CREATE TABLE fotos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empresa_id INTEGER,
+                servico_id INTEGER,
+                tipo TEXT,
+                caminho TEXT,
+                usuario TEXT,
+                usuario_nome TEXT,
+                tamanho_bytes INTEGER,
+                largura INTEGER,
+                altura INTEGER,
+                arquivo_blob BLOB,
+                mime_type TEXT,
+                arquivo_nome TEXT,
+                mobile_uuid TEXT,
+                mobile_updated_at TEXT
+            );
+            INSERT INTO servicos (mobile_uuid) VALUES ('servico-app-upload');
+            """
+        )
+        compat = PersistentCompatConnection(conn)
+
+        with patch.dict(os.environ, {"MOBILE_SYNC_TOKEN": "segredo"}, clear=False), \
+             patch.object(app_module, "conectar", return_value=compat):
+            resposta = self.client.post(
+                "/api/mobile/fotos/upload",
+                data={
+                    "entity_uuid": "foto-upload-1",
+                    "servico_uuid": "servico-app-upload",
+                    "tipo": "entrada",
+                    "mime_type": "image/jpeg",
+                    "usuario": "admin",
+                    "arquivo": (io.BytesIO(b"foto-binaria"), "foto.jpg"),
+                },
+                headers={"Authorization": "Bearer segredo"},
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertTrue(resposta.get_json()["ok"])
+        foto = conn.execute("SELECT * FROM fotos WHERE mobile_uuid='foto-upload-1'").fetchone()
+        self.assertIsNotNone(foto)
+        self.assertEqual(foto["arquivo_blob"], b"foto-binaria")
+        self.assertEqual(foto["tipo"], "entrada")
         conn.close()
 
     def test_api_mobile_login_gera_token_e_usuario_para_app(self):

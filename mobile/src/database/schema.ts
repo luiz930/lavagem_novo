@@ -129,6 +129,9 @@ CREATE TABLE IF NOT EXISTS fotos (
   altura INTEGER,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  uploaded_at TEXT,
+  upload_attempts INTEGER DEFAULT 0,
+  upload_last_error TEXT,
   deleted_at TEXT
 );
 
@@ -148,4 +151,17 @@ CREATE TABLE IF NOT EXISTS sync_state (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON sync_queue(synced_at, id);
+CREATE INDEX IF NOT EXISTS idx_sync_queue_entity_pending ON sync_queue(entity, synced_at);
+CREATE INDEX IF NOT EXISTS idx_veiculos_placa ON veiculos(placa);
+CREATE INDEX IF NOT EXISTS idx_veiculos_updated ON veiculos(updated_at);
+CREATE INDEX IF NOT EXISTS idx_veiculos_deleted ON veiculos(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_servicos_updated ON servicos(updated_at);
+CREATE INDEX IF NOT EXISTS idx_servicos_deleted ON servicos(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_servicos_veiculo ON servicos(veiculo_uuid, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_fotos_servico ON fotos(servico_uuid, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_fotos_upload_pending ON fotos(uploaded_at, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_clientes_updated ON clientes(updated_at);
+CREATE INDEX IF NOT EXISTS idx_clientes_deleted ON clientes(deleted_at);
 `;

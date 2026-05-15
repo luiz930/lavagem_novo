@@ -16833,7 +16833,7 @@ def validar_csrf_basico():
     if not should_enforce_csrf(request, csrf_protection_ativa()):
         return
 
-    if request.endpoint in {"healthz", "api_mobile_login", "api_mobile_sync", "api_mobile_configuracao"}:
+    if request.endpoint in {"healthz", "api_mobile_login", "api_mobile_sync", "api_mobile_configuracao", "api_mobile_foto_upload"}:
         return
 
     token = extract_csrf_token(request)
@@ -16851,7 +16851,7 @@ def preparar_sincronizacoes():
         return
 
     endpoint = request.endpoint or ""
-    if endpoint in {"api_mobile_login", "api_mobile_sync", "api_mobile_hud", "api_mobile_site_state", "api_mobile_configuracao"}:
+    if endpoint in {"api_mobile_login", "api_mobile_sync", "api_mobile_hud", "api_mobile_site_state", "api_mobile_configuracao", "api_mobile_foto_upload"}:
         return
 
     sessao_ativa = bool(session.get("usuario"))
@@ -18807,6 +18807,41 @@ def garantir_schema_sync_mobile(cursor):
         except Exception:
             pass
 
+
+def preencher_timestamps_mobile_site(cursor):
+    agora_valor = agora_iso()
+    for tabela in ("clientes", "veiculos", "servicos", "fotos"):
+        try:
+            cursor.execute(
+                f"""
+                UPDATE {tabela}
+                SET mobile_updated_at=?
+                WHERE mobile_updated_at IS NULL OR TRIM(COALESCE(mobile_updated_at, ''))=''
+                """,
+                (agora_valor,),
+            )
+        except Exception:
+            pass
+
+
+def cursor_mobile_normalizado(valor):
+    texto = normalizar_texto_campo(valor)
+    if not texto:
+        return ""
+    try:
+        datetime.fromisoformat(texto)
+        return texto
+    except Exception:
+        return ""
+
+
+def filtro_mobile_desde(alias, last_pull_at):
+    if not last_pull_at:
+        return "", ()
+    prefixo = f"{alias}." if alias else ""
+    return f" AND COALESCE({prefixo}mobile_updated_at, '') > ? ", (last_pull_at,)
+
+
 def serializar_usuario_mobile(user):
     return {
         "id": int(user["id"]),
@@ -19317,9 +19352,11 @@ def aplicar_change_mobile(c, entity, entity_uuid, action, payload):
         tipo_foto = normalizar_texto_campo(payload.get("tipo")).lower() or "entrada"
         if tipo_foto not in {"entrada", "detalhe", "saida"}:
             tipo_foto = "entrada"
-        arquivo_blob = None
+        arquivo_blob = payload.get("_arquivo_blob")
+        if not isinstance(arquivo_blob, (bytes, bytearray)):
+            arquivo_blob = None
         arquivo_base64 = normalizar_texto_campo(payload.get("arquivo_base64"))
-        if arquivo_base64:
+        if arquivo_blob is None and arquivo_base64:
             try:
                 arquivo_blob = base64.b64decode(arquivo_base64)
             except Exception:
@@ -19367,18 +19404,58 @@ def aplicar_change_mobile(c, entity, entity_uuid, action, payload):
 
     return False
 
-def montar_changes_mobile_site(c):
+
+def aplicar_upload_foto_mobile(c, form, arquivo):
+    entity_uuid = normalizar_texto_campo(form.get("entity_uuid") or form.get("uuid"))
+    if not entity_uuid:
+        return {"ok": False, "erro": "entity_uuid ausente."}
+    if arquivo is None:
+        return {"ok": False, "erro": "arquivo ausente."}
+
+    arquivo_blob = arquivo.read()
+    if not arquivo_blob:
+        return {"ok": False, "erro": "arquivo vazio."}
+
+    payload = {
+        "servico_uuid": normalizar_texto_campo(form.get("servico_uuid")),
+        "tipo": normalizar_texto_campo(form.get("tipo")) or "entrada",
+        "uri_local": normalizar_texto_campo(form.get("uri_local")) or f"mobile://{entity_uuid}",
+        "mime_type": normalizar_texto_campo(form.get("mime_type")) or arquivo.mimetype or "image/jpeg",
+        "usuario": normalizar_texto_campo(form.get("usuario")),
+        "usuario_nome": normalizar_texto_campo(form.get("usuario_nome")),
+        "tamanho_bytes": converter_inteiro(form.get("tamanho_bytes"), len(arquivo_blob)),
+        "largura": converter_inteiro(form.get("largura"), 0),
+        "altura": converter_inteiro(form.get("altura"), 0),
+        "created_at": normalizar_texto_campo(form.get("created_at")),
+        "updated_at": normalizar_texto_campo(form.get("updated_at")) or agora_iso(),
+        "_arquivo_blob": arquivo_blob,
+    }
+    aplicado = aplicar_change_mobile(c, "fotos", entity_uuid, "upsert", payload)
+    return {
+        "ok": bool(aplicado),
+        "entity_uuid": entity_uuid,
+        "tamanho_bytes": len(arquivo_blob),
+        "mensagem": "Foto recebida pelo site." if aplicado else "Foto nao foi aplicada.",
+    }
+
+
+def montar_changes_mobile_site(c, last_pull_at=""):
     changes = []
+    last_pull_at = cursor_mobile_normalizado(last_pull_at)
+    preencher_timestamps_mobile_site(c)
     try:
+        filtro, params = filtro_mobile_desde("", last_pull_at)
         c.execute(
-            """
+            f"""
             SELECT id, nome, telefone, placa_principal, data_nascimento,
                    COALESCE(mobile_uuid, '') AS mobile_uuid,
                    COALESCE(mobile_updated_at, '') AS mobile_updated_at
             FROM clientes
+            WHERE 1=1 {filtro}
             ORDER BY id DESC
             LIMIT 500
-            """
+            """,
+            params,
         )
         for row in c.fetchall():
             uuid = normalizar_texto_campo(row["mobile_uuid"]) or f"site-cliente-{row['id']}"
@@ -19399,17 +19476,20 @@ def montar_changes_mobile_site(c):
         log_info("ERRO MOBILE PULL CLIENTES:", erro)
 
     try:
+        filtro, params = filtro_mobile_desde("v", last_pull_at)
         c.execute(
-            """
+            f"""
             SELECT v.id, v.placa, v.modelo, v.cor, v.status_atendimento, v.atendimento_ativo,
                    v.cliente_id, COALESCE(v.mobile_uuid, '') AS mobile_uuid,
                    COALESCE(v.mobile_updated_at, '') AS mobile_updated_at,
                    COALESCE(c.mobile_uuid, '') AS cliente_mobile_uuid
             FROM veiculos v
             LEFT JOIN clientes c ON c.id = v.cliente_id
+            WHERE 1=1 {filtro}
             ORDER BY v.id DESC
             LIMIT 500
-            """
+            """,
+            params,
         )
         for row in c.fetchall():
             uuid = normalizar_texto_campo(row["mobile_uuid"]) or f"site-veiculo-{row['id']}"
@@ -19435,8 +19515,9 @@ def montar_changes_mobile_site(c):
         log_info("ERRO MOBILE PULL VEICULOS:", erro)
 
     try:
+        filtro, params = filtro_mobile_desde("s", last_pull_at)
         c.execute(
-            """
+            f"""
             SELECT s.id, s.veiculo_id, s.valor, s.valor_adicional, s.status, s.observacoes,
                    s.etapa_atual, s.entrada, s.entrega_prevista, s.entrega,
                    COALESCE(s.mobile_uuid, '') AS mobile_uuid,
@@ -19450,10 +19531,12 @@ def montar_changes_mobile_site(c):
             LEFT JOIN veiculos v ON v.id = s.veiculo_id
             LEFT JOIN tipos_servico ts ON ts.id = s.tipo_id
             LEFT JOIN fotos f ON f.servico_id = s.id
+            WHERE 1=1 {filtro}
             GROUP BY s.id
             ORDER BY s.id DESC
             LIMIT 500
-            """
+            """,
+            params,
         )
         for row in c.fetchall():
             uuid = normalizar_texto_campo(row["mobile_uuid"]) or f"site-servico-{row['id']}"
@@ -19486,8 +19569,9 @@ def montar_changes_mobile_site(c):
         log_info("ERRO MOBILE PULL SERVICOS:", erro)
 
     try:
+        filtro, params = filtro_mobile_desde("f", last_pull_at)
         c.execute(
-            """
+            f"""
             SELECT f.id, f.servico_id, f.tipo, f.caminho, f.usuario, f.usuario_nome,
                    f.tamanho_bytes, f.largura, f.altura, f.mime_type, f.criado_em,
                    COALESCE(f.mobile_uuid, '') AS mobile_uuid,
@@ -19495,9 +19579,11 @@ def montar_changes_mobile_site(c):
                    COALESCE(s.mobile_uuid, '') AS servico_mobile_uuid
             FROM fotos f
             LEFT JOIN servicos s ON s.id = f.servico_id
+            WHERE 1=1 {filtro}
             ORDER BY f.id DESC
             LIMIT 500
-            """
+            """,
+            params,
         )
         for row in c.fetchall():
             uuid = normalizar_texto_campo(row["mobile_uuid"]) or f"site-foto-{row['id']}"
@@ -19529,139 +19615,144 @@ def montar_changes_mobile_site(c):
     except Exception as erro:
         log_info("ERRO MOBILE PULL FOTOS:", erro)
 
-    try:
-        c.execute(
-            """
-            SELECT id, nome, valor
-            FROM tipos_servico
-            ORDER BY nome ASC
-            LIMIT 200
-            """
-        )
-        for row in c.fetchall():
-            uuid = f"site-tipo-servico-{row['id']}"
-            changes.append({
-                "entity": "tipos_servico",
-                "entity_uuid": uuid,
-                "action": "upsert",
-                "payload": {
-                    "uuid": uuid,
-                    "nome": str(row["nome"] or ""),
-                    "valor": float(row["valor"] or 0),
-                    "updated_at": agora_iso(),
-                },
-            })
-    except Exception as erro:
-        log_info("ERRO MOBILE PULL TIPOS SERVICO:", erro)
+    if not last_pull_at:
+        try:
+            c.execute(
+                """
+                SELECT id, nome, valor
+                FROM tipos_servico
+                ORDER BY nome ASC
+                LIMIT 200
+                """
+            )
+            for row in c.fetchall():
+                uuid = f"site-tipo-servico-{row['id']}"
+                changes.append({
+                    "entity": "tipos_servico",
+                    "entity_uuid": uuid,
+                    "action": "upsert",
+                    "payload": {
+                        "uuid": uuid,
+                        "nome": str(row["nome"] or ""),
+                        "valor": float(row["valor"] or 0),
+                        "updated_at": agora_iso(),
+                    },
+                })
+        except Exception as erro:
+            log_info("ERRO MOBILE PULL TIPOS SERVICO:", erro)
 
-    try:
-        c.execute(
-            """
-            SELECT id, nome
-            FROM produtos_pneu
-            ORDER BY nome ASC
-            LIMIT 500
-            """
-        )
-        for row in c.fetchall():
-            uuid = f"site-produto-pneu-{row['id']}"
-            changes.append({
-                "entity": "produtos_pneu",
-                "entity_uuid": uuid,
-                "action": "upsert",
-                "payload": {
-                    "uuid": uuid,
-                    "nome": str(row["nome"] or ""),
-                    "updated_at": agora_iso(),
-                },
-            })
-    except Exception as erro:
-        log_info("ERRO MOBILE PULL PRODUTOS PNEU:", erro)
+    if not last_pull_at:
+        try:
+            c.execute(
+                """
+                SELECT id, nome
+                FROM produtos_pneu
+                ORDER BY nome ASC
+                LIMIT 500
+                """
+            )
+            for row in c.fetchall():
+                uuid = f"site-produto-pneu-{row['id']}"
+                changes.append({
+                    "entity": "produtos_pneu",
+                    "entity_uuid": uuid,
+                    "action": "upsert",
+                    "payload": {
+                        "uuid": uuid,
+                        "nome": str(row["nome"] or ""),
+                        "updated_at": agora_iso(),
+                    },
+                })
+        except Exception as erro:
+            log_info("ERRO MOBILE PULL PRODUTOS PNEU:", erro)
 
-    try:
-        c.execute(
-            """
-            SELECT id, nome, ativo, ordem, criado_em
-            FROM checklist_itens
-            ORDER BY ordem ASC, nome ASC
-            LIMIT 500
-            """
-        )
-        for row in c.fetchall():
-            uuid = f"site-checklist-item-{row['id']}"
-            changes.append({
-                "entity": "checklist_itens",
-                "entity_uuid": uuid,
-                "action": "upsert",
-                "payload": {
-                    "uuid": uuid,
-                    "nome": str(row["nome"] or ""),
-                    "ativo": int(row["ativo"] if row["ativo"] is not None else 1),
-                    "ordem": int(row["ordem"] or 0),
-                    "updated_at": str(row["criado_em"] or agora_iso()),
-                },
-            })
-    except Exception as erro:
-        log_info("ERRO MOBILE PULL CHECKLIST:", erro)
+    if not last_pull_at:
+        try:
+            c.execute(
+                """
+                SELECT id, nome, ativo, ordem, criado_em
+                FROM checklist_itens
+                ORDER BY ordem ASC, nome ASC
+                LIMIT 500
+                """
+            )
+            for row in c.fetchall():
+                uuid = f"site-checklist-item-{row['id']}"
+                changes.append({
+                    "entity": "checklist_itens",
+                    "entity_uuid": uuid,
+                    "action": "upsert",
+                    "payload": {
+                        "uuid": uuid,
+                        "nome": str(row["nome"] or ""),
+                        "ativo": int(row["ativo"] if row["ativo"] is not None else 1),
+                        "ordem": int(row["ordem"] or 0),
+                        "updated_at": str(row["criado_em"] or agora_iso()),
+                    },
+                })
+        except Exception as erro:
+            log_info("ERRO MOBILE PULL CHECKLIST:", erro)
 
-    try:
-        c.execute(
-            """
-            SELECT id, nome
-            FROM adicionais
-            ORDER BY nome ASC
-            LIMIT 500
-            """
-        )
-        for row in c.fetchall():
-            uuid = f"site-adicional-{row['id']}"
-            changes.append({
-                "entity": "adicionais",
-                "entity_uuid": uuid,
-                "action": "upsert",
-                "payload": {
-                    "uuid": uuid,
-                    "nome": str(row["nome"] or ""),
-                    "updated_at": agora_iso(),
-                },
-            })
-    except Exception as erro:
-        log_info("ERRO MOBILE PULL ADICIONAIS:", erro)
+    if not last_pull_at:
+        try:
+            c.execute(
+                """
+                SELECT id, nome
+                FROM adicionais
+                ORDER BY nome ASC
+                LIMIT 500
+                """
+            )
+            for row in c.fetchall():
+                uuid = f"site-adicional-{row['id']}"
+                changes.append({
+                    "entity": "adicionais",
+                    "entity_uuid": uuid,
+                    "action": "upsert",
+                    "payload": {
+                        "uuid": uuid,
+                        "nome": str(row["nome"] or ""),
+                        "updated_at": agora_iso(),
+                    },
+                })
+        except Exception as erro:
+            log_info("ERRO MOBILE PULL ADICIONAIS:", erro)
 
-    try:
-        c.execute(
-            """
-            SELECT e.id, e.servico_id, e.descricao, e.valor, e.criado_em,
-                   e.criado_por_usuario, e.criado_por_nome,
-                   COALESCE(s.mobile_uuid, '') AS servico_mobile_uuid
-            FROM servico_cobrancas_extras e
-            LEFT JOIN servicos s ON s.id = e.servico_id
-            ORDER BY e.id DESC
-            LIMIT 500
-            """
-        )
-        for row in c.fetchall():
-            uuid = f"site-cobranca-extra-{row['id']}"
-            servico_uuid = normalizar_texto_campo(row["servico_mobile_uuid"])
-            if not servico_uuid and row["servico_id"]:
-                servico_uuid = f"site-servico-{row['servico_id']}"
-            changes.append({
-                "entity": "servico_cobrancas_extras",
-                "entity_uuid": uuid,
-                "action": "upsert",
-                "payload": {
-                    "uuid": uuid,
-                    "servico_uuid": servico_uuid,
-                    "descricao": str(row["descricao"] or ""),
-                    "valor": float(row["valor"] or 0),
-                    "criado_em": str(row["criado_em"] or ""),
-                    "criado_por_usuario": str(row["criado_por_usuario"] or ""),
-                    "criado_por_nome": str(row["criado_por_nome"] or ""),
-                    "updated_at": str(row["criado_em"] or agora_iso()),
-                },
-            })
-    except Exception as erro:
-        log_info("ERRO MOBILE PULL COBRANCAS EXTRAS:", erro)
+    if not last_pull_at:
+        try:
+            c.execute(
+                """
+                SELECT e.id, e.servico_id, e.descricao, e.valor, e.criado_em,
+                       e.criado_por_usuario, e.criado_por_nome,
+                       COALESCE(s.mobile_uuid, '') AS servico_mobile_uuid
+                FROM servico_cobrancas_extras e
+                LEFT JOIN servicos s ON s.id = e.servico_id
+                ORDER BY e.id DESC
+                LIMIT 500
+                """
+            )
+            for row in c.fetchall():
+                uuid = f"site-cobranca-extra-{row['id']}"
+                servico_uuid = normalizar_texto_campo(row["servico_mobile_uuid"])
+                if not servico_uuid and row["servico_id"]:
+                    servico_uuid = f"site-servico-{row['servico_id']}"
+                changes.append({
+                    "entity": "servico_cobrancas_extras",
+                    "entity_uuid": uuid,
+                    "action": "upsert",
+                    "payload": {
+                        "uuid": uuid,
+                        "servico_uuid": servico_uuid,
+                        "descricao": str(row["descricao"] or ""),
+                        "valor": float(row["valor"] or 0),
+                        "criado_em": str(row["criado_em"] or ""),
+                        "criado_por_usuario": str(row["criado_por_usuario"] or ""),
+                        "criado_por_nome": str(row["criado_por_nome"] or ""),
+                        "updated_at": str(row["criado_em"] or agora_iso()),
+                    },
+                })
+        except Exception as erro:
+            log_info("ERRO MOBILE PULL COBRANCAS EXTRAS:", erro)
 
     return changes
 
@@ -19679,6 +19770,8 @@ def api_mobile_sync():
         return jsonify({"ok": False, "erro": "Formato invalido."}), 400
 
     changes = changes[:100]
+    last_pull_at = cursor_mobile_normalizado(dados.get("last_pull_at"))
+    server_cursor = agora_iso()
     accepted_ids = []
     conn = conectar()
     c = conn.cursor()
@@ -19728,7 +19821,7 @@ def api_mobile_sync():
         if mobile_change_id_int is not None:
             accepted_ids.append(mobile_change_id_int)
 
-    server_changes = montar_changes_mobile_site(c)
+    server_changes = montar_changes_mobile_site(c, last_pull_at=last_pull_at)
     conn.commit()
     conn.close()
 
@@ -19736,7 +19829,40 @@ def api_mobile_sync():
         "ok": True,
         "accepted_ids": accepted_ids,
         "changes": server_changes,
+        "last_pull_at": last_pull_at,
+        "server_cursor": server_cursor,
+        "server_time": server_cursor,
+        "pulled_count": len(server_changes),
     })
+
+
+@app.route("/api/mobile/fotos/upload", methods=["POST"])
+def api_mobile_foto_upload():
+    if not autorizar_sync_mobile():
+        return jsonify({
+            "ok": False,
+            "erro": "Token de sincronizacao mobile ausente ou invalido."
+        }), 401
+
+    arquivo = request.files.get("arquivo")
+    conn = conectar()
+    c = conn.cursor()
+    garantir_schema_sync_mobile(c)
+    try:
+        resultado = aplicar_upload_foto_mobile(c, request.form, arquivo)
+        if not resultado.get("ok"):
+            conn.rollback()
+            return jsonify(resultado), 400
+        conn.commit()
+        return jsonify({
+            **resultado,
+            "server_time": agora_iso(),
+        })
+    except Exception as erro:
+        conn.rollback()
+        return jsonify({"ok": False, "erro": str(erro)}), 500
+    finally:
+        conn.close()
 
 
 @app.route("/empresas")
