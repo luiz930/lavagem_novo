@@ -43,6 +43,26 @@ FLASK_SECRET_KEY=
 
 ## 3. Subir o sistema
 
+Para rodar localmente no Windows sem misturar com as configuracoes de producao do `.env`, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
+```
+
+Esse atalho forca `SESSION_COOKIE_SECURE=0` e `DATABASE_BACKEND=sqlite` somente no processo local. Isso evita erro de token CSRF ao abrir o login por `http://127.0.0.1:5000` ou pelo IP local mostrado no terminal.
+
+Se quiser subir manualmente:
+
+```powershell
+$env:DATABASE_BACKEND="sqlite"
+$env:STRICT_ONLINE_DATABASE="false"
+$env:SESSION_COOKIE_SECURE="0"
+$env:CSRF_PROTECTION="1"
+python -m flask --app app run --host 0.0.0.0 --port 5000
+```
+
+Modo simples:
+
 ```bash
 python app.py
 ```
@@ -53,4 +73,3 @@ python app.py
 python -m py_compile app.py
 python -m unittest discover -s tests -v
 ```
-
